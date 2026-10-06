@@ -50,7 +50,13 @@ void source_integrity() {
   // CMake text reads use canonical LF even in a Windows CRLF checkout.
   for (auto pos = expected.find("\r\n"); pos != std::string::npos; pos = expected.find("\r\n", pos))
     expected.erase(pos, 1);
-  require(viewer_app_html() == expected, "Embedded HTML exactly matches reviewed source assets");
+  const auto& embedded = viewer_app_html();
+  std::size_t first_difference = 0;
+  while (first_difference < embedded.size() && first_difference < expected.size() &&
+         embedded[first_difference] == expected[first_difference]) ++first_difference;
+  require(embedded == expected, "Embedded HTML exactly matches reviewed source assets (actual " +
+      std::to_string(embedded.size()) + ", expected " + std::to_string(expected.size()) +
+      " bytes; first difference " + std::to_string(first_difference) + ")");
   require(viewer_app_html().find("@VIEWER_") == std::string::npos, "No unexpanded asset placeholders");
   require(viewer_app_html().find("<canvas") != std::string::npos, "Resource contains the CAD canvas");
   require(viewer_app_html().find("CadBridge") != std::string::npos &&

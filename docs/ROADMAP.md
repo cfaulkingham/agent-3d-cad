@@ -6,9 +6,13 @@ evidence exists. Work in useful increments, not broad API parity passes.
 Implementation update (2026-10-06): M1 selection/preview/viewer, M2 jobs/bundling,
 and M3 modeling/import/native Windows code are implemented. Native macOS arm64
 and Linux arm64 suites, relocated shared-library bundles, and a fresh Linux
-runtime-only container have passed. The original acceptance gates below are
-retained: offline artifact/browser verification and native Windows/remaining-
-architecture CI still need evidence. The live Codex MCP App now has actual
+runtime-only container have passed. An independent Arch Linux x86_64 build also
+passed all 17 suites, relocation, schemas, official MCP SDK and drawings; the
+user-created GitHub repository's initial CI passed both macOS and both Ubuntu
+architectures. Windows built and passed 15/17 suites; two portability fixes
+passed macOS and Arch regression checks and await a corrected native CI run.
+The original acceptance gates below are retained: offline artifact/browser
+verification and corrected native Windows CI still need evidence. The live Codex MCP App now has actual
 macOS arm64 rendering/selection/refresh evidence, and current M4/M5 sources
 passed the Linux arm64 builder and clean runtime container. See HANDOFF.md.
 

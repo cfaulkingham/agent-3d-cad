@@ -6,6 +6,7 @@
 #include <BRep_Builder.hxx>
 #include <TopoDS_Compound.hxx>
 #include <STEPControl_Writer.hxx>
+#include <RWStl.hxx>
 #include <STEPControl_Reader.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
@@ -225,6 +226,9 @@ void tests() {
   prism.export_file(step_path,"step");
   prism.export_file(stl_path,"stl");
   require(std::filesystem::file_size(stl_path)>84,"STL export accepts a Unicode filesystem path");
+  std::ifstream stl_input(stl_path,std::ios::binary);
+  const auto stl_mesh=RWStl::ReadBinaryStream(stl_input);
+  require(!stl_mesh.IsNull() && stl_mesh->NbTriangles()>0,"Unicode STL path contains readable binary triangles");
   std::ifstream input(step_path); std::ostringstream data; data<<input.rdbuf();
   const auto content=data.str();
   model=document(Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}}),"imported");

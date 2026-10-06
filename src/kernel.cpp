@@ -70,6 +70,7 @@
 #include <cmath>
 #include <numbers>
 #include <sstream>
+#include <fstream>
 #include <set>
 
 static_assert(OCC_VERSION_HEX == 0x080001, "agent-3d-cad requires OCCT 8.0.1");
@@ -969,8 +970,8 @@ Json BuiltModel::drawing(const Json& spec) const {
 
 void BuiltModel::export_file(const std::filesystem::path& path, const std::string& format) const {
   try {
-    // OCCT's exchange API accepts UTF-8 narrow paths on every platform, whereas
-    // std::filesystem::path::c_str() is wide on Windows.
+    // STEP accepts UTF-8 paths. STL's filename overload opens a narrow standard
+    // stream, so use its stream overload with a native filesystem path below.
     const auto utf8 = path.u8string();
     const std::string filename(utf8.begin(), utf8.end());
     if (format == "step") {
@@ -989,7 +990,12 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       if (!mesh.IsDone()) throw Error("export_failed", "Tessellation failed");
       StlAPI_Writer writer;
       writer.ASCIIMode() = false;
-      if (!writer.Write(copy.Shape(), filename.c_str())) throw Error("export_failed", "STL writer failed");
+      std::ofstream output(path, std::ios::binary | std::ios::trunc);
+      if (!output || !writer.Write(copy.Shape(), output)) throw Error("export_failed", "STL writer failed");
+      output.flush();
+      if (!output) throw Error("export_failed", "STL stream write failed");
+      output.close();
+      if (output.fail()) throw Error("export_failed", "STL stream close failed");
     } else throw Error("invalid_argument", "Export format must be step or stl");
   } catch (const Standard_Failure& e) {
     throw Error("export_failed", e.what());
