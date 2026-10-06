@@ -1,0 +1,5 @@
+FROM ubuntu:24.04
+COPY bundle /opt/agent-3d-cad
+COPY packaging/runtime-smoke.sh /runtime-smoke.sh
+RUN /bin/sh /runtime-smoke.sh
+ENTRYPOINT ["/opt/agent-3d-cad/bin/agent-3d-cad"]

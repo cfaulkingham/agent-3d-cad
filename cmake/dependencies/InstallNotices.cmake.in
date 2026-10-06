@@ -1,0 +1,18 @@
+set(destination "@AGENTCAD_DEPS_PREFIX@/share/agentcad-dependency-notices")
+file(MAKE_DIRECTORY "${destination}/occt")
+file(COPY "@occt_source@/LICENSE_LGPL_21.txt" "@occt_source@/OCCT_LGPL_EXCEPTION.txt" DESTINATION "${destination}/occt")
+if(NOT "@AGENTCAD_SYSTEM_FREETYPE@")
+  file(MAKE_DIRECTORY "${destination}/freetype")
+  file(COPY "@ft_source@/LICENSE.TXT" "@ft_source@/docs/FTL.TXT" "@ft_source@/docs/GPLv2.TXT" DESTINATION "${destination}/freetype")
+  # LICENSE.TXT explicitly names these embedded components. Preserve the exact
+  # upstream notice-bearing files, including built-in zlib (disabling external
+  # zlib linkage does not disable FreeType's embedded gzip implementation).
+  foreach(notice IN ITEMS src/bdf/README src/pcf/README src/base/fthash.c
+      include/freetype/internal/fthash.h src/gzip/zlib.h
+      src/autofit/ft-hb-ft.c src/autofit/ft-hb-decls.h
+      src/autofit/ft-hb-types.h src/autofit/hb-script-list.h)
+    get_filename_component(subdirectory "${notice}" DIRECTORY)
+    file(MAKE_DIRECTORY "${destination}/freetype/embedded/${subdirectory}")
+    file(COPY "@ft_source@/${notice}" DESTINATION "${destination}/freetype/embedded/${subdirectory}")
+  endforeach()
+endif()

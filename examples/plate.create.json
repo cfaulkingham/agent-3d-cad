@@ -1,0 +1,21 @@
+{
+  "document_id": "plate",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"width": 80, "depth": 50, "thickness": 6, "hole_radius": 3, "hole_x2": 70, "hole_y2": 40},
+    "features": [
+      {"id": "base", "type": "box", "size": [{"parameter": "width"}, {"parameter": "depth"}, {"parameter": "thickness"}]},
+      {"id": "rounded", "type": "fillet", "input": "base", "radius": 0.75, "edges": "all"},
+      {"id": "hole_a", "type": "cylinder", "radius": {"parameter": "hole_radius"}, "height": {"parameter": "thickness"}, "origin": [10, 10, 0]},
+      {"id": "hole_b", "type": "cylinder", "radius": {"parameter": "hole_radius"}, "height": {"parameter": "thickness"}, "origin": [{"parameter": "hole_x2"}, 10, 0]},
+      {"id": "hole_c", "type": "cylinder", "radius": {"parameter": "hole_radius"}, "height": {"parameter": "thickness"}, "origin": [10, {"parameter": "hole_y2"}, 0]},
+      {"id": "hole_d", "type": "cylinder", "radius": {"parameter": "hole_radius"}, "height": {"parameter": "thickness"}, "origin": [{"parameter": "hole_x2"}, {"parameter": "hole_y2"}, 0]},
+      {"id": "cut_a", "type": "cut", "left": "rounded", "right": "hole_a"},
+      {"id": "cut_b", "type": "cut", "left": "cut_a", "right": "hole_b"},
+      {"id": "cut_c", "type": "cut", "left": "cut_b", "right": "hole_c"},
+      {"id": "cut_d", "type": "cut", "left": "cut_c", "right": "hole_d"}
+    ],
+    "output": "cut_d"
+  }
+}

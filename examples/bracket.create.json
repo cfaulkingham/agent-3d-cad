@@ -1,0 +1,16 @@
+{
+  "document_id": "angle_bracket",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"width": 40, "height": 30, "depth": 30, "wall": 4, "hole_radius": 2.5},
+    "features": [
+      {"id": "profile", "type": "sketch", "workplane": {"origin": [0,0,0], "normal": [0,-1,0], "x_direction": [1,0,0]},
+       "profile": {"type": "polygon", "points": [[0,0],[{"parameter":"width"},0],[{"parameter":"width"},{"parameter":"wall"}],[{"parameter":"wall"},{"parameter":"wall"}],[{"parameter":"wall"},{"parameter":"height"}],[0,{"parameter":"height"}]]}},
+      {"id": "body", "type": "extrude", "input": "profile", "distance": {"expression":{"op":"multiply","args":[{"parameter":"depth"},-1],"unit":"mm"}}},
+      {"id": "foot_hole", "type": "hole", "input": "body", "origin": [25,15,0], "axis": [0,0,1], "radius": {"parameter":"hole_radius"}, "depth": {"parameter":"wall"}},
+      {"id": "wall_hole", "type": "hole", "input": "foot_hole", "origin": [0,15,20], "axis": [1,0,0], "radius": {"parameter":"hole_radius"}, "depth": {"parameter":"wall"}}
+    ],
+    "output": "wall_hole"
+  }
+}

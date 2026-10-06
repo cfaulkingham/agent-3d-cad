@@ -1,0 +1,26 @@
+set(viewer_web_dir "${CMAKE_CURRENT_SOURCE_DIR}/web")
+set(viewer_assets viewer.html styles.css bridge.js renderer.js state.js app.js)
+foreach(asset IN LISTS viewer_assets)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${viewer_web_dir}/${asset}")
+endforeach()
+file(READ "${viewer_web_dir}/viewer.html" viewer_content)
+foreach(asset IN ITEMS styles bridge renderer state app)
+  if(asset STREQUAL "styles")
+    set(extension css)
+  else()
+    set(extension js)
+  endif()
+  file(READ "${viewer_web_dir}/${asset}.${extension}" asset_content)
+  string(TOUPPER "${asset}" token)
+  string(REPLACE "@VIEWER_${token}@" "${asset_content}" viewer_content "${viewer_content}")
+endforeach()
+file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+# CMake file(READ) canonicalizes CRLF source checkouts to LF. Substitution here
+# treats HTML as data and preserves all other UTF-8 bytes without directives.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" "${viewer_content}")
+file(READ "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" viewer_html HEX)
+# Byte initialization preserves UTF-8 exactly, with no C++ escaping or MSVC
+# string-literal length limit. The browser needs no external JS/CSS resources.
+string(REGEX REPLACE "(..)" "0x\\1,\n" viewer_bytes "${viewer_html}")
+set(viewer_cpp "#include \"agentcad/app.hpp\"\nnamespace agentcad {\nconst std::string& viewer_app_html() {\n  static constexpr unsigned char bytes[] = {${viewer_bytes}};\n  static const std::string html(reinterpret_cast<const char*>(bytes), sizeof(bytes));\n  return html;\n}\n}\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer_app.cpp" CONTENT "${viewer_cpp}" @ONLY)

@@ -1,0 +1,126 @@
+#include "agentcad/app.hpp"
+#include "agentcad/mcp.hpp"
+#include <chrono>
+#include <iostream>
+#include <sstream>
+
+using namespace agentcad;
+namespace {
+int checks = 0;
+void require(bool condition, const std::string& message) {
+  ++checks;
+  if (!condition) throw std::runtime_error(message);
+}
+struct Temporary {
+  fs::path path = fs::temp_directory_path() / ("agentcad-app-protocol-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+  Temporary() { fs::create_directory(path); }
+  ~Temporary() { std::error_code ec; fs::remove_all(path, ec); }
+};
+Json rpc(const Json& id, const std::string& method, const Json& params = Json::object()) {
+  return {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", params}};
+}
+Json initialize(bool apps) {
+  Json capabilities = Json::object();
+  if (apps) capabilities["extensions"]["io.modelcontextprotocol/ui"]["mimeTypes"] = Json::array({viewer_app_mime});
+  return rpc("initialize", "initialize", {{"protocolVersion", "2025-11-25"},
+      {"capabilities", capabilities}, {"clientInfo", {{"name", "app-protocol-test"}, {"version", "1"}}}});
+}
+Json result(McpSession& session, const Json& request) {
+  const auto reply = session.handle(request);
+  require(reply.has_value() && reply->contains("result"), "Expected successful response: " + request.dump());
+  require(reply->at("id") == request.at("id"), "Response preserves request correlation");
+  return reply->at("result");
+}
+void error(McpSession& session, const Json& request, int code) {
+  const auto reply = session.handle(request);
+  require(reply.has_value() && reply->contains("error") && reply->at("error").at("code") == code,
+          "Expected protocol error " + std::to_string(code) + " for " + request.dump());
+}
+void source_integrity() {
+  const auto source = path_from_utf8(CAD_SOURCE_DIR);
+  auto expected = read_text(source / "web/viewer.html");
+  for (const auto& [token, asset] : {
+       std::pair{"@VIEWER_STYLES@", "styles.css"}, {"@VIEWER_BRIDGE@", "bridge.js"},
+       {"@VIEWER_RENDERER@", "renderer.js"}, {"@VIEWER_STATE@", "state.js"}, {"@VIEWER_APP@", "app.js"}}) {
+    const auto index = expected.find(token);
+    require(index != std::string::npos, std::string("Missing HTML asset token: ") + token);
+    expected.replace(index, std::char_traits<char>::length(token), read_text(source / "web" / asset));
+  }
+  // CMake text reads use canonical LF even in a Windows CRLF checkout.
+  for (auto pos = expected.find("\r\n"); pos != std::string::npos; pos = expected.find("\r\n", pos))
+    expected.erase(pos, 1);
+  require(viewer_app_html() == expected, "Embedded HTML exactly matches reviewed source assets");
+  require(viewer_app_html().find("@VIEWER_") == std::string::npos, "No unexpanded asset placeholders");
+  require(viewer_app_html().find("<canvas") != std::string::npos, "Resource contains the CAD canvas");
+  require(viewer_app_html().find("CadBridge") != std::string::npos &&
+          viewer_app_html().find("CadLiveState") != std::string::npos, "Bridge and state controller are embedded");
+  require(viewer_app_html().find("<script src=") == std::string::npos &&
+          viewer_app_html().find("<link rel=\"stylesheet\"") == std::string::npos,
+          "Resource does not require external scripts or stylesheets");
+}
+void session_contract(Service& service, bool apps) {
+  McpSession session(service);
+  error(session, rpc(1, "resources/list"), -32000);
+  error(session, rpc(2, "resources/read", {{"uri", viewer_app_uri}}), -32000);
+  const auto initialized = result(session, initialize(apps));
+  require(initialized.at("capabilities").at("resources").at("subscribe") == false,
+          "Static resource capability does not advertise subscriptions");
+  require(initialized.at("capabilities").at("extensions").at("io.modelcontextprotocol/ui").at("mimeTypes") == Json::array({viewer_app_mime}),
+          "Apps extension advertises HTML MIME type");
+  error(session, rpc(3, "resources/list"), -32000);
+  require(!session.handle({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}), "Lifecycle notification has no reply");
+  const auto listed = result(session, rpc(4, "resources/list"));
+  require(listed.at("resources").size() == 1 && !listed.contains("nextCursor"), "One static app resource without pagination");
+  const auto resource = listed.at("resources").at(0);
+  require(resource.at("uri") == viewer_app_uri && resource.at("mimeType") == viewer_app_mime,
+          "Resource discovery URI and MIME agree");
+  const auto read = result(session, rpc("read-app", "resources/read", {{"uri", viewer_app_uri}}));
+  const auto content = read.at("contents").at(0);
+  require(read.at("contents").size() == 1 && content.at("text") == viewer_app_html(), "Read returns compiled HTML content");
+  require(content.at("uri") == resource.at("uri") && content.at("mimeType") == resource.at("mimeType"), "Read and discovery identify the same app");
+  require(content.at("_meta") == resource.at("_meta"), "Read includes the resource security metadata");
+  require(content.at("_meta").at("ui").at("permissions") == Json{{"clipboardWrite", Json::object()}},
+          "Only clipboard permission is requested for user-initiated copy fallback");
+  for (const auto* field : {"connectDomains", "resourceDomains", "frameDomains", "baseUriDomains"})
+    require(content.at("_meta").at("ui").at("csp").at(field) == Json::array(), std::string("No external domains for ") + field);
+  for (const auto* uri : {"file:///etc/passwd", "ui://agent-3d-cad/../viewer.html", "ui://agent-3d-cad/viewer.html?x=1", "ui://other/viewer.html"})
+    error(session, rpc(5, "resources/read", {{"uri", uri}}), -32002);
+  error(session, rpc(6, "resources/read"), -32602);
+  error(session, rpc(7, "resources/read", {{"uri", 1}}), -32602);
+  error(session, rpc(8, "resources/read", {{"uri", viewer_app_uri}, {"path", "arbitrary"}}), -32602);
+  error(session, rpc(9, "resources/list", {{"cursor", "arbitrary"}}), -32602);
+  require(!session.handle({{"jsonrpc", "2.0"}, {"method", "resources/read"}, {"params", {{"uri", viewer_app_uri}}}}), "Resource notifications produce no response");
+  Json tools;
+  const auto discovered = result(session, rpc(10, "tools/list"));
+  for (const auto& tool : discovered.at("tools")) tools[tool.at("name").get<std::string>()] = tool;
+  require(tools.at("cad_open").at("_meta").at("ui").at("resourceUri") == viewer_app_uri,
+          "Open links the app resource");
+  require(!tools.at("cad_show").contains("_meta") || !tools.at("cad_show").at("_meta").value("ui", Json::object()).contains("resourceUri"),
+          "Show does not instantiate a second app");
+  require(tools.at("cad_viewer").at("_meta").at("ui").at("visibility") == Json::array({"app"}), "Viewer internals have app-only host visibility");
+  const auto invalid = result(session, rpc(11, "tools/call", {{"name", "cad_viewer"}, {"arguments", {{"invalid", true}}}}));
+  require(invalid.at("isError") == true && invalid.at("structuredContent").contains("error"), "App tool validation errors remain structured tool results");
+  require(parse_json(invalid.at("content").at(0).at("text").get<std::string>()) == invalid.at("structuredContent"), "App errors preserve text-only fallback");
+}
+}
+int main() {
+  try {
+    Temporary temporary;
+    Service service(temporary.path);
+    source_integrity();
+    session_contract(service, true);
+    session_contract(service, false);
+    std::istringstream input(initialize(true).dump() + "\n" + Json{{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}.dump() + "\n" +
+        rpc(12, "resources/read", {{"uri", viewer_app_uri}}).dump() + "\n");
+    std::ostringstream output;
+    serve(service, input, output);
+    std::istringstream frames(output.str());
+    std::string line;
+    require(static_cast<bool>(std::getline(frames, line)) && parse_json(line).at("id") == "initialize", "Stdio initialization frame");
+    require(static_cast<bool>(std::getline(frames, line)) && parse_json(line).at("result").at("contents").at(0).at("text") == viewer_app_html(), "Multiline HTML is one JSON stdio frame");
+    require(!std::getline(frames, line), "No additional resource stdout frames");
+    std::cout << "app protocol: " << checks << " checks passed\n";
+    return 0;
+  } catch (const std::exception& e) { std::cerr << "app protocol: " << e.what() << '\n'; return 1; }
+}

@@ -1,0 +1,125 @@
+name: Native CAD contracts and bundles
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            architecture: x64
+          - runner: ubuntu-24.04-arm
+            architecture: arm64
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x64
+          - runner: windows-2025
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select supported C++20 library on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+          echo 'MACOSX_DEPLOYMENT_TARGET=15.0' >> "$GITHUB_ENV"
+      - name: Linux packaging utilities and runtime notices
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf libfontconfig1-dev
+          mkdir -p .deps/runtime-notices
+          gcc_runtime_major=$(dpkg-query -W -f '${Version}' libstdc++6 | cut -d. -f1)
+          cp "/usr/share/doc/gcc-${gcc_runtime_major}-base/copyright" .deps/runtime-notices/GCC-runtime-copyright
+          cp /usr/share/common-licenses/GPL-3 .deps/runtime-notices/GPL-3
+          cp /usr/share/doc/libfontconfig1/copyright .deps/runtime-notices/Fontconfig-copyright
+          cp /usr/share/doc/libexpat1/copyright .deps/runtime-notices/Expat-copyright
+          dpkg-query -W -f '${binary:Package}\t${Version}\n' libfontconfig1 libexpat1 libstdc++6 libgcc-s1 > .deps/runtime-notices/Linux-runtime-packages.txt
+      - uses: actions/cache@v4
+        id: native-deps
+        with:
+          path: .deps/native
+          key: native-${{ matrix.runner }}-${{ matrix.architecture }}-occt8.0.1-ft2.14.3-${{ hashFiles('cmake/dependencies/**', '.github/workflows/ci.yml') }}
+      - name: Build checksum-pinned native dependencies
+        if: steps.native-deps.outputs.cache-hit != 'true'
+        run: |
+          $prefix = Join-Path $PWD '.deps/native'
+          cmake -S cmake/dependencies -B build-deps "-DAGENTCAD_DEPS_PREFIX=$prefix" -DAGENTCAD_JOBS=3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build-deps --config Release --parallel 3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Configure service
+        run: |
+          $prefix = Join-Path $PWD '.deps/native'
+          $options = @('-DCMAKE_BUILD_TYPE=Release', "-DOpenCASCADE_DIR=$prefix/lib/cmake/opencascade", "-DCMAKE_PREFIX_PATH=$prefix")
+          if ($IsLinux) {
+            $notices = Join-Path $PWD '.deps/runtime-notices'
+            $options += "-DAGENTCAD_EXTRA_NOTICE_FILES=$notices/GCC-runtime-copyright;$notices/GPL-3;$notices/Fontconfig-copyright;$notices/Expat-copyright;$notices/Linux-runtime-packages.txt"
+          }
+          cmake -S . -B build @options
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build and test real geometry, persistence and workers
+        run: |
+          cmake --build build --config Release --parallel 3
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($IsWindows) { $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH" }
+          ctest --test-dir build -C Release --output-on-failure
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Validate schemas and official MCP SDK interoperability (developer tests only)
+        run: |
+          python -m pip install -r tests/mcp_sdk_requirements.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $exe = Join-Path $PWD 'build/agent-3d-cad'
+          if ($IsWindows) {
+            $exe = Join-Path $PWD 'build/Release/agent-3d-cad.exe'
+            $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH"
+          }
+          python tests/schema_conformance.py $exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/mcp_sdk_smoke.py $exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Relocated bundle without SDK environment
+        run: |
+          $build = Join-Path $PWD 'build'
+          $smoke = Join-Path $PWD 'build/bundle-smoke'
+          cmake "-DBUILD_DIR=$build" "-DTEST_DIR=$smoke" -P tests/bundle_smoke.cmake
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --install build --config Release --prefix bundle
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Fresh Linux runtime container, with no development tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: docker build --file packaging/Dockerfile.runtime-test --tag agentcad-runtime-test .
+      - name: Create native preview archive
+        run: |
+          cpack --config build/CPackConfig.cmake -C Release -B build/packages
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-preview-${{ matrix.runner }}-${{ matrix.architecture }}
+          path: |
+            build/packages/*.tar.gz
+            build/packages/*.zip
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: failure-evidence-${{ matrix.runner }}-${{ matrix.architecture }}
+          path: |
+            build/Testing/Temporary/LastTest.log
+            build-deps/**/CMakeConfigureLog.yaml

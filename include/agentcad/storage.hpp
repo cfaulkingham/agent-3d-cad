@@ -1,0 +1,63 @@
+#pragma once
+#include "agentcad/json.hpp"
+#include <filesystem>
+#include <optional>
+
+namespace agentcad {
+namespace fs = std::filesystem;
+// JSON and command-line text use UTF-8 on every platform. Native Windows paths
+// use UTF-16 internally; never route them through the active ANSI code page.
+fs::path path_from_utf8(const std::string& text);
+std::string path_to_utf8(const fs::path& path);
+// Serializes writers across CLI and MCP processes; released by the OS on exit.
+class WorkspaceLock {
+public:
+  explicit WorkspaceLock(const fs::path& root);
+  ~WorkspaceLock();
+  WorkspaceLock(const WorkspaceLock&) = delete;
+  WorkspaceLock& operator=(const WorkspaceLock&) = delete;
+private:
+#ifdef _WIN32
+  void* handle_ = nullptr;
+#else
+  int fd_ = -1;
+#endif
+};
+
+// Independent document writers; cooperates with the legacy workspace lock.
+class DocumentLock {
+public:
+  DocumentLock(const fs::path& root, const std::string& id);
+  ~DocumentLock();
+  DocumentLock(const DocumentLock&) = delete;
+  DocumentLock& operator=(const DocumentLock&) = delete;
+private:
+#ifdef _WIN32
+  void* workspace_ = nullptr;
+  void* document_ = nullptr;
+#else
+  int workspace_ = -1;
+  int document_ = -1;
+#endif
+};
+
+void directory(const fs::path& path);
+std::string read_text(const fs::path& path, std::size_t max_bytes = max_json_bytes);
+void atomic_text(const fs::path& path, const std::string& text);
+fs::path temporary_file(const fs::path& directory);
+void publish_file(const fs::path& temporary, const fs::path& target);
+
+class Store {
+public:
+  explicit Store(fs::path workspace);
+  const fs::path& root() const { return root_; }
+  Json read(const std::string& id, std::optional<std::uint64_t> revision = {}) const;
+  // Caller holds DocumentLock (or WorkspaceLock), rechecks revision, then publishes.
+  Json commit(const std::string& id, const Json& model, bool create, const Json& receipt = Json::object());
+  std::optional<Json> request_replay(const std::string& id, const std::string& request_id,
+                                     const std::string& fingerprint) const;
+private:
+  fs::path root_;
+  fs::path document_dir(const std::string& id) const;
+};
+}

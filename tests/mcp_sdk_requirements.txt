@@ -1,0 +1,4 @@
+# Developer-only interoperability client; never included in native bundles.
+# Official release: https://github.com/modelcontextprotocol/python-sdk/releases/tag/v2.3.0
+mcp==2.3.0
+jsonschema==4.25.1

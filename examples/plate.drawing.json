@@ -1,0 +1,15 @@
+{
+  "document_id": "plate",
+  "revision": 2,
+  "drawing": {
+    "title": "Four-hole mounting plate",
+    "dimensions": [
+      {"view": "top", "kind": "width"},
+      {"view": "top", "kind": "height"},
+      {"view": "front", "kind": "height"},
+      {"view": "top", "kind": "diameter", "center": [10, 10], "radius": {"parameter": "hole_radius"}},
+      {"view": "top", "kind": "horizontal", "from": [10, 10], "to": [{"parameter": "hole_x2"}, 10]}
+    ],
+    "notes": ["Dimensions in mm. Material and tolerances unspecified."]
+  }
+}

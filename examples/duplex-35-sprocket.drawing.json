@@ -1,0 +1,133 @@
+{
+  "document_id": "duplex_35_sprocket_20t",
+  "revision": 1,
+  "drawing": {
+    "title": "Duplex #35 sprocket - 20 teeth",
+    "sheet": "A3",
+    "views": [
+      {
+        "id": "top",
+        "orientation": "top"
+      },
+      {
+        "id": "front",
+        "orientation": "front"
+      },
+      {
+        "id": "right",
+        "orientation": "right"
+      },
+      {
+        "id": "iso",
+        "orientation": "isometric"
+      },
+      {
+        "id": "section",
+        "orientation": "section",
+        "section": {
+          "axis": "z",
+          "offset": {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "row_width"
+                },
+                0.5
+              ],
+              "unit": "mm"
+            }
+          }
+        }
+      }
+    ],
+    "dimensions": [
+      {
+        "view": "top",
+        "kind": "width"
+      },
+      {
+        "view": "front",
+        "kind": "height"
+      },
+      {
+        "view": "top",
+        "kind": "diameter",
+        "center": [
+          0,
+          0
+        ],
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "bore_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "view": "front",
+        "kind": "vertical",
+        "from": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          0
+        ],
+        "to": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "parameter": "row_spacing"
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "Nominal geometry; shaft fit, material and tolerances unspecified.",
+      "Section is the profile at the labeled plane."
+    ]
+  }
+}

@@ -1,0 +1,524 @@
+{
+  "document_id": "m20_coarse_knob",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "grip_diameter": 45,
+      "grip_height": 18,
+      "stud_length": 20,
+      "thread_diameter": 20,
+      "thread_pitch": 2.5,
+      "grip_edge_radius": 1.2,
+      "scallop_radius": 4.5,
+      "scallop_center_radius": 25.0,
+      "thread_overlap": 1.0
+    },
+    "features": [
+      {
+        "id": "grip_blank",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "divide",
+            "args": [
+              {
+                "parameter": "grip_diameter"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "parameter": "grip_height"
+        },
+        "origin": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "id": "grip_rounded",
+        "type": "fillet",
+        "input": "grip_blank",
+        "radius": {
+          "parameter": "grip_edge_radius"
+        },
+        "edges": {
+          "type": "geometric",
+          "feature_id": "grip_blank",
+          "curve_kind": "circle",
+          "expected_count": 2
+        }
+      },
+      {
+        "id": "flute_1",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                1.0
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.0
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_1",
+        "type": "cut",
+        "left": "grip_rounded",
+        "right": "flute_1"
+      },
+      {
+        "id": "flute_2",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_2",
+        "type": "cut",
+        "left": "grip_cut_1",
+        "right": "flute_2"
+      },
+      {
+        "id": "flute_3",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.0
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                1.0
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_3",
+        "type": "cut",
+        "left": "grip_cut_2",
+        "right": "flute_3"
+      },
+      {
+        "id": "flute_4",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_4",
+        "type": "cut",
+        "left": "grip_cut_3",
+        "right": "flute_4"
+      },
+      {
+        "id": "flute_5",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -1.0
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.0
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_5",
+        "type": "cut",
+        "left": "grip_cut_4",
+        "right": "flute_5"
+      },
+      {
+        "id": "flute_6",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_6",
+        "type": "cut",
+        "left": "grip_cut_5",
+        "right": "flute_6"
+      },
+      {
+        "id": "flute_7",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -0.0
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -1.0
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_7",
+        "type": "cut",
+        "left": "grip_cut_6",
+        "right": "flute_7"
+      },
+      {
+        "id": "flute_8",
+        "type": "cylinder",
+        "radius": {
+          "parameter": "scallop_radius"
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "grip_height"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "scallop_center_radius"
+                },
+                -0.707106781187
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "grip_cut_8",
+        "type": "cut",
+        "left": "grip_cut_7",
+        "right": "flute_8"
+      },
+      {
+        "id": "male_thread",
+        "type": "external_thread",
+        "major_diameter": {
+          "parameter": "thread_diameter"
+        },
+        "pitch": {
+          "parameter": "thread_pitch"
+        },
+        "length": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "stud_length"
+              },
+              {
+                "parameter": "thread_overlap"
+              }
+            ],
+            "unit": "mm"
+          }
+        },
+        "handedness": "right",
+        "origin": [
+          0,
+          0,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "grip_height"
+                },
+                {
+                  "parameter": "thread_overlap"
+                }
+              ],
+              "unit": "mm"
+            }
+          }
+        ]
+      },
+      {
+        "id": "knob",
+        "type": "fuse",
+        "left": "grip_cut_8",
+        "right": "male_thread"
+      }
+    ],
+    "output": "knob"
+  }
+}

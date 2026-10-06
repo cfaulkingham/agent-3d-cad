@@ -1,0 +1,15 @@
+{
+  "document_id": "nozzle",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"height": 20, "inlet_radius": 12, "tip_radius": 5, "bore_radius": 3},
+    "features": [
+      {"id": "inlet", "type": "sketch", "workplane": {"origin": [0,0,0], "normal": [0,0,1], "x_direction": [1,0,0]}, "profile": {"type": "circle", "radius": {"parameter":"inlet_radius"}}},
+      {"id": "tip", "type": "sketch", "workplane": {"origin": [0,0,{"parameter":"height"}], "normal": [0,0,1], "x_direction": [1,0,0]}, "profile": {"type": "circle", "radius": {"parameter":"tip_radius"}}},
+      {"id": "taper", "type": "loft", "sections": ["inlet","tip"], "ruled": true},
+      {"id": "bore", "type": "hole", "input": "taper", "origin": [0,0,0], "axis": [0,0,1], "radius": {"parameter":"bore_radius"}, "depth": {"parameter":"height"}}
+    ],
+    "output": "bore"
+  }
+}

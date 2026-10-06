@@ -1,0 +1,10 @@
+{
+  "document_id": "live_plate",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"height": 12},
+    "features": [{"id": "base", "type": "box", "size": [60, 40, {"parameter": "height"}]}],
+    "output": "base"
+  }
+}

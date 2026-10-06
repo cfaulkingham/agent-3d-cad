@@ -1,0 +1,8 @@
+/build*/
+/.deps/
+/workspace/
+/bundle/
+/CMakeUserPresets.json
+*.tar.gz
+*.log
+.DS_Store

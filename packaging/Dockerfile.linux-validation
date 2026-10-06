@@ -1,0 +1,51 @@
+# The build context is a project-only staged directory containing source/ and
+# archives/. See docs/DISTRIBUTION.md. Nothing from the host SDK is reused.
+FROM ubuntu:24.04 AS dependencies
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build patchelf ca-certificates python3 python3-venv nodejs libfontconfig1-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN python3 -m venv /opt/schema-test && /opt/schema-test/bin/pip install --no-cache-dir jsonschema==4.25.1
+COPY archives/ /archives/
+RUN printf '%s\n' \
+    '0d6913eae4bcc09a3653ceced6dda1aec11c35a1513d4c06762c9b002092c68a  /archives/OCCT-V8_0_1.tar.gz' \
+    '36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f  /archives/freetype-2.14.3.tar.xz' \
+    '4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187  /archives/json-3.12.0.tar.gz' \
+    | sha256sum -c - \
+    && mkdir /json && tar -xzf /archives/json-3.12.0.tar.gz -C /json --strip-components=1
+COPY source/cmake/dependencies/ /dependency-recipe/
+ARG BUILD_JOBS=6
+RUN cmake -S /dependency-recipe -B /dependency-build -G Ninja \
+      -DAGENTCAD_DEPS_PREFIX=/native -DAGENTCAD_JOBS=${BUILD_JOBS} \
+      -DAGENTCAD_OCCT_ARCHIVE=/archives/OCCT-V8_0_1.tar.gz \
+      -DAGENTCAD_FREETYPE_ARCHIVE=/archives/freetype-2.14.3.tar.xz \
+    && cmake --build /dependency-build --parallel ${BUILD_JOBS}
+
+FROM dependencies AS build
+ARG BUILD_JOBS=6
+COPY source/ /src/
+WORKDIR /src
+RUN /opt/schema-test/bin/pip install --no-cache-dir -r tests/mcp_sdk_requirements.txt
+RUN mkdir /runtime-notices \
+    && gcc_runtime_major=$(dpkg-query -W -f '${Version}' libstdc++6 | cut -d. -f1) \
+    && cp /usr/share/doc/gcc-${gcc_runtime_major}-base/copyright /runtime-notices/GCC-runtime-copyright \
+    && cp /usr/share/common-licenses/GPL-3 /runtime-notices/GPL-3 \
+    && cp /usr/share/doc/libfontconfig1/copyright /runtime-notices/Fontconfig-copyright \
+    && cp /usr/share/doc/libexpat1/copyright /runtime-notices/Expat-copyright \
+    && dpkg-query -W -f '${binary:Package}\t${Version}\n' libfontconfig1 libexpat1 libstdc++6 libgcc-s1 > /runtime-notices/Linux-runtime-packages.txt \
+    && cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DOpenCASCADE_DIR=/native/lib/cmake/opencascade -DCMAKE_PREFIX_PATH=/native \
+      -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=/json \
+      '-DAGENTCAD_EXTRA_NOTICE_FILES=/runtime-notices/GCC-runtime-copyright;/runtime-notices/GPL-3;/runtime-notices/Fontconfig-copyright;/runtime-notices/Expat-copyright;/runtime-notices/Linux-runtime-packages.txt' \
+    && cmake --build build --parallel ${BUILD_JOBS} \
+    && ctest --test-dir build --output-on-failure \
+    && /opt/schema-test/bin/python tests/schema_conformance.py build/agent-3d-cad \
+    && /opt/schema-test/bin/python tests/mcp_sdk_smoke.py /src/build/agent-3d-cad \
+    && cmake --build build --target bundle-check \
+    && cmake --install build --prefix /bundle \
+    && cpack --config build/CPackConfig.cmake -B /packages
+
+FROM ubuntu:24.04 AS runtime
+COPY --from=build /bundle /opt/agent-3d-cad
+COPY --from=build /src/packaging/runtime-smoke.sh /runtime-smoke.sh
+RUN /bin/sh /runtime-smoke.sh
+ENTRYPOINT ["/opt/agent-3d-cad/bin/agent-3d-cad"]

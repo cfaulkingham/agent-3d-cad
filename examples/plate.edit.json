@@ -1,0 +1,8 @@
+{
+  "document_id": "plate",
+  "expected_revision": 1,
+  "operations": [
+    {"op": "set_parameter", "name": "thickness", "value": 8},
+    {"op": "set_parameter", "name": "hole_x2", "value": 65}
+  ]
+}
