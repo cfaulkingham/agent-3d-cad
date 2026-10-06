@@ -13,8 +13,9 @@ Linux test host. The initial source commit is
 `04e73a43b2199027c37e114907c253e96f2e560e` (`init`). Its initial five-platform
 push run is `https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37536892312`.
 Both macOS and both Ubuntu lanes completed successfully. The first Windows
-lane built its SDK and service but failed two native suites. Windows fixes are
-ready for a fresh native run.
+lane built its SDK and service but failed two native suites. The corrected run
+passed all native and MCP checks, then exposed a bundle dependency-filter issue;
+the packaging fix is ready for a fresh native run.
 This supersedes
 earlier statements that there was no remote repository or runner execution.
 
@@ -75,8 +76,68 @@ relocated bundles passed the native workflow and embedded-resource hash check
 with empty PATH. A temporary embedding implementation added a final newline;
 the exact Arch assertion detected it and the final patch corrected it rather
 than changing expectations. `build/arch-validation/windows-fixes*` and its
-`logs/windows-fixes*` retain the executed evidence. Native Windows verification
-of this patch remains pending.
+`logs/windows-fixes*` retain the executed evidence. The corrected Windows run
+subsequently verified both fixes, as recorded below.
+
+The corrected source commit `555737b23c4e66dbbf21436b532f5999c16c0460` completed at
+`https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37544102649`.
+Its four macOS/Ubuntu lanes have completed successfully, including the added
+physical-byte embedding regression:
+
+| Runner / architecture | CTests | CTest seconds | Schema checks | MCP SDK checks |
+|---|---:|---:|---:|---:|
+| macOS 15 / arm64 | 18/18 | 40.39 | 175 | 328 |
+| macOS 15 / x64 | 18/18 | 149.49 | 171 | 333 |
+| Ubuntu 24.04 / arm64 | 18/18 | 26.71 | 169 | 248 |
+| Ubuntu 24.04 / x64 | 18/18 | 19.78 | 171 | 248 |
+
+All four corrected archives passed independent file-set, link and SHA-256
+verification, with 244 manifested files per macOS archive and 256 per Ubuntu
+archive. Every bundle passed verified relocation and the empty-PATH native
+workflow; both Ubuntu lanes also passed the fresh runtime-only container.
+`build/platform-ci/fixed-evidence.json`, `fixed-*.log` and
+`fixed-*-verification.json` retain the consolidated evidence. Corrected archive
+SHA-256 values:
+
+- macOS arm64: `8c12a815f8248698a303011890bd80735eb31fb3ea1156f25d9efcdc3c14f12e`.
+- macOS x64: `d1b46c072c451e03261ac01c7c9fb21ca49a6102200b1128545ec9feb86e0205`.
+- Ubuntu arm64: `e5a2b495b740020d29ef65d0a652950b85fe0f4e096d6a21c564afdc660c5050`.
+- Ubuntu x64: `ca1bca3308d2d0ca1c93074ea9f454b024f9f28373cc108a4ca782a3dc0a42b9`.
+
+The corrected Ubuntu x64 archive was separately hash-checked, installed and
+relocated on Arch. Its full PATH-isolated native runtime workflow and **171
+schema checks across 18 tools** passed. Logs and the installation record are
+in `build/arch-validation/logs/ubuntu-fixed/`. This tests the patched CI binary,
+in addition to the independent patched Arch compiler build.
+
+The corrected Windows x64 run passed **18/18 CTests in 57.03 seconds**, **167
+schema checks** and **243 official MCP SDK checks**. This verifies Unicode STL
+export/read-back and exact viewer embedding on native Windows, alongside real
+geometry, persistence, workers and drawings. It then failed bundle relocation:
+`wtdccm.dll` was unresolved. CMake's policy warnings show paths such as
+`C:\Windows\system32/advapi32.dll`; the old forward-slash-only filter missed these
+system paths and traversed the OS dependency graph. This is a packaging failure,
+not successful bundle acceptance; the failed run and full log are retained.
+
+The packaging follow-up matches both separator styles at every System32 boundary
+and selects normalized paths when CMake supports
+[CMP0207](https://cmake.org/cmake/help/latest/policy/CMP0207.html). It retains hard
+failure for unresolved application libraries and conflicting dependencies. The
+new `runtime_filters` CTest checks **16 cases**, including the actual mixed paths,
+normalization/case variants, SDK/MSVC DLLs, unresolved names and lookalike
+folders. Local macOS passed **19/19 suites in 18.57 seconds** and the relocated
+bundle workflow with empty PATH. Evidence is in
+`build/platform-ci/packaging-fix-local-{build,ctest,bundle}.log`.
+
+CI now uses separate cache restore/save actions, saving a completed SDK before
+service tests or packaging. Previous Windows failures discarded each successful
+42-minute SDK build because the old cache action saved only on job success. SDK
+keys now hash the exact recipe plus an explicit compiler/deployment/configuration
+ABI tag; service or packaging edits do not invalidate them. The four existing
+verified macOS/Ubuntu caches migrate only under the unchanged recipe hash and
+ABI tag, using their exact original key; there is no broad restore fallback.
+The workflow passed actionlint 1.7.12. A fresh native Windows relocation and
+archive run is still required before counting the platform as accepted.
 
 Both downloaded Linux archives independently verified all **256 manifested
 files**, including link destinations and the exact file set. The x64 archive
@@ -674,12 +735,12 @@ runtime lookup evidence and packaged hashes. No archive has been published.
 
 ## Remaining acceptance gates and limits
 
-1. Execute the corrected Windows x64 CI lane. Both native macOS architectures
-   and both Ubuntu architectures have passed the initial GitHub run. Windows
-   compiled and passed 15/17 suites; two concrete portability fixes are ready
-   and passed local macOS and independent Arch tests. The original failed lane
-   is retained as evidence, not counted as acceptance. See the latest increment
-   for the actual run, exact archives and remaining corrected-run requirement.
+1. Execute the Windows x64 packaging follow-up. Both native macOS architectures
+   and both Ubuntu architectures passed the corrected GitHub run. Windows passed
+   18/18 native suites, schema and official MCP SDK checks, then failed bundle
+   relocation on mixed-separator system dependency paths. Its packaging fix and
+   16-case regression passed local macOS; the failed lane remains evidence rather
+   than acceptance. See the latest increment for exact runs and archive hashes.
 2. In a normal browser, open a generated HTML artifact, pick a face/edge, copy or
    save its reference, resolve it through the service, make a selective edit,
    and load the new `.view.json`. The UI includes these controls; real interaction
@@ -715,7 +776,7 @@ Other deliberate limits:
   Abrupt exits can leave ignored temporary worker/staging files. Request receipts
   reconcile commits; no filesystem durability rollback is promised.
 
-Next work is corrected native Windows x64 execution using the existing CI
-matrix. The live Codex viewer loop now has real rendering/selection/
+Next work is native Windows x64 relocation/archive validation of the packaging
+follow-up using the existing CI matrix. The live Codex viewer loop now has real rendering/selection/
 refresh evidence; other-host and offline artifact interactions retain their own
 gates. Resolve concrete failures before expanding modeling or viewer scope.

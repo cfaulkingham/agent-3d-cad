@@ -49,6 +49,13 @@ No MCP SDK is embedded in M0. The limited stdio adapter targets the published
 2025-11-25 protocol and is separately tested. It does not claim complete MCP
 extension support or that 2025-11-25 is the latest protocol release.
 
+CI caches only successfully completed SDK installs, before testing the service.
+Cache keys combine the runner/architecture, exact `cmake/dependencies/**` hash
+and the workflow's `NATIVE_SDK_ABI` tag. Bump that tag when changing the SDK
+compiler, deployment baseline or configure options outside the recipe; remove
+or update any legacy migration entry at the same time. Recipe changes invalidate
+the cache automatically. Packaging and service-test changes do not change the SDK.
+
 ## Upgrading
 
 1. Check the official OCCT release list and exclude previews/development tags.

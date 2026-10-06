@@ -20,6 +20,10 @@ jobs:
             architecture: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
+    env:
+      # Bump for changes to SDK compiler/baseline/configure options. Recipe
+      # changes are hashed separately; packaging/test edits do not change ABI.
+      NATIVE_SDK_ABI: release-shared-xcode26.3-macos15-v1
     defaults:
       run:
         shell: pwsh
@@ -44,19 +48,29 @@ jobs:
           cp /usr/share/doc/libfontconfig1/copyright .deps/runtime-notices/Fontconfig-copyright
           cp /usr/share/doc/libexpat1/copyright .deps/runtime-notices/Expat-copyright
           dpkg-query -W -f '${binary:Package}\t${Version}\n' libfontconfig1 libexpat1 libstdc++6 libgcc-s1 > .deps/runtime-notices/Linux-runtime-packages.txt
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
         id: native-deps
         with:
           path: .deps/native
-          key: native-${{ matrix.runner }}-${{ matrix.architecture }}-occt8.0.1-ft2.14.3-${{ hashFiles('cmake/dependencies/**', '.github/workflows/ci.yml') }}
+          key: native-${{ matrix.runner }}-${{ matrix.architecture }}-${{ env.NATIVE_SDK_ABI }}-${{ hashFiles('cmake/dependencies/**') }}
+          # Migrate only the four verified initial SDK caches, with the exact
+          # unchanged recipe and ABI. No broad or cross-platform fallback.
+          restore-keys: ${{ env.NATIVE_SDK_ABI == 'release-shared-xcode26.3-macos15-v1' && hashFiles('cmake/dependencies/**') == '6a2eb1af8d147a2692aac7f148fbf0373d7953f0e174c39e21e78c2b817e8bbd' && format('native-{0}-{1}-occt8.0.1-ft2.14.3-6aae39f8f9f0614ba2044fe991082fcc247c95ed25e033997eaa97bc0fb6a940', matrix.runner, matrix.architecture) || '' }}
       - name: Build checksum-pinned native dependencies
-        if: steps.native-deps.outputs.cache-hit != 'true'
+        if: steps.native-deps.outputs.cache-matched-key == ''
         run: |
           $prefix = Join-Path $PWD '.deps/native'
           cmake -S cmake/dependencies -B build-deps "-DAGENTCAD_DEPS_PREFIX=$prefix" -DAGENTCAD_JOBS=3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cmake --build build-deps --config Release --parallel 3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      # Save only a successful SDK, before service tests or packaging can fail.
+      - name: Retain completed native SDK
+        if: steps.native-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .deps/native
+          key: ${{ steps.native-deps.outputs.cache-primary-key }}
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

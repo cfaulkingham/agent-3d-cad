@@ -9,8 +9,10 @@ and Linux arm64 suites, relocated shared-library bundles, and a fresh Linux
 runtime-only container have passed. An independent Arch Linux x86_64 build also
 passed all 17 suites, relocation, schemas, official MCP SDK and drawings; the
 user-created GitHub repository's initial CI passed both macOS and both Ubuntu
-architectures. Windows built and passed 15/17 suites; two portability fixes
-passed macOS and Arch regression checks and await a corrected native CI run.
+architectures. The corrected Windows run passed all 18 native suites, schemas
+and official MCP SDK checks, then exposed a mixed-separator bundle dependency
+filter failure. Its packaging follow-up passed 19 local macOS suites and awaits
+fresh native relocation/archive evidence.
 The original acceptance gates below are retained: offline artifact/browser
 verification and corrected native Windows CI still need evidence. The live Codex MCP App now has actual
 macOS arm64 rendering/selection/refresh evidence, and current M4/M5 sources
