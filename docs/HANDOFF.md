@@ -6,6 +6,123 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Review remediation — 2026-10-07 (branch `fix/review-findings`, not yet in CI)
+
+A four-area code review of `main` at `6acddef` (geometry kernel, job/document layer,
+MCP and live viewer, build/CI/docs) produced the "Fix first" and "Important" items
+below. Each was fixed test-first on `fix/review-findings`, then re-reviewed by two
+independent read-only reviewers; their findings were also addressed (the
+retroactive-evaluation point by documentation only, see below). **Nothing has run
+on Linux or Windows CI yet** (see "Unverified" below), and no remote push was made
+by this work. HLR per-view parallel workers remain unimplemented (see "Not done").
+
+**Behavior and contract changes** (details in `docs/PROTOCOL.md`, `SPEC.md`,
+`DRAWINGS.md`, `ASSEMBLIES.md`, `LIVE_VIEWER.md`):
+
+- *Kernel.* A STEP import must transfer every root (`kernel_failure` with
+  `transferred_roots`/`total_roots`); a `hole` must remove more than 1e-6 of its own
+  cylinder volume (`invalid_model`, with `removed_volume_mm3`/`hole_volume_mm3`); a
+  pattern or assembly may replicate at most 4,096 solids / 65,536 faces per feature
+  (`limit_exceeded`); fillet candidate IDs come from the input feature's own edges;
+  BOM CSV text cells that spreadsheets read as formulas get a leading `'`; OCCT
+  failures with empty messages are named by exception class. **These checks apply to
+  every evaluation, including revisions committed by earlier builds**: such a
+  revision stays on disk and readable with `cad_read`, but queries, views, exports
+  and drawings of it fail with the feature-level error until `cad_apply` fixes the
+  feature or `cad_restore` returns to an earlier revision. A strict-on-mutation or
+  versioned rule set was considered and not built; revisit if previews have users.
+- *Job store (`cad_job`).* `jobs/<id>/` now holds a small `state.json` (schema 2),
+  `request.json` and `result.json`; the result is written before the state flips to
+  succeeded and a valid result recovers a job whose final save failed. Admission and
+  list never parse results. Damaged, symlinked or foreign records show as `failed`
+  with `job_record_corrupt` and never block admission. Finished jobs are deleted
+  after 7 days or beyond the newest 256 (rename to `.trash-*` first). Records from
+  the previous layout are still read and migrated. Unknown job IDs return
+  `not_found`; submit validates arguments with the service's own contract.
+- *Workers.* Geometry workers and coordinators spawn the running executable, not a
+  sibling found by file name (a renamed binary works; `renamed_worker` CTest). Test
+  programs call `set_worker_executable`. Windows children inherit only the NUL
+  handle (STARTUPINFOEX handle list).
+- *Service/storage.* Mutation admission and publication wait up to 5 s (2–50 ms
+  backoff, no lock held between attempts) before `workspace_busy`; viewer and job
+  admission stay non-blocking. `Service::call` is the only place exceptions become
+  errors (JSON → `invalid_argument`, filesystem → `storage_error`, else
+  `internal_error`), so MCP, CLI and jobs report identical codes. Request replay uses
+  `documents/<id>/receipts/` (O(1), falls back to a verified scan; old workspaces are
+  backfilled). Non-UTF-8 STEP imports are `invalid_argument` with `byte_offset`.
+  macOS commits use `F_FULLFSYNC`. New documents, job requests and views may not be
+  named like Windows devices (CON, PRN, AUX, NUL, COM0–9, LPT0–9); existing
+  documents with those names keep working.
+- *MCP/viewer.* Blank lines, CRLF and stray client responses no longer produce
+  replies; the tool catalog is built once and each schema carries only the `$defs`
+  it references (compact `tools/list` 1,058,723 → 263,401 bytes as measured by the
+  transport work; pretty-printed CLI `tools` 2.84 MB → 0.73 MB against an earlier
+  local build). Viewer sync `error` states are delivered (`CadBridge.value` throws
+  only on `isError`). Edge picking allows twice the mesh's linear deflection for
+  occlusion in both the live and offline viewers (98% of truly visible nozzle edge
+  samples pickable, from 73%). Frozen evaluations are bounded: one per view, plus a
+  throttled sweep of superseded metadata that skips damaged view records and never
+  follows a symlinked marker.
+- *Drawing cache.* Projections are cached **per view** (key: geometry, the view's
+  definition without its name, hidden-line choice). Adding, removing, reordering or
+  editing one view projects only that view. Each entry records its budget usage
+  (entities, points, examined edges, including hatch regions and hidden-line
+  fragments) and `check_drawing_totals` re-enforces the drawing-wide limits and the
+  64 balloon anchors on every request, so a request passes or fails identically
+  whether its views are cached. Diagnostics: `projection_keys`, `projection_hits`,
+  `projection_hit` (all hit); the single `projection_key` is gone. The performance
+  test records the cold single-view M20 drawing time as evidence
+  (`m20-front-drawing-timing.json`, 0.47 s here) without asserting on it.
+- *Notices/CI.* `packaging/THIRD_PARTY.md` named superseded `midpoint-v1`; it now
+  names v2, states the OCCT archive hash and relink steps (`lib/` on macOS/Linux,
+  `bin/` on Windows), and a CTest (`notices`) fails on drift. Added `NOTICE`
+  (original-code license still undecided; **no LICENSE added**), `SECURITY.md`,
+  `CONTRIBUTING.md`. CI artifacts keep 14 days instead of 90. `AGENTS.md` no longer
+  claims no remote exists. A tracked `.pyc` was removed and `.gitignore` extended.
+
+**Test evidence** (macOS arm64, local, Release, OCCT 8.0.1 `hlr-streaming-sdk`,
+`agentcad-hlr-midpoint-v2`): `cmake --build build-fix --parallel` has no warnings;
+`ctest --test-dir build-fix --output-on-failure -j 3` passes **31/31** (the 28
+earlier suites plus `notices`, `renamed_worker` and the new `service` suite; about
+36 s). The timing-sensitive suites (`jobs`, `service`, `live`, `cache`,
+`transactions`, `app_protocol`, `live_mcp_flow`, `renamed_worker`) passed four
+consecutive repeats. `tests/schema_conformance.py`: **295 checks across 19 tools**;
+`tests/mcp_sdk_smoke.py` (official MCP SDK 2.3.0, native stdio): **757 checks**. Two
+test races found and fixed on the way (a jobs admission-lock race that failed about
+half of runs; a lower-bound timing assumption in the lock-wait test).
+Test changes to flag for review: the heavy workload used by the cancel/kill/timeout/
+memory tests (`jobs_tests.cpp`, `mcp_sdk_smoke.py`) is now a 64×64-pin grid cut from
+a plate (4,096 solids, ~15 s, ~355 MB peak) because the old 64³ nested pattern is
+now rejected up front by the replication budget; the assembly-drawing assertion
+"assembled and exploded cache keys differ" became per-view (the two views still
+have different keys, and a view with its explode offset removed now correctly reuses
+the assembled view's projection). No tolerance or deadline was loosened except the
+memory-limit job's wall deadline (10 s → 30 s) and its poll bound.
+
+**Unverified — CI must confirm** (Windows code cannot be compiled locally):
+`CreateProcessW` handle list and `temporary_directory` on Windows (`jobs.cpp`),
+`close_lock(HANDLE&)` and `fs::rename` replacing `receipts/coverage.json`
+(`storage.cpp`), whether `fs::rename` can move job directories during retention on
+Windows, the cmd.exe quoting in the service test's CLI helper, and the `jobs`,
+`service`, `live` and `renamed_worker` suites on Windows and Linux. The Linux
+" (deleted)" executable case is covered only by a unit test of the path logic.
+
+**Not done / owner decisions.**
+- Per-view *parallel* hidden-line workers: needs a decision on per-worker memory
+  budget and coordinator changes; cold complex thread drawings still take minutes.
+- Existing revisions are re-evaluated with the stricter kernel (see above).
+- Live job results (`jobs/live_*`) are bounded only by the job retention policy
+  (up to 256 × 64 MiB worst case).
+- Choose the original-code license, review the LGPL/relink wording in
+  `packaging/THIRD_PARTY.md`, and enable GitHub private vulnerability reporting
+  (it is currently off) or name another private channel in `SECURITY.md`.
+- Review items left for later: pin GitHub Actions by SHA, add `concurrency`,
+  Debug/sanitizer lanes, split this file into status/history, remove M0-era text
+  from `SPEC.md`/`ROADMAP.md`, document the glibc 2.39 / macOS 15 floors.
+
+Next: push the branch, let all five CI lanes run, fix anything Windows/Linux-only,
+then merge.
+
 ## README marketing banner — 2026-10-07
 
 Added `docs/assets/readme-banner.png` above the README title. The 2120 × 742
@@ -19,8 +136,8 @@ Validation: visually inspected the generated banner for spelling, readable
 typography, composition and geometry; verified PNG dimensions and the README's
 relative asset path; `git diff --check` passed. Documentation/assets only;
 native CTest suites were not rerun. Next: review the banner in the GitHub README
-when these local changes are published. Native implementation and release gates
-below are unchanged.
+when these local changes are published. The banner itself changes no native
+implementation or release gate.
 
 ## Intel regression resolved and current native matrix validated — 2026-10-07
 
