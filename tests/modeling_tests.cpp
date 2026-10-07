@@ -108,6 +108,40 @@ void hole_effect_tests() {
   near(BuiltModel(bored(hole({10,15,12},{0,0,-1},2,20))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
   near(BuiltModel(bored(hole({0,15,5},{1,0,0},2,3))).summary().at("volume_mm3"),6000-12*std::numbers::pi);
 }
+void replication_budget_tests() {
+  const auto base=Json{{"id","base"},{"type","box"},{"size",{10,10,10}}};
+  const auto pattern=[](const std::string& id,const std::string& input,int count,Json step) {
+    return Json{{"id",id},{"type","pattern"},{"input",input},{"count",count},{"step",step}};
+  };
+  // Three nested levels multiply 16 x 16 x 64 copies; the budget rejects the
+  // final level from its input size before allocating any of its instances.
+  auto nested=document(Json::array({base,pattern("array0","base",16,{20,0,0}),pattern("array1","array0",16,{0,20,0}),
+    pattern("array2","array1",64,{0,0,20})}),"array2");
+  auto e=captured([&]{BuiltModel invalid(nested);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="array2","nested pattern exceeds the per-feature solid budget, got "+e.code+": "+e.what());
+  require(e.details.at("solid_limit")==4096 && e.details.at("solids")==16384 && e.details.at("face_limit")==65536 && e.details.at("faces")==98304,
+    "budget failure reports requested and permitted solids and faces");
+  // The documented boundary is inclusive: a full 64 x 64 grid remains supported.
+  auto grid=document(Json::array({base,pattern("array0","base",64,{20,0,0}),pattern("array1","array0",64,{0,20,0})}),"array1");
+  require(BuiltModel(grid).summary().at("solid_count")==4096,"a 64 x 64 pattern grid is within the per-feature budget");
+  // Faces are budgeted as well: 130 faces x 64 x 8 = 66,560 exceeds 65,536.
+  Json points=Json::array();
+  for(int i=0;i<128;++i) points.push_back({5*std::cos(2*std::numbers::pi*i/128),5*std::sin(2*std::numbers::pi*i/128)});
+  auto faceted=document(Json::array({sketch("profile",{{"type","polygon"},{"points",points}}),
+    {{"id","prism"},{"type","extrude"},{"input","profile"},{"distance",2}},
+    pattern("row","prism",64,{20,0,0}),pattern("rows","row",8,{0,20,0})}),"rows");
+  e=captured([&]{BuiltModel invalid(faceted);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="rows" && e.details.at("faces")==66560 && e.details.at("solids")==512,
+    "pattern face budget is enforced, got "+e.code+": "+e.what());
+  // Assemblies replicate their inputs too and share the same per-feature budget.
+  Json parts=Json::array();
+  for(int i=0;i<64;++i) parts.push_back({{"id","p"+std::to_string(i)},{"input","pair"}});
+  auto assembled=document(Json::array({base,pattern("row","base",64,{20,0,0}),pattern("pair","row",2,{0,20,0}),
+    {{"id","assembly"},{"type","assembly"},{"parts",parts}}}),"assembly");
+  e=captured([&]{BuiltModel invalid(assembled);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="assembly" && e.details.at("solids")==8192,
+    "assembly replication shares the per-feature budget, got "+e.code+": "+e.what());
+}
 void failure_message_tests() {
   require(kernel_failure_message(Standard_ConstructionError("bad axis"))=="bad axis","OCCT message is reported unchanged");
   const auto anonymous=kernel_failure_message(Standard_ConstructionError(""));
@@ -337,6 +371,7 @@ void tests() {
   error("kernel_failure",[&]{BuiltModel invalid(model);});
   step_root_tests(directory);
   hole_effect_tests();
+  replication_budget_tests();
   failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");

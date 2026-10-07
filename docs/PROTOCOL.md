@@ -50,7 +50,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
 | `sweep` | `input`, `path` | Sketch swept along 2–64 world-coordinate points |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
-| `pattern` | `input`, `count`, `step` | 2–64 translated copies including original |
+| `pattern` | `input`, `count`, `step` | 2–64 translated copies including original; replication budget below |
 | `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
 | `import_step` | `content`, `sha256` | Embedded STEP text ≤512 KiB with matching SHA-256 |
 | `assembly` | `parts` | 1–64 named instances of earlier solid features; optional acyclic rigid `mates` and source-keyed `bom` metadata |
@@ -65,6 +65,16 @@ not assemblies or fused unions. Boolean fusion is explicit. Imported STEP is an
 opaque solid feature, not recovered source design intent. Saved content makes
 imports independent of their original file path.
 
+Patterns and assemblies replicate their inputs, and a pattern may take another
+pattern as input. Each such feature has a per-feature replication budget,
+checked from its inputs before any copy is built: at most 4,096 solids and
+65,536 faces, counted as input solids/faces × `count` for a pattern and summed
+over parts for an assembly. A 64 × 64 grid of single solids is within it; a
+third nested 64-copy level is not. Exceeding it returns `limit_exceeded` with
+`feature_id`, `solids`, `faces`, `solid_limit` and `face_limit`, and publishes
+no revision. The budget does not bound Boolean work; job deadlines and memory
+budgets still apply to every build.
+
 An assembly part is `{id,input,placement?}`. Placement has optional `translation`
 and `rotation` with the transform convention above. A rigid mate is
 `{id,type:"rigid",parent,child,parent_frame,child_frame,offset?,angle_deg?}`;
@@ -72,7 +82,8 @@ frames use the workplane fields in each source part's coordinates. Offset is in
 the parent datum frame and rotation is about its +Z. An unmated root uses its
 placement (identity when absent); a mated child must omit placement. Each child
 has one parent at most, cycles fail, and parts/mates need not be ordered.
-Assemblies permit 63 mates and the document permits 256 total assembly parts.
+Assemblies permit 63 mates and the document permits 256 total assembly parts;
+the replication budget above also bounds an assembly's total solids and faces.
 Nested assembly inputs and solid operations consuming assemblies are rejected;
 edit source parts before assembling them. Full semantics and examples are in
 [ASSEMBLIES.md](ASSEMBLIES.md).

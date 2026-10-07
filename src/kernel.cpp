@@ -193,6 +193,16 @@ void check_shape(const TopoDS_Shape& shape) {
   if (!std::isfinite(aggregate.Mass()) || aggregate.Mass()<=0)
     throw Error("invalid_shape", "Feature has nonpositive or nonfinite aggregate volume");
 }
+// Patterns and assemblies copy exact solids without Boolean cost, so nesting
+// multiplies them geometrically (three 64-copy patterns: 262,144 solids). Each
+// such feature's output is bounded from its inputs before any copy is made.
+constexpr std::size_t replication_solid_limit = 4096;
+constexpr std::size_t replication_face_limit = 65536;
+void replication_budget(std::size_t solids, std::size_t faces) {
+  if (solids > replication_solid_limit || faces > replication_face_limit)
+    throw Error("limit_exceeded", "Feature would replicate more solids or faces than its per-feature budget",
+      {{"solid_limit",replication_solid_limit},{"face_limit",replication_face_limit},{"solids",solids},{"faces",faces}});
+}
 Json point(const gp_Pnt& p) { return {p.X(), p.Y(), p.Z()}; }
 Json direction(const gp_Dir& d) { return {d.X(), d.Y(), d.Z()}; }
 Json bounds(const TopoDS_Shape& shape) {
@@ -346,6 +356,12 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
                                const std::map<std::string,FeatureGeometry>& sources,
                                Json& history,bool& history_truncated) {
   const auto& parts=feature.at("parts");
+  std::size_t replicated_solids=0,replicated_faces=0;
+  for (const auto& part:parts) {
+    const auto& source=sources.at(text_field(part,"input"));
+    replicated_solids+=count(source.shape,TopAbs_SOLID); replicated_faces+=source.faces.Extent();
+  }
+  replication_budget(replicated_solids,replicated_faces);
   std::map<std::string,const Json*> incoming;
   if (feature.contains("mates")) for (const auto& mate:feature.at("mates")) incoming.emplace(text_field(mate,"child"),&mate);
   std::map<std::string,gp_Trsf> transforms;
@@ -616,8 +632,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         TopoDS_Compound compound; builder.MakeCompound(compound);
         const auto delta=vector3(feature.at("step"),parameters);
         const auto input=text_field(feature,"input");
+        const auto copies=feature.at("count").get<int>();
+        const auto& source=impl_->features.at(input);
+        replication_budget(static_cast<std::size_t>(count(source.shape,TopAbs_SOLID))*copies,static_cast<std::size_t>(source.faces.Extent())*copies);
         std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> instances;
-        for (int i=0; i<feature.at("count").get<int>(); ++i) {
+        for (int i=0; i<copies; ++i) {
           gp_Trsf transform; transform.SetTranslation(gp_Vec(delta[0]*i,delta[1]*i,delta[2]*i));
           auto operation=std::make_unique<BRepBuilderAPI_Transform>(shapes.at(input),transform,true);
           if (!operation->IsDone()) throw Error("kernel_failure","Pattern instance failed");

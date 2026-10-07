@@ -155,6 +155,25 @@ void transaction_tests() {
   }
   require(service.call("cad_read",{{"document_id","part"}}).at("revision") == 1,"failure preserves HEAD");
   require(!fs::exists(temporary.path / "documents/part/revisions/2.json"),"failure publishes no revision");
+  // Three nested 64-copy patterns would request 262,144 solids. The per-feature
+  // budget rejects the third level before building it, well inside the default
+  // worker deadline and memory budget, and the committed revision is untouched.
+  Json nested = {{"document_id","part"},{"expected_revision",1},{"operations",Json::array()}};
+  std::string previous = "base";
+  for (int level = 0; level < 3; ++level) {
+    const auto id = "array" + std::to_string(level);
+    Json step = {0,0,0}; step[level] = 30;
+    nested["operations"].push_back({{"op","add_feature"},{"feature",{{"id",id},{"type","pattern"},{"input",previous},{"count",64},{"step",step}}}});
+    previous = id;
+  }
+  nested["operations"].push_back({{"op","set_output"},{"feature_id",previous}});
+  try { service.call("cad_apply",nested); throw std::runtime_error("Nested pattern budget was not enforced"); }
+  catch (const Error& e) {
+    require(e.code == "limit_exceeded" && e.details.at("feature_id") == "array2" && e.details.at("solids") == 262144,
+      "nested pattern fails at its budget, got " + e.code + ": " + e.what());
+  }
+  require(service.call("cad_read",{{"document_id","part"}}).at("revision") == 1,"budget failure preserves HEAD");
+  require(!fs::exists(temporary.path / "documents/part/revisions/2.json"),"budget failure publishes no revision");
   require(service.call("cad_apply",edits(1,8)).at("revision") == 2,"successful edit");
   error("revision_conflict",[&]{service.call("cad_apply",edits(1,9));});
   Service reopened(temporary.path);

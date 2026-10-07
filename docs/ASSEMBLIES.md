@@ -44,7 +44,9 @@ Part ordering does not control mate evaluation.
 
 Assemblies contain 1–64 parts and up to 63 mates; the entire document permits at
 most 256 assembly parts. Ordinary document, topology, mesh, worker and artifact
-limits still apply. An input may contain multiple solids, such as a pattern or
+limits still apply, and the per-feature replication budget in
+[PROTOCOL.md](PROTOCOL.md) bounds an assembly to 4,096 solids and 65,536 faces
+summed over its part inputs. An input may contain multiple solids, such as a pattern or
 STEP import, but is treated as one part instance. Nested assemblies and ordinary
 solid operations consuming an assembly are rejected. Edit or transform source
 features before assembling them. Source features and part IDs are distinct
