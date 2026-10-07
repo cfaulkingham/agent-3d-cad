@@ -6,7 +6,7 @@ set(executable "${root}/bin/agent-3d-cad@CMAKE_EXECUTABLE_SUFFIX@")
 set(notices "@AGENTCAD_NOTICE_DIRECTORY@")
 foreach(required occt/LICENSE_LGPL_21.txt occt/OCCT_LGPL_EXCEPTION.txt
     occt/PatchOcctHlr.cmake occt/OCCT-HLR-PATCH.md
-    occt/agentcad-hlr-midpoint-v1.json
+    occt/agentcad-hlr-midpoint-v2.json
     occt/modified/HLRBRep_Intersector.cxx occt/modified/HLRBRep_Intersector.hxx
     occt/modified/HLRBRep_Data.cxx occt/modified/HLRBRep_Data.hxx occt/modified/HLRBRep_Hider.cxx
     freetype/LICENSE.TXT freetype/FTL.TXT freetype/GPLv2.TXT
@@ -19,14 +19,14 @@ foreach(required occt/LICENSE_LGPL_21.txt occt/OCCT_LGPL_EXCEPTION.txt
     message(FATAL_ERROR "Missing ${required}. Build the pinned dependency recipe, or set AGENTCAD_NOTICE_DIRECTORY to its complete notice tree. A partial bundle is not distributable.")
   endif()
 endforeach()
-file(READ "${notices}/occt/agentcad-hlr-midpoint-v1.json" hlr_metadata)
+file(READ "${notices}/occt/agentcad-hlr-midpoint-v2.json" hlr_metadata)
 string(JSON hlr_format ERROR_VARIABLE hlr_format_error GET "${hlr_metadata}" format_version)
 string(JSON hlr_version ERROR_VARIABLE hlr_version_error GET "${hlr_metadata}" occt_version)
 string(JSON hlr_modification ERROR_VARIABLE hlr_modification_error GET "${hlr_metadata}" modification)
 string(JSON hlr_count ERROR_VARIABLE hlr_count_error LENGTH "${hlr_metadata}" binaries)
 if(hlr_format_error OR hlr_version_error OR hlr_modification_error OR hlr_count_error
     OR NOT hlr_format STREQUAL "1" OR NOT hlr_version STREQUAL "8.0.1"
-    OR NOT hlr_modification STREQUAL "agentcad-hlr-midpoint-v1" OR hlr_count LESS 1)
+    OR NOT hlr_modification STREQUAL "agentcad-hlr-midpoint-v2" OR hlr_count LESS 1)
   message(FATAL_ERROR "Invalid OCCT HLR SDK modification manifest. Rebuild the pinned dependency recipe and use its matching notices.")
 endif()
 file(SHA256 "$<TARGET_FILE:TKHLR>" selected_hlr_hash)

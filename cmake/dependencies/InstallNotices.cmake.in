@@ -12,7 +12,7 @@ file(GLOB hlr_libraries
   "@AGENTCAD_DEPS_PREFIX@/lib/libTKHLR*.dylib"
   "@AGENTCAD_DEPS_PREFIX@/lib/libTKHLR*.so*"
   "@AGENTCAD_DEPS_PREFIX@/bin/TKHLR*.dll")
-set(hlr_metadata "{\"format_version\":1,\"occt_version\":\"8.0.1\",\"modification\":\"agentcad-hlr-midpoint-v1\",\"binaries\":[]}")
+set(hlr_metadata "{\"format_version\":1,\"occt_version\":\"8.0.1\",\"modification\":\"agentcad-hlr-midpoint-v2\",\"binaries\":[]}")
 set(hlr_count 0)
 foreach(library IN LISTS hlr_libraries)
   if(IS_SYMLINK "${library}" OR IS_DIRECTORY "${library}")
@@ -29,7 +29,9 @@ endforeach()
 if(hlr_count EQUAL 0)
   message(FATAL_ERROR "Cannot record the OCCT HLR modification: no installed TKHLR shared library found in @AGENTCAD_DEPS_PREFIX@")
 endif()
-file(WRITE "${destination}/occt/agentcad-hlr-midpoint-v1.json" "${hlr_metadata}\n")
+# A known-v1 SDK upgrade must not retain a manifest for its replaced binary.
+file(REMOVE "${destination}/occt/agentcad-hlr-midpoint-v1.json")
+file(WRITE "${destination}/occt/agentcad-hlr-midpoint-v2.json" "${hlr_metadata}\n")
 if(NOT "@AGENTCAD_SYSTEM_FREETYPE@")
   file(MAKE_DIRECTORY "${destination}/freetype")
   file(COPY "@ft_source@/LICENSE.TXT" "@ft_source@/docs/FTL.TXT" "@ft_source@/docs/GPLv2.TXT" DESTINATION "${destination}/freetype")

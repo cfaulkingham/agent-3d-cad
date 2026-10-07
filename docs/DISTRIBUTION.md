@@ -21,7 +21,7 @@ Build the pinned shared dependencies with `cmake/dependencies` first. That
 recipe downloads checksum-verified OCCT 8.0.1 and FreeType 2.14.3, disables
 optional external FreeType integrations, installs the required OCCT resources and exact
 upstream notices, and leaves exceptions enabled. It applies the reproducible
-`agentcad-hlr-midpoint-v1` optimization; bundles include its patch, explanation
+`agentcad-hlr-midpoint-v2` optimization; bundles include its patch, explanation
 and five complete modified files alongside the upstream notices. SDKs built
 before this change must be rebuilt for the optimization and regression suite.
 `AGENTCAD_SYSTEM_FREETYPE=ON`

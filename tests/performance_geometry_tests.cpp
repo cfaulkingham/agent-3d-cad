@@ -2,12 +2,18 @@
 #include <BRepTools.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
+#include <HLRBRep_Intersector.hxx>
+#include <HLRBRep_Surface.hxx>
 #include <HLRAlgo_Projector.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Pln.hxx>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -106,6 +112,88 @@ void exact_occlusion_regression(const BuiltModel& built) {
     else require(distance.Value()<1e-5,"A physically occluded thread-root point remains in exact hidden curves");
   }
 }
+void streaming_root_regression(const BuiltModel& built) {
+#if defined(AGENTCAD_OCCT_HLR_STREAMING)
+  std::istringstream input(built.snapshot().at("features").at("thread").at("brep").get<std::string>());
+  BRep_Builder builder;
+  TopoDS_Shape shape;
+  BRepTools::Read(shape,input,builder);
+  require(!shape.IsNull(),"Read exact thread for streaming root checks");
+  HLRAlgo_Projector projector(gp_Ax2(gp_Pnt(),gp_Dir(0,0,1),gp_Dir(1,0,0)));
+  HLRBRep_Surface surface;
+  surface.Projector(&projector);
+  HLRBRep_Intersector intersector;
+  bool multiple_roots=false,late_acceptance=false;
+  const auto point_values=[](const IntCurveSurface_IntersectionPoint& point) {
+    gp_Pnt p; double u,v,w; IntCurveSurface_TransitionOnCurve transition;
+    point.Values(p,u,v,w,transition);
+    return Json::array({p.X(),p.Y(),p.Z(),u,v,w,static_cast<int>(transition)});
+  };
+  const auto inventory=[&](HLRBRep_Intersector& query,const gp_Lin& ray,bool dense) {
+    query.Perform(ray,100,dense);
+    require(query.IsDone(),"Complete exact root query succeeds");
+    Json points=Json::array();
+    for(int i=1;i<=query.NbPoints();++i) points.push_back(point_values(query.CSPoint(i)));
+    return points;
+  };
+  const auto verify=[&](const gp_Lin& ray,bool dense) {
+    const auto complete=inventory(intersector,ray,dense);
+    HLRBRep_Intersector fresh;
+    fresh.Load(&surface);
+    // Independently rebuild the requested grid: comparing two queries on the
+    // same cached grid alone could miss stale face/density state.
+    equivalent(complete,inventory(fresh,ray,dense));
+    Json observed=Json::array();
+    const bool rejected=intersector.PerformUntil(ray,100,dense,[&](const auto& point) {
+      observed.push_back(point_values(point));
+      return false;
+    });
+    require(!rejected,"Rejecting every exact candidate reports no occlusion");
+    equivalent(complete,observed);
+    int calls=0;
+    const bool accepted=intersector.PerformUntil(ray,100,dense,[&](const auto& point) {
+      ++calls;
+      const auto values=point_values(point);
+      equivalent(complete.at(0),values);
+      const auto exact=surface.Value(values[3],values[4]);
+      require(exact.Distance(gp_Pnt(values[0],values[1],values[2]))<1e-5,"Accepted candidate lies on exact source surface");
+      return true;
+    });
+    require(accepted==!complete.empty(),"Streaming and complete inventories agree on existence");
+    require(calls==(complete.empty()?0:1),"Stop after the first qualified root");
+    if(complete.size()>1 && complete.back()[5].get<double>()-complete.front()[5].get<double>()>1e-6) {
+      multiple_roots=true;
+      calls=0;
+      const double threshold=(complete.front()[5].get<double>()+complete.back()[5].get<double>())/2;
+      const bool late=intersector.PerformUntil(ray,100,dense,[&](const auto& point) {
+        ++calls;
+        return point_values(point)[5].template get<double>()>threshold;
+      });
+      require(late && calls>1,"A rejected root must not prevent a later qualified root");
+      require(calls<=static_cast<int>(complete.size()),"Qualification preserves duplicate suppression");
+      late_acceptance=true;
+    }
+    equivalent(complete,inventory(intersector,ray,dense));
+  };
+  for(TopExp_Explorer it(shape,TopAbs_FACE);it.More();it.Next()) {
+    surface.Surface(TopoDS::Face(it.Current()));
+    if(surface.Surface().GetType()!=GeomAbs_BSplineSurface) continue;
+    intersector.Load(&surface);
+    // Repeated grid changes and face changes cannot retain stale brackets.
+    for(bool dense:{false,true,false,true}) {
+      verify(gp_Lin(gp_Pnt(5.6,0,10),gp_Dir(0,0,-1)),dense);
+      verify(gp_Lin(gp_Pnt(100,0,10),gp_Dir(0,0,-1)),dense);
+    }
+  }
+  require(multiple_roots && late_acceptance,"Thread fixture exercises several roots and rejection before acceptance");
+  surface.Surface(BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0,0,1),gp_Dir(0,0,1)),-2,2,-2,2).Face());
+  intersector.Load(&surface);
+  verify(gp_Lin(gp_Pnt(0,0,10),gp_Dir(0,0,-1)),false);
+#else
+  (void)built;
+  std::cerr<<"Streaming root checks require the v2 patched SDK; older SDK coverage is limited to projection regressions\n";
+#endif
+}
 void verify_thread(const Json& model,double height) {
   BuiltModel built(model);
   const auto summary=built.summary(),topology=built.topology();
@@ -144,6 +232,7 @@ int main() {
     verify_thread(thread(1.25,3.75),3.75);
     BuiltModel fine_thread(thread(1.25,3.75));
     exact_occlusion_regression(fine_thread);
+    streaming_root_regression(fine_thread);
 
     std::ifstream input(std::filesystem::path(CAD_SOURCE_DIR)/"examples/m20-knob.create.json");
     require(static_cast<bool>(input),"Read saved parametric knob fixture");

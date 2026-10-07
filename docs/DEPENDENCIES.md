@@ -13,11 +13,17 @@
 
 The main CMake project requires exactly 8.0.1 and the native translation unit
 checks `OCC_VERSION_HEX` at compile time. The dependency build verifies that archive
-and applies the checked, reproducible `agentcad-hlr-midpoint-v1` modification in
+and applies the checked, reproducible `agentcad-hlr-midpoint-v2` modification in
 `cmake/dependencies/PatchOcctHlr.cmake`. Two HLR checks that discard intersection
 counts use a bounded dense BSpline ray grid, falling back to the original grid
 when no qualified occluder is found. Count-dependent calls retain their original
-solver. Source geometry, topology, object layouts and existing public symbols
+solver. Existential queries stream the same exact roots and stop only after the
+existing depth and trimmed-face checks qualify a root; `Compare` also uses this
+path with its unchanged original grid. The current face retains at most two
+polyhedra, reusing the identical dense and original samples as queries alternate.
+Changing the loaded face destroys both. The patch upgrades known v1 sources and
+marks its additive native API for direct root-inventory regression tests.
+Source geometry, topology, object layouts and existing public symbols
 remain unchanged. This is an OCCT 8.0.1 modification, not a kernel upgrade or a
 Python compatibility layer. Exceptions must remain enabled in Release
 (`BUILD_RELEASE_DISABLE_EXCEPTIONS=OFF`). The dependency recipe builds shared

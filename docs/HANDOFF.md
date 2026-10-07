@@ -1,12 +1,93 @@
 # Implementation handoff
 
-Updated: 2026-10-06. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-07. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
-## Current increment — assembly visibility and cold drawing optimization
+## Current increment — exact HLR root streaming and face-grid reuse
+
+Implemented `agentcad-hlr-midpoint-v2` in the pinned OCCT 8.0.1 recipe:
+
+- Existential midpoint checks and `Compare` can stop solving ray/surface roots
+  after the first root passes the existing depth, periodic-UV and trimmed-face
+  classification. Rejected roots continue to later candidates. The sorted
+  brackets, parameter bounds, exact solver, point construction, duplicate
+  suppression and tolerances are the same as v1. Midpoints retain their dense
+  first attempt and original-grid fallback; `Compare` retains its original grid.
+- A private owner retains both the dense and original polyhedra for the currently
+  loaded face. Alternating queries select the same sampling dimensions instead of
+  repeatedly evaluating the surface and rebuilding identical grids. At most two
+  grids are retained; `Load` and destruction release both. No global cache, copied
+  polyhedra or new geometry approximation is introduced.
+- Count-dependent classification retains the complete original intersection
+  path. Existing native symbols and object layouts remain unchanged; the additive
+  `PerformUntil` method supplies only an existence result, not a complete root
+  inventory. Model documents and transport/tool contracts remain unchanged.
+- The checked five-file script accepts upstream sources, upgrades exact known v1
+  sources, reapplies safely to v2 and rejects unknown input. SDK and bundle
+  manifests now identify v2 and verify the selected TKHLR hash. Complete modified
+  source, upstream attribution and the reproducible patch accompany bundles.
+- Direct native regressions compare streaming and complete root inventories,
+  all-rejected queries, first/later accepted roots, empty queries, repeated
+  grid/face changes against independently rebuilt grids, analytic supports and
+  exact source-surface residuals.
+  Older SDKs explicitly report that these additive-method checks are unavailable.
+
+Executed on macOS arm64 with OpenCascade 8.0.1:
+
+- Rebuilt TKHLR in the existing pinned Release dependency tree and staged its
+  matching native headers/notices alongside the SDK's unchanged dependencies.
+  The staged library uses sibling loader resolution. No global installation.
+- `cmake --build build-app-protocol --parallel 4` and
+  `ctest --test-dir build-app-protocol --output-on-failure`: **28/28 passed in
+  44.95 seconds**, including **41,074 performance geometry/root checks** in
+  **14.40 seconds**.
+- Compared exact projected B-rep curves against the frozen v1 patch on **29
+  views**, covering handedness, pitch/length, rotated parts, overlapping assemblies,
+  fused geometry and a 100x scale case. **255,020 bidirectional samples** matched
+  both visible and raw hidden curves within 2e-5 mm; the largest sampled deviation
+  was **8.388e-08 mm**. This is finite numerical evidence, not a continuous-domain
+  proof. The three previously timed-out long axial diagnostic baselines were not
+  rerun in this matrix. Report: `build/drawing-perf-next/final-matrix-report.json`.
+- A fresh native full M20 knob, default four-view drawing completed cold in
+  **189.782 seconds**, versus **196.185 seconds** for the frozen v1 service/SDK:
+  a **3.26% reduction** in this local paired case. Both used empty caches, the
+  unchanged source, 300000 ms bounded job budgets and no concurrent geometry/build
+  work. This is a modest measured improvement; complex first drawings still take
+  minutes. Command: `python3 -u tests/cache_benchmark.py
+  build-app-protocol/agent-3d-cad build/drawing-perf-next/native-final
+  --views standard --cold-only --timeout-ms 300000`.
+- All **40,962** native projection comparisons matched with zero deviation, and
+  all six cold PDF/SVG/DXF files were byte-identical to v1. Three cached redraws
+  took **0.153, 0.151 and 0.154 seconds** (median **0.153**), with identical files.
+  A3 first-angle restyling with dimensions took **0.150 seconds**, reused unchanged
+  cache files and preserved the revision-1 source. Report:
+  `build/drawing-perf-next/final-paired-report.json`; native result:
+  `build/drawing-perf-next/native-final/cache-benchmark-ilisjwpn/report.json`.
+- Fresh, CRLF and known-v1 source application, repeated v2 application and
+  unexpected-source rejection passed. Regenerating SDK notices removed the obsolete
+  v1 binary manifest and retained the matching v2 manifest. The dependency recipe
+  configured.
+- Native `bundle-check` passed relocation and empty-PATH create/edit/reopen,
+  geometry, drawings, assemblies/BOM/balloons, MCP and embedded app-resource smoke.
+  Pairing the previous v1 TKHLR with v2 notices was rejected before publication.
+  Logs: `build/drawing-perf-next/dual-grid-ctest.log`,
+  `dual-grid-bundle.log`, `final-mismatch.log` and
+  `final-patch-checks/report.json`.
+
+Limits: exact HLR retains its existing numerical limitations; count-dependent
+ray solving still exhausts the full root inventory. These sources and the modified
+SDK have local macOS evidence, not a new Windows/Linux certification. Existing SDKs
+need the updated dependency recipe to use streaming. No remote push or release.
+
+Next: profile remaining exact root solving and trim classification before another
+optimization; validate the updated SDK on the other native lanes. Full-count ray
+queries were inexpensive in the top-view probe. Repeated-ray memoization and
+spatial-index reuse did not provide a worthwhile benefit and are not included.
+
+## Previous increment — assembly visibility and cold drawing optimization
 
 Implemented live-view presentation controls:
 

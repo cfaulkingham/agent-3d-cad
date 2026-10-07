@@ -40,8 +40,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 An existing exact exception-enabled OCCT SDK can be selected with OpenCASCADE_DIR.
-Use the supplied dependency recipe's HLR midpoint patch for the cold-drawing
-optimization and current performance geometry regressions; an unmodified SDK
+Use the supplied dependency recipe's HLR midpoint, root streaming and grid reuse
+patch for the cold-drawing optimization and current performance geometry regressions; an unmodified SDK
 retains the previous behavior. The patch and modified source accompany bundles.
 CMake fetches checksum-pinned nlohmann JSON 3.12.0 when not installed. Offline
 build overrides and bundle instructions are in [DISTRIBUTION.md](docs/DISTRIBUTION.md).
