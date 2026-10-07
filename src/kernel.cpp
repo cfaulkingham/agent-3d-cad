@@ -714,10 +714,13 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
       } else if (type == "fillet") {
-        BRepBuilderAPI_Copy copy(shapes.at(text_field(feature, "input")));
+        const auto input=text_field(feature,"input");
+        const auto& source=impl_->features.at(input);
+        BRepBuilderAPI_Copy copy(source.shape);
         BRepFilletAPI_MakeFillet operation(copy.Shape());
-        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
-        TopExp::MapShapes(copy.Shape(), TopAbs_EDGE, edges);
+        // Select and describe edges in the input feature's own evaluation, the
+        // IDs topology(input) reports; the copy is reached only via its history.
+        const auto& edges=source.edges;
         std::vector<int> selected;
         const auto& selector = feature.at("edges");
         Json candidates = Json::array();
@@ -736,12 +739,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           const auto code = selected.empty() ? "selection_missing" : selected.size() > expected ? "selection_ambiguous" : "selection_count_mismatch";
           throw Error(code, "Geometric selector did not match its expected edge count", {{"source_feature_id", feature.at("input")}, {"expected_count", expected}, {"actual_count", selected.size()}, {"matches", matched}, {"candidates", candidates}, {"candidates_truncated", edges.Extent() > 64}});
         }
-        for (const auto i : selected) operation.Add(scalar(feature.at("radius"), parameters), TopoDS::Edge(edges(i)));
+        for (const auto i : selected) operation.Add(scalar(feature.at("radius"), parameters), TopoDS::Edge(copy.ModifiedShape(edges(i))));
         operation.Build();
         if (!operation.IsDone()) throw Error("kernel_failure", "Fillet failed; try a smaller radius or change the input geometry");
         shape = operation.Shape();
-        const auto input=text_field(feature,"input");
-        record_history(operation,impl_->features.at(input),input,shape,history,history_truncated,&copy);
+        record_history(operation,source,input,shape,history,history_truncated,&copy);
       }
       if (type != "sketch") check_shape(shape);
       shapes.emplace(id, shape);
