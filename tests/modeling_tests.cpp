@@ -26,6 +26,7 @@
 #include <numbers>
 #include <random>
 #include <sstream>
+#include <tuple>
 using namespace agentcad;
 namespace {
 int checks=0;
@@ -83,6 +84,29 @@ void step_root_tests(const std::filesystem::path& directory) {
   const auto e=captured([&]{BuiltModel invalid(import(partial));});
   require(e.code=="kernel_failure" && e.details.at("feature_id")=="imported","partial STEP import fails as a feature-level kernel failure, got "+e.code+": "+e.what());
   require(e.details.at("transferred_roots")==1 && e.details.at("total_roots")==2,"partial STEP import reports transferred and total roots");
+}
+Json hole(Json origin,Json axis,double radius,double depth) {
+  return {{"id","bored"},{"type","hole"},{"input","part"},{"origin",origin},{"axis",axis},{"radius",radius},{"depth",depth}};
+}
+void hole_effect_tests() {
+  // A hole is a material-removing intent. A cut that leaves its input unchanged
+  // is a modeling error, never a silently successful no-op revision.
+  const auto bored=[](Json feature) { auto model=extruded(); model["features"].push_back(feature); model["output"]="bored"; return model; };
+  for(const auto& [origin,axis,depth,reason] : std::initializer_list<std::tuple<Json,Json,double,const char*>>{
+      {{100,100,0},{0,0,1},10,"origin beside the body"},
+      {{10,15,20},{0,0,1},5,"direction pointing away from the body"},
+      {{10,15,15},{0,0,-1},4,"too shallow to reach the body"},
+      {{10,15,15},{0,0,-1},5,"touching the top face without entering it"}}) {
+    const auto e=captured([&]{BuiltModel invalid(bored(hole(origin,axis,2,depth)));});
+    require(e.code=="invalid_model",std::string("hole ")+reason+" fails as invalid_model, got "+e.code+": "+e.what());
+    require(e.details.at("feature_id")=="bored" && e.details.at("source_feature_id")=="part",std::string("hole ")+reason+" names the hole and its input");
+    near(e.details.at("removed_volume_mm3").get<double>(),0,1e-6);
+  }
+  // Blind, through, overlong and side-entry holes all remove their material.
+  near(BuiltModel(bored(hole({10,15,10},{0,0,-1},2,4))).summary().at("volume_mm3"),6000-16*std::numbers::pi);
+  near(BuiltModel(bored(hole({10,15,0},{0,0,1},2,10))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
+  near(BuiltModel(bored(hole({10,15,12},{0,0,-1},2,20))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
+  near(BuiltModel(bored(hole({0,15,5},{1,0,0},2,3))).summary().at("volume_mm3"),6000-12*std::numbers::pi);
 }
 void failure_message_tests() {
   require(kernel_failure_message(Standard_ConstructionError("bad axis"))=="bad axis","OCCT message is reported unchanged");
@@ -312,6 +336,7 @@ void tests() {
   model["features"][0]["content"]="not a STEP file"; model["features"][0]["sha256"]=sha256("not a STEP file");
   error("kernel_failure",[&]{BuiltModel invalid(model);});
   step_root_tests(directory);
+  hole_effect_tests();
   failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");

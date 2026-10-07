@@ -51,7 +51,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `sweep` | `input`, `path` | Sketch swept along 2–64 world-coordinate points |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
 | `pattern` | `input`, `count`, `step` | 2–64 translated copies including original |
-| `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction |
+| `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
 | `import_step` | `content`, `sha256` | Embedded STEP text ≤512 KiB with matching SHA-256 |
 | `assembly` | `parts` | 1–64 named instances of earlier solid features; optional acyclic rigid `mates` and source-keyed `bom` metadata |
 
@@ -80,6 +80,10 @@ edit source parts before assembling them. Full semantics and examples are in
 A sweep starts at its sketch origin with the first path segment perpendicular to
 the sketch plane. Invalid/self-intersecting profiles and failed sweeps fail
 explicitly. STEP readers normalize source units to document millimeters.
+A hole whose cylinder misses its input, stops short of it, or only touches it
+fails with `invalid_model` naming the hole (`feature_id`) and its input
+(`source_feature_id`) plus `removed_volume_mm3`; it must remove more than
+1e-9 of the input volume.
 Every STEP transfer root must transfer: a file where any root fails is rejected
 with `kernel_failure` and `transferred_roots`/`total_roots` details, never
 imported partially.

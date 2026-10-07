@@ -147,6 +147,9 @@ void configure_kernel_logging() {
 }
 
 namespace {
+// A hole must remove more than this fraction of its input volume. It sits far
+// above volume-integration round-off and far below any physically drilled hole.
+constexpr double hole_removal_tolerance = 1e-9;
 // The single conversion of an OCCT failure into a domain error.
 Error occt_error(const Standard_Failure& failure, Json details = Json::object(), const std::string& code = "kernel_failure") {
   return Error(code, kernel_failure_message(failure), std::move(details));
@@ -628,15 +631,24 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         for (std::size_t i=0; i<instances.size() && !history_truncated; ++i)
           record_history(*instances[i],impl_->features.at(input),input,target,history,history_truncated,nullptr,static_cast<int>(i));
       } else if (type == "hole") {
+        const auto input=text_field(feature,"input");
+        const auto& body=shapes.at(input);
         const auto tool=BRepPrimAPI_MakeCylinder(gp_Ax2(origin,parameter_direction(feature.at("axis"),parameters)),scalar(feature.at("radius"),parameters),scalar(feature.at("depth"),parameters)).Shape();
         BRepAlgoAPI_Cut operation;
         NCollection_List<TopoDS_Shape> left,right;
-        left.Append(shapes.at(text_field(feature,"input"))); right.Append(tool);
+        left.Append(body); right.Append(tool);
         operation.SetArguments(left); operation.SetTools(right);
         operation.SetNonDestructive(true); operation.SetRunParallel(false); operation.Build();
         if (!operation.IsDone() || operation.HasErrors()) throw Error("kernel_failure","Hole cut failed");
         shape=operation.Shape();
-        const auto input=text_field(feature,"input");
+        // A hole that misses, stops short of, or only touches its input leaves
+        // a valid but unchanged solid. That is a failed intent, not a revision.
+        GProp_GProps before,after;
+        BRepGProp::VolumeProperties(body,before); BRepGProp::VolumeProperties(shape,after);
+        const double removed=before.Mass()-after.Mass();
+        if (!(removed > hole_removal_tolerance*before.Mass()))
+          throw Error("invalid_model","Hole does not enter its input solid; it removes no material",
+            {{"source_feature_id",input},{"removed_volume_mm3",removed},{"input_volume_mm3",before.Mass()}});
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "import_step") {
         STEPControl_Reader reader;
