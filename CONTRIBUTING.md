@@ -1,7 +1,8 @@
 # Contributing
 
-This is a native preview and the original-code license is still an owner decision
-(see [NOTICE](NOTICE)); please open an issue to discuss a change before sending one.
+This is a native preview. The project is MIT-licensed (see [LICENSE](LICENSE) and
+[NOTICE](NOTICE)); by contributing you agree your contribution is under the same
+license. Please open an issue to discuss a change before sending one.
 
 - Read [AGENTS.md](AGENTS.md) (invariants), [docs/SPEC.md](docs/SPEC.md) and
   [docs/PROTOCOL.md](docs/PROTOCOL.md) first.

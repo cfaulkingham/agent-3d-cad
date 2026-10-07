@@ -50,7 +50,7 @@ must supply their toolchain's exact license and exception texts with
 C/C++ redistributable runtime files.
 
 `provenance.json` records platform, compiler, pinned input identities, and hashes
-of the actual installed native files/resources/notices. The original project
-license remains an owner decision. These build artifacts are development
+of the actual installed native files/resources/notices. The original project code
+is MIT-licensed (`LICENSE`, shipped beside this file). These build artifacts are development
 previews, with no assertion of public release authorization, signing,
 notarization, or completed legal review.

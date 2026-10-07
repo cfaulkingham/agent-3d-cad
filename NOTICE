@@ -2,12 +2,9 @@ agent-3d-cad — project notice
 
 Status of the project's own code
 --------------------------------
-The license for the original code in this repository has not been selected;
-selecting it is an owner decision. Until the owner adds a LICENSE file, no
-permission to use, copy, modify or distribute the original code is granted
-beyond what applicable law allows, what GitHub's Terms of Service grant for
-viewing and forking a public repository, or what the owner grants separately in
-writing. Public visibility alone grants no further permission.
+The original code in this repository is licensed under the MIT License; see
+LICENSE. The copyright holder is Colin Faulkingham. Third-party components keep
+their own licenses, listed below, and are not relicensed by this project.
 
 Third-party components
 ----------------------
@@ -18,7 +15,7 @@ GPLv2), plus toolchain runtime libraries. Their license texts, the modified
 OCCT sources, the reproducible patch, source/relinking instructions and
 per-file provenance are in packaging/THIRD_PARTY.md and in the notices
 directory of every bundle (share/agent-3d-cad/notices). Those licenses apply to
-those components regardless of the status of the project's own code.
+those components; the MIT License of the project's own code does not change them.
 
 Bundles and CI artifacts are development previews with no assertion of public
 release authorization, signing, notarization or completed legal review.

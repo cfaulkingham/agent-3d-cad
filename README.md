@@ -179,8 +179,8 @@ The install tree includes native libraries, OCCT resources, dependency provenanc
 and third-party notices with relative library paths. The distribution guide
 covers relocation tests, clean runtime containers, installation and removal.
 CI definitions cover macOS arm64/x64, Linux x64/arm64 and Windows x64; a configured
-CI lane is not evidence that it has run. Release signing/notarization and the
-original-code license remain owner decisions.
+CI lane is not evidence that it has run. Release signing and
+notarization remain owner decisions.
 
 ## Source map
 
@@ -199,3 +199,10 @@ original-code license remain owner decisions.
 
 See [SPEC.md](docs/SPEC.md), [ROADMAP.md](docs/ROADMAP.md), and
 [DEPENDENCIES.md](docs/DEPENDENCIES.md) for architecture, acceptance gates and terms.
+
+## License
+
+The original code is released under the [MIT License](LICENSE). Native bundles
+also redistribute third-party components (Open CASCADE Technology, nlohmann JSON,
+FreeType) under their own licenses; see [NOTICE](NOTICE) and
+[packaging/THIRD_PARTY.md](packaging/THIRD_PARTY.md).

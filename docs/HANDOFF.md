@@ -6,6 +6,19 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## License chosen: MIT — 2026-10-07
+
+The owner chose the MIT License for the original code. Added `LICENSE` (copyright
+holder: Colin Faulkingham, taken from the repository owner's identity; adjust if an
+employer or other party holds the copyright), updated `NOTICE`, `README.md`,
+`CONTRIBUTING.md`, `AGENTS.md`, `docs/DEPENDENCIES.md`, `docs/DISTRIBUTION.md` and
+`packaging/THIRD_PARTY.md`, and made bundles install `LICENSE` and `NOTICE` beside
+`THIRD_PARTY.md`. The `notices` CTest now requires the MIT text and agreeing
+wording. Third-party components (OCCT LGPL 2.1 + exception, nlohmann MIT, FreeType)
+keep their own terms. The owner also decided that previews with no outside users
+need no strict-on-mutation handling of stored revisions: the stricter kernel checks
+apply on every evaluation (see below). Signing/notarization remain open.
+
 ## Review remediation — 2026-10-07 (branch `fix/review-findings`, not yet in CI)
 
 A four-area code review of `main` at `6acddef` (geometry kernel, job/document layer,
@@ -94,7 +107,8 @@ by this work.
 - *Notices/CI.* `packaging/THIRD_PARTY.md` named superseded `midpoint-v1`; it now
   names v2, states the OCCT archive hash and relink steps (`lib/` on macOS/Linux,
   `bin/` on Windows), and a CTest (`notices`) fails on drift. Added `NOTICE`
-  (original-code license still undecided; **no LICENSE added**), `SECURITY.md`,
+  (original-code license then undecided; MIT was chosen afterwards, see the
+  licensing entry above), `SECURITY.md`,
   `CONTRIBUTING.md`. CI artifacts keep 14 days instead of 90. `AGENTS.md` no longer
   claims no remote exists. A tracked `.pyc` was removed and `.gitignore` extended.
 
@@ -138,9 +152,9 @@ case is covered only by a unit test of the path logic.
 - Existing revisions are re-evaluated with the stricter kernel (see above).
 - Live job results (`jobs/live_*`) are bounded only by the job retention policy
   (up to 256 × 64 MiB worst case).
-- Choose the original-code license, review the LGPL/relink wording in
-  `packaging/THIRD_PARTY.md`, and enable GitHub private vulnerability reporting
-  (it is currently off) or name another private channel in `SECURITY.md`.
+- Review the LGPL/relink wording in `packaging/THIRD_PARTY.md`, and enable GitHub
+  private vulnerability reporting (it is currently off) or name another private
+  channel in `SECURITY.md`.
 - Review items left for later: pin GitHub Actions by SHA, add `concurrency`,
   Debug/sanitizer lanes, split this file into status/history, remove M0-era text
   from `SPEC.md`/`ROADMAP.md`, document the glibc 2.39 / macOS 15 floors.

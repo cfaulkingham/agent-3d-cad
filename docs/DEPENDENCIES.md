@@ -92,8 +92,8 @@ the cache automatically. Packaging and service-test changes do not change the SD
 
 ## Licensing and release status
 
-Original project code has no selected license yet. The owner should choose one
-before public publication; no license was inferred from sibling projects.
+The original project code is released under the MIT License (`LICENSE`).
+Third-party components keep their own licenses, listed below.
 No third-party library is checked into the project. The reproducible OCCT patch
 contains upstream source context with its attribution; complete dependency source
 downloads stay under ignored build/cache directories.
@@ -107,4 +107,4 @@ preview installs include the exact OCCT, JSON and FreeType license texts and
 hash their files in `provenance.json`. Linux compiler runtime notices are
 supplied from the actual build toolchain. See `DISTRIBUTION.md` for bundle
 construction and remaining public-release requirements; preview packaging
-does not decide the original-code license or assert completed legal review.
+does not assert completed legal review of the third-party notices.

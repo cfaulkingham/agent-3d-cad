@@ -146,9 +146,10 @@ alone is not evidence that those runners passed; see `HANDOFF.md` for results.
 
 The local relocation test is not a fresh-machine test: macOS system frameworks
 are still present. Public release still requires actual platform-run evidence,
-an original-code license decision, applicable source/relinking obligations,
-and release signing/notarization where appropriate. No archive is uploaded
-or published by local packaging, and no license for original code is inferred.
+applicable source/relinking obligations, and release signing/notarization
+where appropriate. No archive is uploaded or published by local packaging.
+The original code is MIT-licensed; `LICENSE` and `NOTICE` ship in each bundle's
+notices directory.
 CI uploads preview archives and test evidence as workflow artifacts with a
 14-day retention; they are not releases. `tests/notice_consistency.cmake`
 (CTest `notices`) fails if the shipped third-party notice, the OCCT patch

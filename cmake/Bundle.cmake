@@ -26,7 +26,7 @@ install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/
 install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples)
 install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
 install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/DRAWINGS.md docs/ASSEMBLIES.md DESTINATION share/agent-3d-cad)
-install(FILES packaging/THIRD_PARTY.md DESTINATION share/agent-3d-cad/notices)
+install(FILES LICENSE NOTICE packaging/THIRD_PARTY.md DESTINATION share/agent-3d-cad/notices)
 configure_file(cmake/InstallBundle.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle.cmake" @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle-$<CONFIG>.cmake"
   INPUT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle.cmake")

@@ -43,6 +43,7 @@ Developer builds may use CMake, a C++ compiler, and native dependencies.
   requires a specific technical reason and preservation of applicable notices.
 
 A public GitHub repository exists (`origin`), but no release has been published.
-Native preview archives are CI artifacts only. License selection for original
-project code is still an owner decision (see `NOTICE`); do not infer it from
-neighboring repositories, and do not add a LICENSE file on the owner's behalf.
+Native preview archives are CI artifacts only. The original project code is
+MIT-licensed (see `LICENSE` and `NOTICE`); third-party components keep their own
+licenses (`packaging/THIRD_PARTY.md`). Do not infer licenses from neighboring
+repositories, and keep third-party notices intact when reusing code.
