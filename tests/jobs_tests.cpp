@@ -4,7 +4,9 @@
 #include "agentcad/mcp.hpp"
 #include "agentcad/runtime.hpp"
 #include <chrono>
+#include <cstdio>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -390,6 +392,56 @@ int run_tests(int argc, const char* const* argv) {
       require(job_worker_main(temp.path,"missingRequest")==1,"coordinator reports its failure");
       const auto failed=dispatch(temp.path,{{"action","get"},{"job_id","missingRequest"}});
       require(failed.at("state")=="failed" && failed.at("error").at("code")=="job_record_corrupt","coordinator failure is durable");
+    }
+    {
+      // A multi-view drawing projects its uncached views in parallel workers. A
+      // deadline or cancellation must end every one of them and leave nothing behind.
+      Temp drawn; Service drawn_service(drawn.path);
+      std::ifstream example(fs::path(CAD_SOURCE_DIR)/"examples/m20-knob.create.json");
+      Json create; example>>create;
+      auto knob=create.at("model"); knob["parameters"]["stud_length"]=1.5;  // the short stud keeps each view to about a second
+      drawn_service.call("cad_create",{{"document_id","knob"},{"model",knob}});
+      const Json recipe={{"views",Json::array({{{"id","front"},{"orientation","front"}},{{"id","top"},{"orientation","top"}},{{"id","right"},{"orientation","right"}}})}};
+      const auto drawing=[&](const std::string& id,int timeout) {
+        dispatch(drawn.path,{{"action","submit"},{"request_id",id},{"tool","cad_drawing"},
+          {"arguments",{{"document_id","knob"},{"revision",1},{"drawing",recipe}}},{"budget",{{"timeout_ms",timeout},{"memory_mb",2048}}}});
+        return finished(drawn.path,id);
+      };
+      const auto leftovers=[&] {
+        std::size_t count=0;
+        for (const auto& entry : fs::directory_iterator(drawn.path/".workers"))
+          if (path_to_utf8(entry.path().filename()).rfind(".slot-",0)!=0) ++count;
+        return count;
+      };
+#ifndef _WIN32
+      const auto running_workers=[&] {
+        std::size_t count=0; std::string line; char buffer[4096];
+        if (FILE* ps=::popen("ps -axo command","r")) {
+          while (std::fgets(buffer,sizeof buffer,ps)) { line=buffer;
+            if (line.find("--internal-geometry-worker")!=std::string::npos && line.find(path_to_utf8(drawn.path))!=std::string::npos) ++count; }
+          ::pclose(ps);
+        }
+        return count;
+      };
+#endif
+      const auto before_cache=cache_entries(drawn.path);  // the create already cached the geometry
+      const auto expired=drawing("drawingTimeout",200);
+      require(expired.at("state")=="failed" && expired.at("error").at("code")=="job_timeout","a deadline ends a parallel drawing");
+      require(leftovers()==0,"a timed-out parallel drawing leaves no temporary worker directories");
+#ifndef _WIN32
+      for (int attempt=0;attempt<100 && running_workers()!=0;++attempt) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      require(running_workers()==0,"a timed-out parallel drawing leaves no worker process running");
+#endif
+      std::vector<std::unique_ptr<WorkspaceLock>> slots;
+      for (int index=0;index<4;++index) {
+        const auto path=drawn.path/".workers"/(".slot-"+std::to_string(index)); directory(path);
+        slots.push_back(std::make_unique<WorkspaceLock>(path));  // all four are free again
+      }
+      slots.clear();
+      require(cache_entries(drawn.path)==before_cache,"a timed-out parallel drawing publishes no cache");
+      const auto complete=drawing("drawingComplete",120000);
+      require(complete.at("state")=="succeeded","the same drawing completes with an adequate budget");
+      require(leftovers()==0,"a finished parallel drawing leaves no temporary worker directories");
     }
     {
       // Retention: only old or excess terminal records are collected, never live ones.

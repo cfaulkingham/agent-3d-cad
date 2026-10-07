@@ -464,6 +464,21 @@ physical footprint every 10 ms (there can be sampling overshoot). Worker-local
 watchdogs also bound work if a coordinator exits. Geometry is serial in each
 worker; no OCCT object is shared between workers.
 
+A drawing with two or more views that are not cached projects them in parallel:
+hidden-line removal dominates its cost and is independent per view. The
+coordinator runs one worker process per uncached view (an internal `projection`
+request; the only process-to-process hand-off is a result file), then a final
+worker renders the drawing from the supplied projections. Parallelism uses only
+worker slots that are idle at that moment and never waits for one: the caller's
+own slot runs the first view and the workspace-wide limit of four geometry workers
+still holds, so with no idle slot the views run one at a time, with identical
+results. Each worker has the request's full `memory_mb` budget (a drawing can use
+up to four times it at once) and the remaining wall-time budget. Cancellation,
+a deadline or any worker failure stops every worker, reports the failing view's
+error, and publishes no cache entry; cache entries for the projected views are
+published only after the whole drawing succeeds. Cache diagnostics add
+`projection_workers`, the peak number of workers that ran at once.
+
 Repeated operations automatically reuse a disposable `.cache` inside the
 workspace. Exact geometry is keyed by complete model contents, native build/SDK
 fingerprints, kernel and cache-format versions. Drawing projections are cached per

@@ -2,7 +2,9 @@
 
 `cad_drawing` derives vector drawings from a named, committed model revision.
 It does not edit the model or advance HEAD. CLI and MCP use the same service;
-projection and rendering run in a bounded native geometry worker. The installed
+projection and rendering run in bounded native geometry workers; uncached views of
+one drawing are projected by separate workers at once when idle worker slots exist
+(see [PROTOCOL.md](PROTOCOL.md)). The installed
 runtime needs no Python, Node, browser print engine, or PDF conversion program.
 
 Repeated drawings reuse exact geometry and projected views from a bounded,

@@ -14,7 +14,7 @@ below. Each was fixed test-first on `fix/review-findings`, then re-reviewed by t
 independent read-only reviewers; their findings were also addressed (the
 retroactive-evaluation point by documentation only, see below). **Nothing has run
 on Linux or Windows CI yet** (see "Unverified" below), and no remote push was made
-by this work. HLR per-view parallel workers remain unimplemented (see "Not done").
+by this work.
 
 **Behavior and contract changes** (details in `docs/PROTOCOL.md`, `SPEC.md`,
 `DRAWINGS.md`, `ASSEMBLIES.md`, `LIVE_VIEWER.md`):
@@ -73,6 +73,24 @@ by this work. HLR per-view parallel workers remain unimplemented (see "Not done"
   `projection_hit` (all hit); the single `projection_key` is gone. The performance
   test records the cold single-view M20 drawing time as evidence
   (`m20-front-drawing-timing.json`, 0.47 s here) without asserting on it.
+- *Parallel hidden-line projection.* A drawing with two or more uncached views
+  now projects them in separate worker processes (an internal `projection` request;
+  results travel only through files; the coordinator's own slot runs the first
+  view, then a final worker renders from the supplied projections). It uses only
+  worker slots that are idle at that moment and never waits for one, so the
+  workspace-wide limit of four workers still holds and, with no idle slot, views run
+  one at a time with identical results. Each worker has the request's full
+  `memory_mb` (a drawing can use up to 4×) and the remaining wall-time budget;
+  cancellation, a deadline or any failure stops every worker, reports the failing
+  view and publishes no cache entry (entries are published only after the whole
+  drawing succeeds). Diagnostics add `projection_workers`. Measured on this Mac with
+  `tests/cache_benchmark.py --views standard --cold-only` (full M20 knob, four
+  views): **197 s** on the previous serial build (`build-app-protocol`, same
+  streaming SDK) versus **135 s** now, about 1.46×; the gain is bounded by the
+  slowest view. Tests: parallel equals serial output and cache entries, partly warm
+  drawings, a failing view (named, nothing published, no leftover directories) in
+  `cache_tests.cpp`; a deadline mid-drawing leaves no process, temp directory or
+  cache entry in `jobs_tests.cpp`.
 - *Notices/CI.* `packaging/THIRD_PARTY.md` named superseded `midpoint-v1`; it now
   names v2, states the OCCT archive hash and relink steps (`lib/` on macOS/Linux,
   `bin/` on Windows), and a CTest (`notices`) fails on drift. Added `NOTICE`
@@ -81,14 +99,14 @@ by this work. HLR per-view parallel workers remain unimplemented (see "Not done"
   claims no remote exists. A tracked `.pyc` was removed and `.gitignore` extended.
 
 **Test evidence** (macOS arm64, local, Release, OCCT 8.0.1 `hlr-streaming-sdk`,
-`agentcad-hlr-midpoint-v2`): `cmake --build build-fix --parallel` has no warnings;
-`ctest --test-dir build-fix --output-on-failure -j 3` passes **31/31** (the 28
+`agentcad-hlr-midpoint-v2`): `cmake --build build-wip --parallel` has no warnings;
+`ctest --test-dir build-wip --output-on-failure -j 3` passes **31/31** (the 28
 earlier suites plus `notices`, `renamed_worker` and the new `service` suite; about
 36 s). The timing-sensitive suites (`jobs`, `service`, `live`, `cache`,
 `transactions`, `app_protocol`, `live_mcp_flow`, `renamed_worker`) passed four
 consecutive repeats. `tests/schema_conformance.py`: **295 checks across 19 tools**;
-`tests/mcp_sdk_smoke.py` (official MCP SDK 2.3.0, native stdio): **752–762 checks**
-(varies with asynchronous polls). The final tree was also built from an empty build
+`tests/mcp_sdk_smoke.py` (official MCP SDK 2.3.0, native stdio): **752–852 checks**
+(varies with asynchronous polls; 852 on the final run). The final tree was also built from an empty build
 directory (no warnings) and passed the same 31/31, and `bundle-check` (relocated
 bundle, empty PATH: create/edit/reopen/query/STEP/STL/drawings/BOM/balloons/MCP and
 embedded app resource) passed. Two
@@ -112,8 +130,8 @@ Windows, the cmd.exe quoting in the service test's CLI helper, and the `jobs`,
 " (deleted)" executable case is covered only by a unit test of the path logic.
 
 **Not done / owner decisions.**
-- Per-view *parallel* hidden-line workers: needs a decision on per-worker memory
-  budget and coordinator changes; cold complex thread drawings still take minutes.
+- Cold complex thread drawings still take minutes (the slowest single view bounds
+  the parallel speedup); profiling the remaining exact root/trim work is next.
 - Existing revisions are re-evaluated with the stricter kernel (see above).
 - Live job results (`jobs/live_*`) are bounded only by the job retention policy
   (up to 256 × 64 MiB worst case).

@@ -11,9 +11,11 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <random>
@@ -611,6 +613,123 @@ std::string sha256(const std::string& text) {
   return result.str();
 }
 
+// A cached per-view projection is trusted only if it carries everything a drawing
+// needs from it, including what it cost against the drawing-wide limits.
+bool valid_projection_entry(const std::optional<Json>& entry) {
+  return entry && entry->contains("views") && entry->at("views").size()==1 && entry->contains("tolerance_mm") &&
+    entry->contains("budget") && entry->at("budget").is_object();
+}
+Json projection_definition(const Json& view) {
+  auto definition=view; definition.erase("id"); return definition;
+}
+// All workers run the same executable; the exit status and result file are the
+// only things a coordinator trusts, whether it started one worker or several.
+Json worker_response(const fs::path& directory, int status) {
+  if (status == 124)
+    throw Error("job_timeout", "Geometry worker exceeded its wall-time budget");
+  if (status == 137)
+    throw Error("memory_limit", "Geometry worker exceeded its memory budget");
+  if (!fs::exists(directory / "output.json"))
+    throw Error("worker_failed", "Geometry worker exited without a result", {{"exit_status", status}, {"memory_mb", current_budget.at("memory_mb")}});
+  auto response = read_result(directory / "output.json");
+  if (response.contains("error")) {
+    const auto& error = response.at("error");
+    throw Error(error.at("code"), error.at("message"), error.value("details", Json::object()));
+  }
+  if (status != 0) throw Error("worker_failed", "Geometry worker failed", {{"exit_status", status}});
+  return response;
+}
+std::unique_ptr<WorkspaceLock> try_worker_slot(const fs::path& workspace) {
+  for (int index = 0; index < max_workers; ++index) {
+    const auto path = workspace / ".workers" / (".slot-" + std::to_string(index)); directory(path);
+    try { return std::make_unique<WorkspaceLock>(path); }
+    catch (const Error& e) { if (e.code != "workspace_busy") throw; }
+  }
+  return nullptr;
+}
+std::int64_t remaining_ms(std::chrono::steady_clock::time_point started) {
+  const auto total = current_budget.at("timeout_ms").get<std::int64_t>();
+  const auto used = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count();
+  return total - used;
+}
+// A cache entry a coordinator publishes only after the whole evaluation succeeds.
+struct PendingPublication {
+  std::shared_ptr<TemporaryDirectory> files;
+  std::string file, key;
+};
+// Views projected ahead of the final worker, by separate processes.
+struct ParallelProjection {
+  Json supplied = Json::array();   // [{index, view, budget, tolerance_mm}]
+  Json summary;                    // the model summary a projecting worker returned
+  std::vector<PendingPublication> publications;
+  int workers = 1;                 // peak number of workers running at once
+};
+// Hidden-line removal dominates a drawing and is independent per view, so views
+// that are not cached are projected by separate worker processes. Every process is
+// still serial inside and bounded like any other worker; this only uses worker
+// slots that are idle at the moment, never waits for one, and never holds more than
+// the workspace-wide four. The caller's own slot runs the first view.
+ParallelProjection project_in_parallel(const fs::path& workspace, const Json& model, const Json& drawing,
+                                       const std::vector<std::size_t>& missing,
+                                       std::chrono::steady_clock::time_point started) {
+  struct Active {
+    std::size_t view;
+    std::shared_ptr<TemporaryDirectory> files;
+    std::unique_ptr<Child> child;
+    std::unique_ptr<WorkspaceLock> slot;   // null: the caller's own slot
+  };
+  ParallelProjection result;
+  std::deque<std::size_t> pending(missing.begin(), missing.end());
+  std::vector<Active> active;
+  bool own_slot_free = true, geometry_publication = false;
+  std::size_t peak = 0;
+  try {
+    while (!pending.empty() || !active.empty()) {
+      check_job_cancelled();
+      if (remaining_ms(started) <= 0) throw Error("job_timeout", "Geometry workers exceeded their wall-time budget");
+      while (!pending.empty()) {
+        std::unique_ptr<WorkspaceLock> slot;
+        if (!own_slot_free) { slot = try_worker_slot(workspace); if (!slot) break; }
+        const auto view = pending.front(); pending.pop_front();
+        auto files = std::make_shared<TemporaryDirectory>(workspace);
+        auto limits = current_budget; limits["timeout_ms"] = std::max<std::int64_t>(1, remaining_ms(started));
+        const Json single = {{"kind","projection"},{"drawing",{{"views",Json::array({drawing.at("views").at(view)})},
+          {"hidden_lines",drawing.at("hidden_lines")}}}};
+        atomic_text(files->path / "input.json", Json{{"model", model}, {"request", single}, {"budget", limits},
+          {"cache_root",path_to_utf8(workspace/".cache")}}.dump());
+        auto child = std::make_unique<Child>(launch({"--internal-geometry-worker", files->path / "input.json", files->path / "output.json"},
+          true, current_budget.at("memory_mb")));
+        active.push_back({view, files, std::move(child), std::move(slot)});
+        try { atomic_text(files->path / "process.json", Json{{"pid",active.back().child->id()}}.dump()); }
+        catch (...) { /* Only a diagnostic for operators; the worker is already running. */ }
+        own_slot_free = false;
+        peak = std::max(peak, active.size());
+      }
+      for (auto it = active.begin(); it != active.end();) {
+        int status = 0;
+        if (!it->child->done(status)) { ++it; continue; }
+        const auto response = worker_response(it->files->path, status);
+        const auto& produced = response.at("result").at("projected").at(0);
+        result.supplied.push_back({{"index",it->view},{"view",produced.at("view")},{"budget",produced.at("budget")},
+          {"tolerance_mm",produced.at("tolerance_mm")}});
+        if (result.summary.is_null()) result.summary = response.at("result").at("summary");
+        const auto& diagnostics = response.at("cache");
+        if (!diagnostics.at("projection_hits").at(0).get<bool>())
+          result.publications.push_back({it->files, "projection-0.cache", diagnostics.at("projection_keys").at(0).get<std::string>()});
+        if (!geometry_publication && !diagnostics.at("geometry_hit").get<bool>()) {
+          geometry_publication = true;
+          result.publications.push_back({it->files, "geometry.cache", diagnostics.at("geometry_key").get<std::string>()});
+        }
+        if (!it->slot) own_slot_free = true;
+        it = active.erase(it);
+      }
+      if (!pending.empty() || !active.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  } catch (...) { for (auto& worker : active) worker.child->stop(); throw; }
+  result.workers = static_cast<int>(peak);
+  return result;
+}
+
 Json evaluate_model(const fs::path& workspace, const Json& model, const Json& request, Json* cache_diagnostics) {
   check_job_cancelled();
   const auto started = std::chrono::steady_clock::now();
@@ -618,11 +737,7 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
   std::unique_ptr<WorkspaceLock> slot;
   while (!slot) {
     check_job_cancelled();
-    for (int index = 0; index < max_workers; ++index) {
-      const auto path = workspace / ".workers" / (".slot-" + std::to_string(index)); directory(path);
-      try { slot = std::make_unique<WorkspaceLock>(path); break; }
-      catch (const Error& e) { if (e.code != "workspace_busy") throw; }
-    }
+    slot = try_worker_slot(workspace);
     if (!slot) {
       if (request_context.empty()) throw Error("queue_full", "All four geometry workers are occupied; retry or submit a job");
       if (std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(current_budget.at("timeout_ms").get<int>()))
@@ -630,9 +745,32 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
   }
+  // Views of one drawing that are not cached are projected by separate workers
+  // first, when at least two are missing; a malformed request skips this and
+  // reaches the single worker, which reports it.
+  std::optional<ParallelProjection> parallel;
+  std::vector<std::size_t> missing;
+  const Json* drawing = nullptr;
+  try {
+    if (request.is_object() && request.value("kind", std::string()) == "drawing" && request.contains("drawing")) {
+      drawing = &request.at("drawing");
+      const auto& views = drawing->at("views");
+      if (views.is_array() && views.size() >= 2 && views.size() <= 6 && drawing->at("hidden_lines").is_boolean()) {
+        const auto geometry_key = geometry_cache_key(model);
+        for (std::size_t i = 0; i < views.size(); ++i) {
+          if (!views.at(i).is_object()) { missing.clear(); break; }
+          const auto key = projection_cache_key(geometry_key, {{"views",Json::array({projection_definition(views.at(i))})},
+            {"hidden_lines",drawing->at("hidden_lines")}});
+          if (!valid_projection_entry(read_cache(workspace / ".cache", key))) missing.push_back(i);
+        }
+      }
+    }
+  } catch (const Json::exception&) { missing.clear(); }
+  if (missing.size() >= 2) parallel = project_in_parallel(workspace, model, *drawing, missing, started);
   TemporaryDirectory files(workspace);
   atomic_text(files.path / "input.json", Json{{"model", model}, {"request", request}, {"budget", current_budget},
     {"cache_root",path_to_utf8(workspace/".cache")}}.dump());
+  if (parallel) atomic_text(files.path / "precomputed.json", Json{{"views",parallel->supplied},{"summary",parallel->summary}}.dump());
   auto child = launch({"--internal-geometry-worker", files.path / "input.json", files.path / "output.json"}, true, current_budget.at("memory_mb"));
   try {
     atomic_text(files.path / "process.json", Json{{"pid",child.id()}}.dump());
@@ -644,18 +782,7 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     check_job_cancelled();
-    if (status == 124)
-      throw Error("job_timeout", "Geometry worker exceeded its wall-time budget");
-    if (status == 137)
-      throw Error("memory_limit", "Geometry worker exceeded its memory budget");
-    if (!fs::exists(files.path / "output.json"))
-      throw Error("worker_failed", "Geometry worker exited without a result", {{"exit_status", status}, {"memory_mb", current_budget.at("memory_mb")}});
-    const auto response = read_result(files.path / "output.json");
-    if (response.contains("error")) {
-      const auto& error = response.at("error");
-      throw Error(error.at("code"), error.at("message"), error.value("details", Json::object()));
-    }
-    if (status != 0) throw Error("worker_failed", "Geometry worker failed", {{"exit_status", status}});
+    const auto response = worker_response(files.path, status);
     // Only the coordinator publishes shared cache files. Never publish results
     // from failed, timed-out or cancelled workers. Cache entries carry no HEAD,
     // document identity, output path, or evaluation identity.
@@ -670,8 +797,13 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
         check_job_cancelled();
         publish_cache(workspace/".cache",files.path/("projection-"+std::to_string(i)+".cache"),produced.at("projection_keys").at(i));
       }
+    // The views projected ahead of the final worker, published like any other.
+    if(parallel) for(const auto& entry:parallel->publications) {
+      check_job_cancelled();
+      publish_cache(workspace/".cache",entry.files->path/entry.file,entry.key);
+    }
     check_job_cancelled();
-    if(cache_diagnostics) *cache_diagnostics=response.at("cache");
+    if(cache_diagnostics) { *cache_diagnostics=response.at("cache"); (*cache_diagnostics)["projection_workers"]=parallel ? parallel->workers : 1; }
     return response.at("result");
   } catch (...) { child.stop(); throw; }
 }
@@ -715,49 +847,74 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     Json result=Json::object();
     if (kind == "topology" || kind == "view") result["topology"] = geometry().topology(feature);
     if (kind == "view") result["mesh"] = geometry().mesh(feature);
+    // Views the coordinator projected ahead of this worker, in other processes.
+    std::map<std::size_t,Json> supplied;
+    std::optional<Json> precomputed;
+    if (const auto path=input.parent_path()/"precomputed.json"; fs::exists(path)) {
+      precomputed=parse_json(read_text(path,max_result_bytes),max_result_bytes);
+      for (const auto& entry:precomputed->at("views")) supplied.emplace(entry.at("index").get<std::size_t>(),entry);
+    }
+    // Resolves each requested view from the cache, from `supplied`, or by projecting it now.
+    // Each view is cached on its own: its key covers the geometry, the view's
+    // definition (not its presentation name) and the hidden-line choice, so a
+    // new, removed, reordered or edited view projects only itself.
+    struct Projection { std::vector<Json> views, budgets; Json tolerance; };
+    const auto project_views=[&](const Json& requested,const Json& hidden_lines) {
+      Projection out; out.views.resize(requested.size()); out.budgets.resize(requested.size());
+      Json keys=Json::array(), hits=Json::array(), missing=Json::array();
+      std::vector<std::size_t> missing_index;
+      for (std::size_t i=0;i<requested.size();++i) {
+        keys.push_back(projection_cache_key(geometry_key,{{"views",Json::array({projection_definition(requested.at(i))})},{"hidden_lines",hidden_lines}}));
+        if (const auto given=supplied.find(i); given!=supplied.end()) {
+          out.views[i]=given->second.at("view"); out.budgets[i]=given->second.at("budget"); out.tolerance=given->second.at("tolerance_mm");
+          hits.push_back(false); continue;
+        }
+        auto entry=read_cache(cache_root,keys.at(i).get<std::string>());
+        if (valid_projection_entry(entry)) {
+          out.views[i]=entry->at("views").at(0); out.tolerance=entry->at("tolerance_mm"); out.budgets[i]=entry->at("budget"); hits.push_back(true);
+        } else { hits.push_back(false); missing.push_back(requested.at(i)); missing_index.push_back(i); }
+      }
+      diagnostics["projection_keys"]=keys; diagnostics["projection_hits"]=hits;
+      diagnostics["projection_hit"]=missing.empty() && supplied.empty();
+      if (!missing.empty()) {
+        const auto fresh=geometry().drawing({{"views",missing},{"hidden_lines",hidden_lines}});
+        out.tolerance=fresh.at("tolerance_mm");
+        for (std::size_t j=0;j<missing_index.size();++j) {
+          const auto i=missing_index[j];
+          out.views[i]=fresh.at("views").at(j); out.budgets[i]=fresh.at("view_budgets").at(j);
+          stage_cache(output.parent_path()/("projection-"+std::to_string(i)+".cache"),keys.at(i).get<std::string>(),
+            {{"views",Json::array({out.views[i]})},{"tolerance_mm",out.tolerance},{"budget",out.budgets[i]}});
+        }
+      }
+      return out;
+    };
+    if (kind == "projection") {
+      // Internal: one coordinator-assigned view; returns the raw projection and its cost.
+      const auto& drawing=request.at("drawing");
+      const auto projection=project_views(drawing.at("views"),drawing.at("hidden_lines"));
+      result["projected"]=Json::array();
+      for (std::size_t i=0;i<projection.views.size();++i)
+        result["projected"].push_back({{"view",projection.views[i]},{"budget",projection.budgets[i]},{"tolerance_mm",projection.tolerance}});
+    }
     if (kind == "drawing") {
       const auto& drawing=request.at("drawing");
       const auto& requested=drawing.at("views");
-      const auto& hidden_lines=drawing.at("hidden_lines");
-      // Each view is cached on its own: its key covers the geometry, the view's
-      // definition (not its presentation name) and the hidden-line choice, so a
-      // new, removed, reordered or edited view projects only itself.
-      Json keys=Json::array(), hits=Json::array(), missing=Json::array();
-      std::vector<Json> projected(requested.size()), budgets(requested.size());
-      std::vector<std::size_t> missing_index;
-      std::optional<Json> tolerance;
-      for (std::size_t i=0;i<requested.size();++i) {
-        auto definition=requested.at(i); definition.erase("id");
-        keys.push_back(projection_cache_key(geometry_key,{{"views",Json::array({definition})},{"hidden_lines",hidden_lines}}));
-        auto entry=read_cache(cache_root,keys.at(i).get<std::string>());
-        if (entry && entry->contains("views") && entry->at("views").size()==1 && entry->contains("tolerance_mm") &&
-            entry->contains("budget") && entry->at("budget").is_object()) {
-          projected[i]=entry->at("views").at(0); tolerance=entry->at("tolerance_mm"); budgets[i]=entry->at("budget"); hits.push_back(true);
-        } else { hits.push_back(false); missing.push_back(requested.at(i)); missing_index.push_back(i); }
-      }
-      diagnostics["projection_keys"]=keys; diagnostics["projection_hits"]=hits; diagnostics["projection_hit"]=missing.empty();
-      if (!missing.empty()) {
-        const auto fresh=geometry().drawing({{"views",missing},{"hidden_lines",hidden_lines}});
-        tolerance=fresh.at("tolerance_mm");
-        for (std::size_t j=0;j<missing_index.size();++j) {
-          const auto i=missing_index[j];
-          projected[i]=fresh.at("views").at(j); budgets[i]=fresh.at("view_budgets").at(j);
-          stage_cache(output.parent_path()/("projection-"+std::to_string(i)+".cache"),keys.at(i).get<std::string>(),
-            {{"views",Json::array({projected[i]})},{"tolerance_mm",*tolerance},{"budget",budgets[i]}});
-        }
-      }
-      Json assembled={{"views",Json::array()},{"tolerance_mm",*tolerance}};
+      auto projection=project_views(requested,drawing.at("hidden_lines"));
+      Json assembled={{"views",Json::array()},{"tolerance_mm",projection.tolerance}};
       // Recipe names are presentation, and can change without projecting again.
-      for (std::size_t i=0;i<projected.size();++i) {
-        projected[i]["id"]=requested.at(i).at("id"); assembled["views"].push_back(std::move(projected[i]));
+      for (std::size_t i=0;i<projection.views.size();++i) {
+        projection.views[i]["id"]=requested.at(i).at("id"); assembled["views"].push_back(std::move(projection.views[i]));
       }
-      check_drawing_totals(requested,Json(budgets),text_field(payload.at("model"),"output"));
+      check_drawing_totals(requested,Json(projection.budgets),text_field(payload.at("model"),"output"));
       result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
     if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
-    else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing") throw Error("invalid_argument", "Unknown geometry worker request");
-    result["summary"] = cached && feature.empty() ? cached->at("summary") : geometry().summary(feature);
-    if(!cached) {
+    else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing" && kind != "projection") throw Error("invalid_argument", "Unknown geometry worker request");
+    // A coordinator that projected views ahead of this worker also supplies the model
+    // summary and publishes the geometry entry, so this worker need not rebuild it.
+    result["summary"] = cached && feature.empty() ? cached->at("summary") :
+      precomputed && feature.empty() ? precomputed->at("summary") : geometry().summary(feature);
+    if(!cached && !precomputed) {
       try { stage_cache(output.parent_path()/"geometry.cache",geometry_key,
         {{"snapshot",geometry().snapshot()},{"summary",geometry().summary()}}); }
       catch(const std::exception&) { /* Oversize snapshots simply rebuild next time. */ }

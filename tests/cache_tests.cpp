@@ -8,6 +8,8 @@
 #include <array>
 #include <future>
 #include <iostream>
+#include <memory>
+#include <vector>
 
 using namespace agentcad;
 namespace {
@@ -252,6 +254,50 @@ int main() {
       require(hits()==Json::array({false,false,false}),"A fresh workspace projects every view");
       const auto assembled=evaluate_model(views.path,model,request_three,&diagnostics);
       require(diagnostics.at("projection_hit") && assembled==cold_three,"Per-view cache entries reproduce a cold drawing exactly");
+    }
+    {
+      // Uncached views of one drawing are projected by separate worker processes
+      // when idle worker slots exist. Each process stays serial; only idle slots
+      // are used, so the workspace-wide bound of four workers still holds.
+      const Json front={{"id","front"},{"orientation","front"}},top={{"id","top"},{"orientation","top"}},
+        right={{"id","right"},{"orientation","right"}},bad={{"id","gone"},{"orientation","section"},{"section",{{"axis","z"},{"offset",100}}}};
+      const auto request=[&](const Json& list){ return drawing_request(model,{{"views",list}}); };
+      const auto three=request(Json::array({front,top,right}));
+      Temp parallel,serial; Json diagnostics;
+      const auto fast=evaluate_model(parallel.path,model,three,&diagnostics);
+      require(diagnostics.at("projection_workers").get<int>()>=2,"Uncached views are projected by several workers");
+      require(diagnostics.at("projection_hits")==Json::array({false,false,false}) && !diagnostics.at("projection_hit"),"Cold views are all reported as projected");
+      {
+        // Occupy three of the four worker slots: only the coordinator's own is left.
+        directory(serial.path/".workers");
+        std::vector<std::unique_ptr<WorkspaceLock>> busy;
+        for(int index=1;index<4;++index) {
+          const auto path=serial.path/".workers"/(".slot-"+std::to_string(index)); directory(path);
+          busy.push_back(std::make_unique<WorkspaceLock>(path));
+        }
+        const auto slow=evaluate_model(serial.path,model,three,&diagnostics);
+        require(diagnostics.at("projection_workers").get<int>()==1,"Without idle slots the views are projected one worker at a time");
+        require(fast==slow,"Parallel and serial projection give identical drawings");
+      }
+      const auto parallel_keys=[&]{ Json keys; evaluate_model(parallel.path,model,three,&keys); return keys.at("projection_keys"); }();
+      require(entries(parallel.path/".cache")==entries(serial.path/".cache"),"Both strategies publish the same cache entries");
+      for(const auto& key:parallel_keys)
+        require(read_cache(parallel.path/".cache",key.get<std::string>())==read_cache(serial.path/".cache",key.get<std::string>()),"Per-view cache entries are identical");
+      // Partly warm: only the missing views are projected, in parallel, and the
+      // assembled drawing equals a cold one.
+      Temp partial;
+      evaluate_model(partial.path,model,request(Json::array({front})),&diagnostics);
+      const auto assembled=evaluate_model(partial.path,model,three,&diagnostics);
+      require(diagnostics.at("projection_hits")==Json::array({true,false,false}) && diagnostics.at("projection_workers").get<int>()>=2,"Missing views are projected in parallel beside cached ones");
+      require(assembled==fast,"A partly cached drawing equals a cold one");
+      // One failing view fails the whole drawing with that view named, and nothing is published.
+      Temp failing;
+      try { evaluate_model(failing.path,model,request(Json::array({front,bad,top})),&diagnostics); require(false,"A failing view must fail the drawing"); }
+      catch(const Error& e) { require(e.code=="empty_section" && e.details.at("view_id")=="gone","The failing view is named, got "+e.code); }
+      require(entries(failing.path/".cache")==0,"A failed parallel projection publishes no cache");
+      std::size_t leftovers=0;
+      for(const auto& entry:fs::directory_iterator(failing.path/".workers")) if(path_to_utf8(entry.path().filename()).rfind(".slot-",0)!=0) ++leftovers;
+      require(leftovers==0,"Failed workers leave no temporary directories");
     }
     {
       // Aggregate drawing limits hold however each view was obtained.
