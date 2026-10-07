@@ -187,6 +187,69 @@ void publication_wait_tests() {
   }
 }
 
+void receipt_tests() {
+  Temp temp; Service service(temp.path);
+  const Json create = {{"document_id","part"},{"model",box()},{"request_id","createOnce"}};
+  const auto created = service.call("cad_create", create);
+  const auto first = edit(1, 7, "editOne");
+  const auto edited = service.call("cad_apply", first);
+  service.call("cad_apply", edit(2, 8));
+  const auto document = temp.path / "documents" / "part";
+  const auto receipts = document / "receipts";
+  auto entry = [&](const std::string& id) { return receipts / (sha256(id) + ".json"); };
+  auto coverage = [&] { return parse_json(read_text(receipts / "coverage.json")).at("indexed_through_revision"); };
+  require(fs::exists(entry("createOnce")) && fs::exists(entry("editOne")), "Committed receipts are indexed");
+  require(coverage() == 3, "Index coverage follows HEAD");
+  auto conflicting = first; conflicting["operations"][0]["value"] = 99;
+
+  // Replay hits the index: it reads HEAD, the entry and the named revision, not
+  // the unrelated newer history.
+  const auto revision2 = read_text(document / "revisions" / "2.json"), revision3 = read_text(document / "revisions" / "3.json");
+  atomic_text(document / "revisions" / "3.json", "not json");
+  require(service.call("cad_apply", first) == edited, "Indexed replay does not scan newer revisions");
+  atomic_text(document / "revisions" / "2.json", "not json");
+  require(service.call("cad_create", create) == created, "Indexed replay reads only its revision");
+  auto changed = create; changed["model"]["parameters"]["height"] = 9;
+  fails("request_conflict", [&]{ service.call("cad_create", changed); });
+  atomic_text(document / "revisions" / "2.json", revision2); atomic_text(document / "revisions" / "3.json", revision3);
+  fails("request_conflict", [&]{ service.call("cad_apply", conflicting); });
+
+  // Without an index (older builds), replay falls back to the full scan; the
+  // next commit backfills the index.
+  fs::remove_all(receipts);
+  require(service.call("cad_apply", first) == edited, "Scan fallback replays without an index");
+  fails("request_conflict", [&]{ service.call("cad_apply", conflicting); });
+  require(head(service) == 3, "Replay without an index commits nothing");
+  require(service.call("cad_apply", edit(3, 9)).at("revision") == 4, "Commit on an unindexed document");
+  require(fs::exists(entry("createOnce")) && fs::exists(entry("editOne")) && coverage() == 4, "Commit backfills the index");
+
+  // Index entries are hints verified against revisions; wrong ones are ignored.
+  atomic_text(entry("editOne"), Json{{"schema_version",1},{"request_id","editOne"},{"revision",1}}.dump());
+  require(service.call("cad_apply", first) == edited, "Incorrect entry falls back to a verified scan");
+  atomic_text(entry("createOnce"), "garbage");
+  require(service.call("cad_create", create) == created, "Damaged entry falls back to a verified scan");
+  atomic_text(entry("fresh"), Json{{"schema_version",1},{"request_id","fresh"},{"revision",2}}.dump());
+  const auto fresh = edit(4, 10, "fresh");
+  require(service.call("cad_apply", fresh).at("revision") == 5, "Forged entry cannot replay another request's revision");
+  require(service.call("cad_apply", fresh).at("revision") == 5 && head(service) == 5, "Request replays after commit");
+  // An interrupted commit leaves an entry and candidate beyond HEAD.
+  auto candidate = parse_json(read_text(document / "revisions" / "5.json"));
+  candidate["revision"] = 6;
+  candidate["receipt"] = {{"request_id","orphan"},{"fingerprint","interrupted"},{"result",Json::object()}};
+  atomic_text(document / "revisions" / "6.json", candidate.dump());
+  atomic_text(entry("orphan"), Json{{"schema_version",1},{"request_id","orphan"},{"revision",6}}.dump());
+  const auto orphan = edit(5, 11, "orphan");
+  require(service.call("cad_apply", orphan).at("revision") == 6, "Uncommitted receipt beyond HEAD is not replayed");
+  require(service.call("cad_apply", orphan).at("revision") == 6 && head(service) == 6, "Recommitted request replays");
+  // Coverage lagging HEAD (crash after HEAD) scans only the uncovered tail.
+  fs::remove(entry("orphan"));
+  atomic_text(receipts / "coverage.json", Json{{"schema_version",1},{"indexed_through_revision",5}}.dump());
+  require(service.call("cad_apply", orphan).at("revision") == 6, "Uncovered tail is scanned");
+  // Job recovery uses the same replay.
+  require(Store(temp.path).request_replay("part", "fresh", request_fingerprint("cad_apply", fresh)).value().at("revision") == 5,
+    "Store replay serves job recovery");
+}
+
 std::string cli_error(const fs::path& workspace, const std::string& tool, const Json& arguments) {
   static int counter = 0;
   const auto input = workspace / ("cli-input-" + std::to_string(++counter) + ".json");
@@ -317,7 +380,7 @@ int main(int argc, char** argv) {
     const std::string only = argc > 1 ? argv[1] : "";
     const std::vector<std::pair<std::string, void(*)()>> sections = {
       {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"locks", lock_wait_tests},
-      {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
+      {"receipts", receipt_tests}, {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
     for (const auto& [name, run] : sections) if (only.empty() || only == name) run();
     std::cout << "service: " << checks << " checks passed\n";
     return 0;
