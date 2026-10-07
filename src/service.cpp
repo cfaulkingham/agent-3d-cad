@@ -180,10 +180,7 @@ Json tool_definitions() {
   return tools;
 }
 
-Json Service::call(const std::string& tool,const Json& args) {
-  if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
-    return live_call(*this,store_,tool,args);
-  if(tool=="cad_job") return dispatch_job(store_.root(),args);
+void validate_tool_arguments(const std::string& tool,const Json& args) {
   static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
   if(!known.contains(tool)) throw Error("unknown_tool","Unknown tool: "+tool);
   if(tool=="cad_create") fields(args,{"document_id","model"},{"request_id"});
@@ -199,8 +196,19 @@ Json Service::call(const std::string& tool,const Json& args) {
   else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id"});
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
   else fields(args,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
-  const auto id=text_field(args,"document_id");identifier(id);
+  identifier(text_field(args,"document_id"));
   if(args.contains("feature_id")) identifier(text_field(args,"feature_id"));
+  if(args.contains("request_id")) identifier(text_field(args,"request_id"));
+  for(const auto* key:{"revision","expected_revision","source_revision","from_revision","to_revision"})
+    if(args.contains(key)) revision_number(args.at(key));
+}
+
+Json Service::call(const std::string& tool,const Json& args) {
+  if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
+    return live_call(*this,store_,tool,args);
+  if(tool=="cad_job") return dispatch_job(store_.root(),args);
+  validate_tool_arguments(tool,args);
+  const auto id=text_field(args,"document_id");
   if(tool=="cad_read") return store_.read(id,args.contains("revision")?std::optional(revision_number(args.at("revision"))):std::nullopt);
   if(tool=="cad_resolve_selection") {
     const auto revision=revision_number(args.at("revision"));
