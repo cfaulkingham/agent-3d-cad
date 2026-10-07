@@ -42,6 +42,7 @@ Developer builds may use CMake, a C++ compiler, and native dependencies.
 - Keep new code independent of build123d's Python semantics. Reusing sibling code
   requires a specific technical reason and preservation of applicable notices.
 
-No release or remote repository has been created by the initial bootstrap.
-License selection for original project code is still an owner decision; do not
-infer it from neighboring repositories.
+A public GitHub repository exists (`origin`), but no release has been published.
+Native preview archives are CI artifacts only. License selection for original
+project code is still an owner decision (see `NOTICE`); do not infer it from
+neighboring repositories, and do not add a LICENSE file on the owner's behalf.
