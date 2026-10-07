@@ -38,13 +38,26 @@ std::string text_field(const Json& value, const std::string& key) {
   return value.at(key).get<std::string>();
 }
 
-void identifier(const std::string& value) {
+void model_identifier(const std::string& value) {
   const auto alpha = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); };
   if (value.empty() || value.size() > 64 || !alpha(value[0]))
     throw Error("invalid_argument", "Identifiers must start with a letter and contain 1–64 ASCII letters, digits, _ or -");
   for (const char c : value)
     if (!alpha(c) && !(c >= '0' && c <= '9') && c != '_' && c != '-')
       throw Error("invalid_argument", "Invalid identifier: " + value);
+}
+
+void identifier(const std::string& value) {
+  model_identifier(value);
+  // These IDs name files and directories (documents/<id>, .locks/<id>.lock,
+  // jobs/<id>, views/<id>, evaluations/<id>.json). Windows device names are
+  // rejected on every platform so a workspace stays portable. Identifiers
+  // cannot contain '.', so only the bare name needs checking.
+  std::string upper = value;
+  for (auto& c : upper) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+  if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" ||
+      (upper.size() == 4 && (upper.starts_with("COM") || upper.starts_with("LPT")) && upper[3] >= '0' && upper[3] <= '9'))
+    throw Error("invalid_argument", "Identifier is a reserved Windows device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9): " + value);
 }
 
 double number(const Json& value) {
@@ -59,5 +72,24 @@ std::uint64_t revision_number(const Json& value) {
   if ((!value.is_number_unsigned() && !value.is_number_integer()) || value < 1 || value > 9007199254740991ULL)
     throw Error("invalid_argument", "Revision must be a positive safe integer");
   return value.get<std::uint64_t>();
+}
+// Strict UTF-8 (Unicode Table 3-7): no overlongs, surrogates or values beyond
+// U+10FFFF, matching what JSON serialization accepts.
+std::optional<std::size_t> invalid_utf8_offset(std::string_view text) {
+  const auto byte = [&](std::size_t index) { return static_cast<unsigned char>(text[index]); };
+  for (std::size_t i = 0; i < text.size();) {
+    const auto lead = byte(i);
+    if (lead < 0x80) { ++i; continue; }
+    std::size_t length = 0; unsigned char low = 0x80, high = 0xBF;
+    if (lead >= 0xC2 && lead <= 0xDF) length = 2;
+    else if (lead >= 0xE0 && lead <= 0xEF) { length = 3; if (lead == 0xE0) low = 0xA0; if (lead == 0xED) high = 0x9F; }
+    else if (lead >= 0xF0 && lead <= 0xF4) { length = 4; if (lead == 0xF0) low = 0x90; if (lead == 0xF4) high = 0x8F; }
+    else return i;
+    if (i + length > text.size()) return i;
+    if (byte(i + 1) < low || byte(i + 1) > high) return i;
+    for (std::size_t k = 2; k < length; ++k) if (byte(i + k) < 0x80 || byte(i + k) > 0xBF) return i;
+    i += length;
+  }
+  return std::nullopt;
 }
 }

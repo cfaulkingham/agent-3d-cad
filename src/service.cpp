@@ -200,7 +200,7 @@ Json Service::call(const std::string& tool,const Json& args) {
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
   else fields(args,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
   const auto id=text_field(args,"document_id");identifier(id);
-  if(args.contains("feature_id")) identifier(text_field(args,"feature_id"));
+  if(args.contains("feature_id")) model_identifier(text_field(args,"feature_id"));
   if(tool=="cad_read") return store_.read(id,args.contains("revision")?std::optional(revision_number(args.at("revision"))):std::nullopt);
   if(tool=="cad_resolve_selection") {
     const auto revision=revision_number(args.at("revision"));
@@ -249,6 +249,11 @@ Json Service::call(const std::string& tool,const Json& args) {
       else {
         const auto content=read_text(path_from_utf8(text_field(args,"path")));
         if(content.size()>512*1024)throw Error("limit_exceeded","Embedded STEP imports are limited to 512 KiB");
+        // Documents embed STEP as a JSON (UTF-8) string; transcoding would change
+        // the bytes and SHA-256 that define the imported feature.
+        if(const auto offset=invalid_utf8_offset(content))
+          throw Error("invalid_argument","STEP file is not valid UTF-8 at byte "+std::to_string(*offset)+
+            "; cad_import embeds the file unchanged as UTF-8 text (ISO 10303-21 encodes other text with \\X2\\ escapes)",{{"byte_offset",*offset}});
         model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},
           {"features",Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}})},{"output","imported"}};
       }

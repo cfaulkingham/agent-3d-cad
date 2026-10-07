@@ -259,7 +259,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
     const auto part_id = text_field(part,"id");
     try {
       fields(part, {"id", "input"}, {"placement"});
-      identifier(part_id);
+      model_identifier(part_id);
       if (!part_ids.insert(part_id).second) throw Error("invalid_model", "Duplicate assembly part: " + part_id);
       const auto input = text_field(part,"input");
       if (!types.contains(input) || types.at(input) == "sketch" || types.at(input) == "assembly")
@@ -302,7 +302,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
     const auto mate_id = text_field(mate,"id");
     try {
       fields(mate, {"id","type","parent","child","parent_frame","child_frame"}, {"offset","angle_deg"});
-      identifier(mate_id);
+      model_identifier(mate_id);
       if (!mate_ids.insert(mate_id).second) throw Error("invalid_model", "Duplicate assembly mate: " + mate_id);
       if (text_field(mate,"type") != "rigid") throw Error("invalid_model", "Only rigid assembly mates are supported");
       const auto parent=text_field(mate,"parent"), child=text_field(mate,"child");
@@ -338,7 +338,7 @@ void validate_model(const Json& model) {
   const auto& parameters = model.at("parameters");
   if (!parameters.is_object() || parameters.size() > 128)
     throw Error("invalid_model", "parameters must be an object with at most 128 entries");
-  for (const auto& [key, value] : parameters.items()) { identifier(key); number(value); }
+  for (const auto& [key, value] : parameters.items()) { model_identifier(key); number(value); }
   const auto& features = model.at("features");
   if (!features.is_array() || features.empty() || features.size() > 256)
     throw Error("invalid_model", "A model needs 1–256 features");
@@ -348,7 +348,7 @@ void validate_model(const Json& model) {
   for (const auto& feature : features) {
     const auto id = text_field(feature, "id");
     try {
-    identifier(id);
+    model_identifier(id);
     if (prior.contains(id)) throw Error("invalid_model", "Duplicate feature: " + id);
     const auto type = text_field(feature, "type");
     auto positive = [&](const Json& v) {
@@ -491,7 +491,7 @@ Json apply_operations(const Json& model, const Json& operations) {
     if (op == "set_parameter") {
       fields(operation, {"op", "name", "value"});
       const auto name = text_field(operation, "name");
-      identifier(name); number(operation.at("value"));
+      model_identifier(name); number(operation.at("value"));
       candidate["parameters"][name] = operation.at("value");
     } else if (op == "add_feature") {
       fields(operation, {"op", "feature"});
