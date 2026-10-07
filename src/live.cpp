@@ -28,7 +28,7 @@ std::string nonce() {
 }
 std::string view_id(const Json& arguments) {
   const auto id = arguments.contains("view_id") ? text_field(arguments,"view_id") : "main";
-  identifier(id); return id;
+  portable_identifier(id); return id;  // views are workspace-scoped UI state, created on first use
 }
 fs::path view_path(const fs::path& root, const std::string& id, bool create = false) {
   const auto parent = root / "views";
@@ -159,8 +159,11 @@ std::set<std::string> displayed_evaluations(const fs::path& root) {
   if (fs::is_symlink(fs::symlink_status(views))) throw Error("storage_error", "Managed view directory cannot be a symlink");
   for (const auto& entry : fs::directory_iterator(views)) {
     if (entry.is_symlink() || !entry.is_directory() || !fs::exists(entry.path() / "state.json")) continue;
-    const auto state = read_state(entry.path());
-    if (state.contains("display")) ids.insert(state.at("display").at("evaluation_id").get<std::string>());
+    // A damaged record cannot display anything; it must not stop the sweep.
+    try {
+      const auto state = read_state(entry.path());
+      if (state.contains("display")) ids.insert(state.at("display").at("evaluation_id").get<std::string>());
+    } catch (const std::exception&) { continue; }
   }
   return ids;
 }
@@ -174,6 +177,8 @@ void sweep_evaluations(Store& store) {
     if (fs::is_symlink(fs::symlink_status(parent)) || !fs::is_directory(parent)) return;
     const auto now = fs::file_time_type::clock::now();
     std::error_code error;
+    // The marker is a managed path: never read, create or touch it through a link.
+    if (fs::is_symlink(fs::symlink_status(marker, error))) return;
     const auto last = fs::last_write_time(marker, error);
     if (!error && now - last < sweep_interval) return;
     if (error) { std::ofstream touch(marker, std::ios::binary | std::ios::app); }

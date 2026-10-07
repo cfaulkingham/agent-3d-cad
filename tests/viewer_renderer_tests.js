@@ -2,7 +2,7 @@
 const fs=require('fs'), vm=require('vm'), assert=require('assert'), path=require('path');
 const source=fs.readFileSync(path.join(__dirname,'../src/viewer.cpp'),'utf8');
 const pure=source.split('// BEGIN PURE RENDERER')[1].split('// END PURE RENDERER')[0];
-const {rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance}=vm.runInNewContext(pure+';({rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance})');
+const {rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance,pickDepthAllowance}=vm.runInNewContext(pure+';({rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance,pickDepthAllowance})');
 let checks=0;
 function test(ok,message){assert.ok(ok,message);checks++;}
 function mesh(points,triangles,faces){return {positions:points,triangles,triangle_faces:faces};}
@@ -39,12 +39,21 @@ renderEdges([{id:'huge',points:[[-1e6,4,0],[1e6,4,0]]}],frame,null,true,1e-7);ch
 assert.throws(()=>rasterize(m,points,100000,100000,null));checks++;
 // Edge polylines and face triangulations are sampled independently (each within
 // the mesh's linear deflection), so a visible edge sample can sit slightly behind
-// its own face. The pick tolerance must absorb that, but only that.
-const curved={min:[0,0,0],max:[20,20,20]};
+// its own face. Occlusion must absorb that, but only that, and the strict
+// tolerance alone decides depth ties and ambiguity.
+const curved={min:[0,0,0],max:[20,20,20]},strict=pickDepthTolerance(curved);
 frame=rasterize(mesh(flat,[[0,1,2]],['face']),flat,24,24,null);
 const behind=[{id:'curved-edge',points:[[2,4,5.15],[10,4,5.15]]}];
-test(edgePick([5,4],behind,frame,pickDepthTolerance(curved,undefined)).id===null,'without a deflection the fixed tolerance rejects an edge 0.15 behind its face');
-test(edgePick([5,4],behind,frame,pickDepthTolerance(curved,0.1)).id==='curved-edge','a visible edge within twice the mesh deflection of its face stays pickable');
-test(edgePick([5,4],[{id:'far',points:[[2,4,6],[10,4,6]]}],frame,pickDepthTolerance(curved,0.1)).id===null,'an edge well behind the face remains occluded');
-for(const bad of [NaN,-1,0,Infinity,1e9,'0.1',null])test(pickDepthTolerance(curved,bad)===pickDepthTolerance(curved,undefined),'invalid deflection falls back to the fixed tolerance');
+test(edgePick([5,4],behind,frame,strict,pickDepthAllowance(undefined)).id===null,'without a deflection the fixed tolerance rejects an edge 0.15 behind its face');
+test(edgePick([5,4],behind,frame,strict,pickDepthAllowance(0.1)).id==='curved-edge','a visible edge within twice the mesh deflection of its face stays pickable');
+test(edgePick([5,4],[{id:'far',points:[[2,4,6],[10,4,6]]}],frame,strict,pickDepthAllowance(0.1)).id===null,'an edge well behind the face remains occluded');
+for(const bad of [NaN,-1,0,Infinity,1e9,'0.1',null,undefined])test(pickDepthAllowance(bad)===0,'invalid deflection grants no allowance');
+test(pickDepthAllowance(0.1)===0.2,'allowance is twice the linear deflection');
+const stacked=[{id:'near',points:[[2,4,5.05],[10,4,5.05]]},{id:'later',points:[[2,4,5.19],[10,4,5.19]]}];
+const picked=edgePick([5,4],stacked,frame,strict,pickDepthAllowance(0.1));
+test(picked.id==='near'&&!picked.ambiguous,'edges 0.14 apart in depth are not ambiguous: the allowance does not widen ties');
+const painted=frame.pixels.slice();renderEdges(behind,frame,null,true,strict,pickDepthAllowance(0.1));
+test(frame.pixels.some((x,i)=>x!==painted[i]),'an edge within the allowance is painted');
+frame.pixels.set(painted);renderEdges(behind,frame,null,true,strict,0);
+test(frame.pixels.every((x,i)=>x===painted[i]),'without the allowance the same edge is not painted');
 console.log(`viewer renderer: ${checks} checks passed`);

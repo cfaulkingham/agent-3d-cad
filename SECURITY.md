@@ -6,11 +6,12 @@ native preview with no supported release yet.
 
 ## Reporting a vulnerability
 
-Please do not open a public issue for a suspected vulnerability. Use GitHub's
-private vulnerability reporting for this repository (Security tab → "Report a
-vulnerability"), or contact the repository owner through their GitHub profile.
-Include a minimal reproducing document or request, the platform, and the
-`agent-3d-cad --version` output.
+Please do not open a public issue for a suspected vulnerability. Contact the
+repository owner privately through their GitHub profile and include a minimal
+reproducing document or request, the platform, and the `agent-3d-cad --version`
+output. If GitHub private vulnerability reporting is enabled for this repository
+(Security tab → "Report a vulnerability"), prefer it; it is the owner's setting to
+turn on.
 
 ## Scope and design boundaries
 

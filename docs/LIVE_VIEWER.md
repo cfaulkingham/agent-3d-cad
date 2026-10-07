@@ -120,8 +120,11 @@ Five successive revisions in one view leave one frozen file and one metadata
 file for it (plus one metadata file per other view still displaying an older
 revision). Readers that lose a deleted evaluation get an explicit
 `stale_selection`; the viewer treats that as a temporary wait and re-syncs.
-Completed live jobs under `jobs/` keep their full result and are not yet
-pruned by this policy.
+Live job records under `jobs/` follow the job retention policy in
+[PROTOCOL.md](PROTOCOL.md): finished jobs are deleted after 7 days or beyond the
+newest 256. Each can hold a mesh result of up to 64 MiB, so the worst case is
+bounded but large; a workspace that renders many large models can keep up to
+256 results on disk until they age out.
 
 ## Verification
 

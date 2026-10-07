@@ -107,6 +107,15 @@ void hole_effect_tests() {
   near(BuiltModel(bored(hole({10,15,0},{0,0,1},2,10))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
   near(BuiltModel(bored(hole({10,15,12},{0,0,-1},2,20))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
   near(BuiltModel(bored(hole({0,15,5},{1,0,0},2,3))).summary().at("volume_mm3"),6000-12*std::numbers::pi);
+  // Detection is structural, not a volume fraction of the whole body: a small
+  // real hole in a very large block removes far less than 1e-9 of it.
+  auto slab=document(Json::array({sketch("profile",rectangle(2000,2000)),{{"id","part"},{"type","extrude"},{"input","profile"},{"distance",500}}}),"bored");
+  slab["features"].push_back(hole({100,100,500},{0,0,-1},0.5,1.5));
+  const auto small=BuiltModel(slab).summary();
+  near(small.at("volume_mm3"),2000.0*2000*500-std::numbers::pi*0.25*1.5,1e-3);
+  // The same hole one millimetre above the surface still removes nothing.
+  slab["features"].back()["origin"]={100,100,502};
+  require(captured([&]{BuiltModel invalid(slab);}).code=="invalid_model","a miss is still rejected on a large block");
 }
 void replication_budget_tests() {
   const auto base=Json{{"id","base"},{"type","box"},{"size",{10,10,10}}};

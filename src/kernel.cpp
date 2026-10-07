@@ -147,9 +147,10 @@ void configure_kernel_logging() {
 }
 
 namespace {
-// A hole must remove more than this fraction of its input volume. It sits far
-// above volume-integration round-off and far below any physically drilled hole.
-constexpr double hole_removal_tolerance = 1e-9;
+// A hole must remove more than this fraction of its own cylinder. A real hole
+// removes essentially all of it where it enters; the threshold sits far below any
+// physically meaningful dent and far above volume-integration round-off.
+constexpr double hole_removal_tolerance = 1e-6;
 // The single conversion of an OCCT failure into a domain error.
 Error occt_error(const Standard_Failure& failure, Json details = Json::object(), const std::string& code = "kernel_failure") {
   return Error(code, kernel_failure_message(failure), std::move(details));
@@ -662,12 +663,15 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         shape=operation.Shape();
         // A hole that misses, stops short of, or only touches its input leaves
         // a valid but unchanged solid. That is a failed intent, not a revision.
-        GProp_GProps before,after;
-        BRepGProp::VolumeProperties(body,before); BRepGProp::VolumeProperties(shape,after);
+        GProp_GProps before,after,cutter;
+        BRepGProp::VolumeProperties(body,before); BRepGProp::VolumeProperties(shape,after); BRepGProp::VolumeProperties(tool,cutter);
         const double removed=before.Mass()-after.Mass();
-        if (!(removed > hole_removal_tolerance*before.Mass()))
+        // Judge the removal against the hole's own volume, not the body's: a small
+        // real hole in a very large block removes less than any fixed fraction of
+        // the body, while a miss or a face contact removes none of the hole.
+        if (!(removed > hole_removal_tolerance*cutter.Mass()))
           throw Error("invalid_model","Hole does not enter its input solid; it removes no material",
-            {{"source_feature_id",input},{"removed_volume_mm3",removed},{"input_volume_mm3",before.Mass()}});
+            {{"source_feature_id",input},{"removed_volume_mm3",removed},{"hole_volume_mm3",cutter.Mass()}});
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "import_step") {
         STEPControl_Reader reader;
@@ -1246,10 +1250,11 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
   DrawingBudget budget;
   std::size_t projection_bytes=0;
   if (exact_projections) *exact_projections=Json::array();
-  Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance}};
+  Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance},{"view_budgets",Json::array()}};
   std::set<std::string> ids;
   std::size_t anchor_count=0;
   for (const auto& view : spec.at("views")) {
+    const DrawingBudget usage_before=budget;
     fields(view,{"id","orientation"},{"section","hatch","explode","balloon_anchors"});
     const auto id = text_field(view,"id"); identifier(id);
     if (!ids.insert(id).second) throw Error("invalid_argument", "Drawing view IDs must be unique", {{"view_id",id}});
@@ -1384,6 +1389,9 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
       if (!projected_anchors.is_null()) output["balloon_anchors"]=std::move(projected_anchors);
       if (orientation=="section" && view.value("hatch",true)) output["section_regions"]=std::move(regions);
       result["views"].push_back(std::move(output));
+      // What this view cost, so a cached view still counts toward the drawing-wide limits.
+      result["view_budgets"].push_back({{"entities",budget.entities-usage_before.entities},{"points",budget.points-usage_before.points},
+        {"examined_edges",budget.examined_edges-usage_before.examined_edges}});
     } catch (const Error& e) {
       auto details = e.details; details["view_id"] = id;
       throw Error(e.code,e.what(),details);
@@ -1392,15 +1400,16 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
   return result;
 }
 
-void check_drawing_totals(const Json& requested_views, const Json& projected_views, const std::string& feature_id) {
-  std::size_t anchors=0, entities=0, points=0;
+void check_drawing_totals(const Json& requested_views, const Json& view_budgets, const std::string& feature_id) {
+  std::size_t anchors=0, entities=0, points=0, examined_edges=0;
   for (const auto& view : requested_views)
     if (view.contains("balloon_anchors")) anchors+=view.at("balloon_anchors").size();
   if (anchors>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",feature_id}});
-  for (const auto& view : projected_views)
-    for (const auto& entity : view.at("entities")) {
-      ++entities; points+=entity.contains("points") ? entity.at("points").size() : 1;
-    }
+  for (const auto& usage : view_budgets) {
+    entities+=usage.at("entities").get<std::size_t>(); points+=usage.at("points").get<std::size_t>();
+    examined_edges+=usage.at("examined_edges").get<std::size_t>();
+  }
+  if (examined_edges>40000) throw Error("limit_exceeded","Drawing projection exceeds its raw edge limit",{{"limit",40000}});
   if (entities>drawing_entity_limit || points>drawing_point_limit)
     throw Error("limit_exceeded","Drawing exceeds its entity or point limit",{{"entity_limit",drawing_entity_limit},{"point_limit",drawing_point_limit}});
 }

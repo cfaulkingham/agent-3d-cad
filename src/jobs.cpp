@@ -723,15 +723,16 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       // definition (not its presentation name) and the hidden-line choice, so a
       // new, removed, reordered or edited view projects only itself.
       Json keys=Json::array(), hits=Json::array(), missing=Json::array();
-      std::vector<Json> projected(requested.size());
+      std::vector<Json> projected(requested.size()), budgets(requested.size());
       std::vector<std::size_t> missing_index;
       std::optional<Json> tolerance;
       for (std::size_t i=0;i<requested.size();++i) {
         auto definition=requested.at(i); definition.erase("id");
         keys.push_back(projection_cache_key(geometry_key,{{"views",Json::array({definition})},{"hidden_lines",hidden_lines}}));
         auto entry=read_cache(cache_root,keys.at(i).get<std::string>());
-        if (entry && entry->contains("views") && entry->at("views").size()==1 && entry->contains("tolerance_mm")) {
-          projected[i]=entry->at("views").at(0); tolerance=entry->at("tolerance_mm"); hits.push_back(true);
+        if (entry && entry->contains("views") && entry->at("views").size()==1 && entry->contains("tolerance_mm") &&
+            entry->contains("budget") && entry->at("budget").is_object()) {
+          projected[i]=entry->at("views").at(0); tolerance=entry->at("tolerance_mm"); budgets[i]=entry->at("budget"); hits.push_back(true);
         } else { hits.push_back(false); missing.push_back(requested.at(i)); missing_index.push_back(i); }
       }
       diagnostics["projection_keys"]=keys; diagnostics["projection_hits"]=hits; diagnostics["projection_hit"]=missing.empty();
@@ -740,9 +741,9 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
         tolerance=fresh.at("tolerance_mm");
         for (std::size_t j=0;j<missing_index.size();++j) {
           const auto i=missing_index[j];
-          projected[i]=fresh.at("views").at(j);
+          projected[i]=fresh.at("views").at(j); budgets[i]=fresh.at("view_budgets").at(j);
           stage_cache(output.parent_path()/("projection-"+std::to_string(i)+".cache"),keys.at(i).get<std::string>(),
-            {{"views",Json::array({projected[i]})},{"tolerance_mm",*tolerance}});
+            {{"views",Json::array({projected[i]})},{"tolerance_mm",*tolerance},{"budget",budgets[i]}});
         }
       }
       Json assembled={{"views",Json::array()},{"tolerance_mm",*tolerance}};
@@ -750,7 +751,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       for (std::size_t i=0;i<projected.size();++i) {
         projected[i]["id"]=requested.at(i).at("id"); assembled["views"].push_back(std::move(projected[i]));
       }
-      check_drawing_totals(requested,assembled.at("views"),text_field(payload.at("model"),"output"));
+      check_drawing_totals(requested,Json(budgets),text_field(payload.at("model"),"output"));
       result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
     if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
@@ -788,7 +789,8 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     }
     return {{"jobs",jobs}, {"limit",1000}};
   }
-  const auto id = text_field(arguments, action == "submit" ? "request_id" : "job_id"); identifier(id);
+  const auto id = text_field(arguments, action == "submit" ? "request_id" : "job_id");
+  if (action == "submit") portable_identifier(id); else identifier(id);
   const auto path = root / id;
   if (fs::is_symlink(fs::symlink_status(path))) throw Error("storage_error", "Managed job directories cannot be symlinks");
   if (action != "submit") {

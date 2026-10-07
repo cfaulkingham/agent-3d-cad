@@ -64,17 +64,24 @@ class Holder {
 public:
   Holder(const fs::path& root, const std::string& id, std::chrono::milliseconds hold) {
     std::promise<void> ready; auto acquired = ready.get_future();
-    thread_ = std::thread([root, id, hold, ready = std::move(ready)]() mutable {
-      try { DocumentLock lock(root, id); ready.set_value(); std::this_thread::sleep_for(hold); }
+    thread_ = std::thread([this, root, id, hold, ready = std::move(ready)]() mutable {
+      try {
+        DocumentLock lock(root, id);
+        release_ = Clock::now() + hold;  // published to the constructor by set_value
+        ready.set_value(); std::this_thread::sleep_for(hold);
+      }
       catch (...) { ready.set_exception(std::current_exception()); }
     });
     try { acquired.get(); } catch (...) { thread_.join(); throw; }
   }
+  // The earliest instant the lock can be released (never earlier than acquired + hold).
+  Clock::time_point release_at() const { return release_; }
   ~Holder() { thread_.join(); }
   Holder(const Holder&) = delete;
   Holder& operator=(const Holder&) = delete;
 private:
   std::thread thread_;
+  Clock::time_point release_;
 };
 
 void lock_wait_tests() {
@@ -90,7 +97,7 @@ void lock_wait_tests() {
     start = Clock::now();
     DocumentLock waited(root, "part", LockWait::publication);
     const auto elapsed = since(start);
-    require(elapsed >= 150ms && elapsed < publication_lock_wait, "Publication lock waits for a transient holder (" + std::to_string(elapsed.count()) + " ms)");
+    require(Clock::now() >= holder.release_at() && elapsed < publication_lock_wait, "Publication lock waits for a transient holder (" + std::to_string(elapsed.count()) + " ms)");
   }
   {
     Holder holder(root, "part", publication_lock_wait + 1500ms);
@@ -109,7 +116,7 @@ void lock_wait_tests() {
   require(child >= 0, "fork");
   if (child == 0) {
     ::close(ready[0]);
-    try { DocumentLock lock(root, "part"); (void)::write(ready[1], "x", 1); std::this_thread::sleep_for(300ms); }
+    try { DocumentLock lock(root, "part"); (void)::write(ready[1], "x", 1); std::this_thread::sleep_for(600ms); }  // 150 ms bound below leaves a wide margin on a stalled runner
     catch (...) { ::_exit(2); }
     ::_exit(0);
   }
@@ -348,17 +355,36 @@ void utf8_tests() {
 }
 
 void identifier_tests() {
-  for (const auto* reserved : {"con","CON","Con","prn","PRN","aux","AuX","nul","NUL","com0","com1","COM9","Com5","lpt0","lpt1","LPT9","lPt4"})
-    fails("invalid_argument", [&]{ identifier(reserved); });
+  for (const auto* reserved : {"con","CON","Con","prn","PRN","aux","AuX","nul","NUL","com0","com1","COM9","Com5","lpt0","lpt1","LPT9","lPt4"}) {
+    fails("invalid_argument", [&]{ portable_identifier(reserved); });
+    identifier(reserved); model_identifier(reserved);  // existing resources and model names stay addressable
+  }
   for (const auto* portable : {"console","com","com10","lpt","lpt12","nul_part","auxiliary","comA","conX","prn-1","part"})
-    identifier(portable);
+    portable_identifier(portable);
   Temp temp; Service service(temp.path);
   const auto error = fails("invalid_argument", [&]{ service.call("cad_create",{{"document_id","Aux"},{"model",box()}}); });
   require(std::string(error.what()).find("reserved") != std::string::npos, "Reserved-name error is explicit");
   require(!fs::exists(temp.path / ".locks" / "Aux.lock") && !fs::exists(temp.path / "documents" / "Aux"), "Reserved document IDs create no files");
-  fails("invalid_argument", [&]{ service.call("cad_create",{{"document_id","part"},{"model",box()},{"request_id","nul"}}); });
-  fails("not_found", [&]{ service.call("cad_read",{{"document_id","part"}}); });
-  fails("invalid_argument", [&]{ dispatch_job(temp.path,{{"action","get"},{"job_id","LPT1"}}); });
+  // A request_id is stored in a receipt, never used as a file name.
+  require(service.call("cad_create",{{"document_id","receipted"},{"model",box()},{"request_id","nul"}}).at("revision") == 1, "Receipt request IDs are not file names");
+  fails("invalid_argument", [&]{ dispatch_job(temp.path,{{"action","submit"},{"request_id","LPT1"},{"tool","cad_read"},{"arguments",{{"document_id","part"}}}}); });
+  require(!fs::exists(temp.path / "jobs" / "LPT1"), "A reserved job request records nothing");
+  fails("not_found", [&]{ dispatch_job(temp.path,{{"action","get"},{"job_id","LPT1"}}); });
+  // A POSIX workspace may already hold a document with such a name. It must stay
+  // readable, editable and listed; only creating new ones is refused.
+  service.call("cad_create",{{"document_id","legacy"},{"model",box()}});
+  fs::rename(temp.path / "documents" / "legacy", temp.path / "documents" / "aux");
+  for (const auto& entry : fs::recursive_directory_iterator(temp.path / "documents" / "aux"))
+    if (entry.is_regular_file()) {
+      auto text = read_text(entry.path()); const std::string from = "\"legacy\"";  // only ever the document ID
+      for (auto at = text.find(from); at != std::string::npos; at = text.find(from, at)) text.replace(at, from.size(), "\"aux\"");
+      atomic_text(entry.path(), text);
+    }
+  require(service.call("cad_read",{{"document_id","aux"}}).at("revision") == 1, "An existing document named like a device stays readable");
+  require(service.call("cad_apply",{{"document_id","aux"},{"expected_revision",1},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",7}}})}}).at("revision") == 2, "It stays editable");
+  const auto listed = service.call("cad_list",Json::object()).at("documents");
+  require(std::any_of(listed.begin(), listed.end(), [](const Json& d){ return d.at("document_id") == "aux"; }), "It stays listed");
   // Names inside a model never become file names, so existing documents that
   // use them stay valid and addressable.
   for (const auto* name : {"con","AUX","nul","com1"}) model_identifier(name);

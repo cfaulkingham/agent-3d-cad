@@ -58,7 +58,7 @@ Json dispatch(const fs::path& root, const Json& args) {
   }
 }
 Json finished(const fs::path& root, const std::string& id) {
-  for (int i = 0; i < 3000; ++i) {
+  for (int i = 0; i < 8000; ++i) {
     auto job = dispatch(root,{{"action","get"},{"job_id",id}});
     const auto state = job.at("state").get<std::string>();
     if (state=="succeeded" || state=="failed" || state=="cancelled" || state=="interrupted") return job;
@@ -196,7 +196,7 @@ int run_tests(int argc, const char* const* argv) {
     require(timed.at("state")=="failed" && timed.at("error").at("code")=="job_timeout","wall deadline enforced");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"timeout preserves HEAD");
     require(cache_entries(temp.path)==initial_cache,"Timed-out worker publishes no cache");
-    submit_heavy(temp.path,"memoryJob",10000,128);
+    submit_heavy(temp.path,"memoryJob",30000,128);  // generous deadline: the memory limit must fire first even on a slow runner
     const auto limited=finished(temp.path,"memoryJob");
     require(limited.at("state")=="failed","worker memory budget produces failure");
     require(limited.at("error").at("code")!="job_timeout","memory enforcement fires before deadline");

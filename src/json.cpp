@@ -47,12 +47,13 @@ void model_identifier(const std::string& value) {
       throw Error("invalid_argument", "Invalid identifier: " + value);
 }
 
-void identifier(const std::string& value) {
-  model_identifier(value);
-  // These IDs name files and directories (documents/<id>, .locks/<id>.lock,
-  // jobs/<id>, views/<id>, evaluations/<id>.json). Windows device names are
-  // rejected on every platform so a workspace stays portable. Identifiers
-  // cannot contain '.', so only the bare name needs checking.
+void identifier(const std::string& value) { model_identifier(value); }
+
+void portable_identifier(const std::string& value) {
+  identifier(value);
+  // These names become files and directories (documents/<id>, .locks/<id>.lock,
+  // jobs/<id>, views/<id>). Identifiers cannot contain '.', so only the bare
+  // name needs checking.
   std::string upper = value;
   for (auto& c : upper) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
   if (upper == "CON" || upper == "PRN" || upper == "AUX" || upper == "NUL" ||

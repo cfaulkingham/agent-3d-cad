@@ -199,6 +199,8 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
   else fields(args,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
   identifier(text_field(args,"document_id"));
+  // Only a new document's name becomes a directory; existing documents keep working.
+  if(tool=="cad_create"||tool=="cad_import") portable_identifier(text_field(args,"document_id"));
   if(args.contains("feature_id")) model_identifier(text_field(args,"feature_id"));
   if(args.contains("request_id")) identifier(text_field(args,"request_id"));
   for(const auto* key:{"revision","expected_revision","source_revision","from_revision","to_revision"})

@@ -16,12 +16,17 @@ when it has none. The MCP server builds this catalog once per process.
 ```
 
 Unknown fields are errors. Identifiers match `[A-Za-z][A-Za-z0-9_-]{0,63}`.
-IDs that name workspace files (`document_id`, `request_id`/`job_id`, `view_id`,
-`evaluation_id` and selection `entity_id`) must also not be a Windows device
-name: `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9` or `LPT0`–`LPT9`, in any letter
-case. This is enforced on every platform so workspaces stay portable, and fails
-with `invalid_argument`. Names inside a model (features, parameters, assembly
-parts and mates) never become file names and are not restricted.
+A *new* document (`cad_create`, `cad_import`), job request (`cad_job` submit) or
+view (`view_id`) must also not be a Windows device name: `CON`, `PRN`, `AUX`,
+`NUL`, `COM0`–`COM9` or `LPT0`–`LPT9`, in any letter case. This is enforced on
+every platform so new workspace files stay portable, and fails with
+`invalid_argument`. Existing documents, jobs and evaluations are addressed with
+the plain grammar: a POSIX workspace that already holds a document named `aux`
+keeps reading, editing and listing it (it still cannot be opened on Windows; rename
+its `documents/` directory and the `document_id` inside its records to move it).
+Names inside a model (features, parameters, assembly parts and mates) never become
+file names and are not restricted. A `request_id` on a document tool is stored in
+a receipt, not used as a file name, so it is not restricted either.
 A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
 is validated, including branches outside `output`. The output must be solid.
@@ -102,11 +107,18 @@ the sketch plane. Invalid/self-intersecting profiles and failed sweeps fail
 explicitly. STEP readers normalize source units to document millimeters.
 A hole whose cylinder misses its input, stops short of it, or only touches it
 fails with `invalid_model` naming the hole (`feature_id`) and its input
-(`source_feature_id`) plus `removed_volume_mm3`; it must remove more than
-1e-9 of the input volume.
+(`source_feature_id`) plus `removed_volume_mm3` and `hole_volume_mm3`; it must
+remove more than one millionth of the hole's own cylinder volume, so a small real
+hole in a very large body is accepted.
 Every STEP transfer root must transfer: a file where any root fails is rejected
 with `kernel_failure` and `transferred_roots`/`total_roots` details, never
 imported partially.
+These checks (no-effect holes, partial STEP imports and the replication budget)
+apply whenever a model is evaluated, including revisions committed by earlier
+builds. A stored revision that relied on the old leniency is still preserved
+byte for byte and readable with `cad_read`, but queries, views, exports and
+drawings of it fail with the same feature-level error; `cad_apply` removing or
+fixing the named feature, or `cad_restore` of an earlier revision, repairs it.
 
 ### External threads
 

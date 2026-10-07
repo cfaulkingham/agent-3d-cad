@@ -24,9 +24,15 @@ void fields(const Json& value, std::initializer_list<const char*> required,
 std::string text_field(const Json& value, const std::string& key);
 // Grammar only, for names inside a model (features, parameters, parts, mates).
 void model_identifier(const std::string& value);
-// Grammar plus portability, for IDs that name workspace files (documents,
-// requests/jobs, views, evaluations): Windows device names are rejected.
+// Grammar only, for addressing workspace resources that may already exist
+// (documents, jobs, evaluations). Existing workspaces stay readable even if a
+// name would not be accepted for a new resource.
 void identifier(const std::string& value);
+// Grammar plus portability, for NEW names that become files or directories
+// (new documents, job requests, views): Windows device names such as CON, AUX,
+// NUL, COM0-9 and LPT0-9 are rejected on every platform so a workspace can move
+// between systems.
+void portable_identifier(const std::string& value);
 double number(const Json& value);
 std::uint64_t revision_number(const Json& value);
 std::optional<std::size_t> invalid_utf8_offset(std::string_view text);

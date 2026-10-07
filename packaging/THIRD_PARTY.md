@@ -11,9 +11,9 @@ complete modified sources are retained as `occt/PatchOcctHlr.cmake`,
 test fails if this notice, the patch description and the installer disagree.
 
 AgentCAD's additions inside those five OCCT files are derivative modifications
-of LGPL 2.1 code and are distributed under the same terms as the files they
-modify (LGPL 2.1 with the Open CASCADE exception). Their upstream copyright and
-license notices are retained in each modified file. This statement concerns only
+of LGPL 2.1 code and are distributed under the license terms stated in the files
+they modify. Their upstream copyright and license notices, including any Open
+CASCADE exception they state, are retained in each modified file. This statement concerns only
 the modified OCCT files; it does not select a license for the project's other,
 original code.
 
@@ -25,7 +25,9 @@ files are also included under `occt/modified/`. To replace the shared TKHLR
 library, build OCCT 8.0.1 with the `cmake/dependencies` recipe (or an
 equivalent exception-enabled build), apply the patch with
 `cmake -DOCCT_SOURCE_DIR=<unpacked source> -P PatchOcctHlr.cmake`, and install
-the resulting shared libraries beside the executable. Verify the build against
+the resulting shared libraries in the bundle's native-library directory
+(`lib/` beside `bin/` on macOS and Linux, where the executable's run path points;
+`bin/` next to the executable on Windows). Verify the build against
 the recorded SDK and notice manifest before redistributing it.
 
 nlohmann JSON 3.12.0 is distributed under its upstream MIT license, retained

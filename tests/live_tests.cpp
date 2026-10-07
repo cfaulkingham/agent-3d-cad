@@ -73,10 +73,20 @@ void device_name_tests() {
     {"selection",nullptr},{"hidden_part_ids",Json::array({"aux"})}});
   require(saved.at("hidden_part_ids")==Json::array({"aux"}),"A part named like a device can be hidden");
   fails("invalid_argument",[&]{call(service,"cad_open",{{"document_id","assembly"},{"view_id","con"}});});
+  // A directory whose name can never be an identifier is skipped rather than
+  // failing the listing; one named like a device is an ordinary existing document.
+  const auto stray=temporary.path/"documents"/"9-not-an-id";directory(stray);
+  atomic_text(stray/"HEAD.json",Json{{"revision",1}}.dump());
+#ifndef _WIN32
+  // Windows maps such names to console devices, so the legacy directory can only exist on POSIX.
   const auto legacy=temporary.path/"documents"/"con";directory(legacy);
   atomic_text(legacy/"HEAD.json",Json{{"revision",1}}.dump());
+  require(call(service,"cad_list",Json::object()).at("documents")==Json::array({Json{{"document_id","assembly"},{"revision",1}},Json{{"document_id","con"},{"revision",1}}}),
+    "Listing includes an existing device-named document and skips an unaddressable directory");
+#else
   require(call(service,"cad_list",Json::object()).at("documents")==Json::array({Json{{"document_id","assembly"},{"revision",1}}}),
-    "Listing skips a legacy document whose directory name is no longer a valid identifier");
+    "Listing skips an unaddressable directory");
+#endif
 }
 void visibility_tests() {
   Temporary temporary;Service service(temporary.path);auto model=box();
@@ -204,6 +214,26 @@ void retention_tests() {
   require(json_files(temporary.path/"views"/"idle"/"evaluations")==std::set<std::string>{refreshed},"The idle view keeps one frozen evaluation after refreshing");
   require(!json_files(global).contains(idle),"Refreshing the idle view removes its superseded display");
 }
+void sweep_hardening_tests() {
+  // The retention sweep is best effort, but it must neither be stopped by one
+  // damaged view record nor follow a symlink planted where its marker lives.
+  Temporary temporary;Service service(temporary.path);const auto global=temporary.path/"evaluations";
+  call(service,"cad_create",{{"document_id","part"},{"model",box()}});
+  const auto superseded=call(service,"cad_query",{{"document_id","part"},{"revision",1},{"kind","topology"}}).at("evaluation_id").get<std::string>();
+  edit(service,1,8);age(global/(superseded+".json"));
+  const auto damaged=temporary.path/"views"/"damaged";fs::create_directories(damaged);atomic_text(damaged/"state.json","{");
+  call(service,"cad_open",{{"document_id","part"},{"view_id","probe"}});ready(service,"probe");
+  require(!json_files(global).contains(superseded),"A damaged view record does not stop the retention sweep");
+#ifndef _WIN32
+  Temporary outside;const auto target=outside.path/"target";atomic_text(target,"untouched");age(target);
+  const auto before=fs::last_write_time(target);
+  const auto newer=call(service,"cad_query",{{"document_id","part"},{"revision",2},{"kind","topology"}}).at("evaluation_id").get<std::string>();
+  edit(service,2,9);age(global/(newer+".json"));
+  fs::remove(global/".retention");fs::create_symlink(target,global/".retention");
+  call(service,"cad_open",{{"document_id","part"},{"view_id","second"}});ready(service,"second");
+  require(fs::last_write_time(target)==before&&read_text(target)=="untouched","The retention marker is never followed through a symlink");
+#endif
+}
 }
 int main() {try {
   set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temporary temporary;Service service(temporary.path);
@@ -302,5 +332,6 @@ int main() {try {
   visibility_tests();
   device_name_tests();
   retention_tests();
+  sweep_hardening_tests();
   std::cout<<"live: "<<checks<<" checks passed\n";return 0;
 }catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

@@ -255,24 +255,54 @@ int main() {
     }
     {
       // Aggregate drawing limits hold however each view was obtained.
-      const auto line=Json{{"kind","line"},{"hidden",false},{"points",{{0,0},{1,1}}}};
-      const auto view_with=[&](std::size_t count) {
-        Json entities=Json::array(); for(std::size_t i=0;i<count;++i) entities.push_back(line);
-        return Json{{"id","v"},{"entities",entities}};
+      const auto usage=[](std::size_t entities,std::size_t points=0,std::size_t edges=0) {
+        return Json{{"entities",entities},{"points",points},{"examined_edges",edges}};
       };
       const Json requested=Json::array({Json{{"id","a"}},Json{{"id","b"}}});
-      check_drawing_totals(requested,Json::array({view_with(5000),view_with(4999)}),"out");
-      const auto exceeded=[&](const Json& projected,const Json& asked) {
-        try { check_drawing_totals(asked,projected,"out"); } catch(const Error& e) { return e.code=="limit_exceeded"; }
+      const auto exceeded=[&](const Json& budgets,const Json& asked) {
+        try { check_drawing_totals(asked,budgets,"out"); } catch(const Error& e) { return e.code=="limit_exceeded"; }
         return false;
       };
-      require(exceeded(Json::array({view_with(5000),view_with(5001)}),requested),"Views that individually fit cannot exceed the entity limit together");
-      Json polyline_entities=Json::array();
-      for(int i=0;i<3;++i) polyline_entities.push_back({{"kind","polyline"},{"hidden",false},{"points",Json(std::vector<Json>(70000,Json::array({0,0})))}});
-      require(exceeded(Json::array({Json{{"id","p"},{"entities",polyline_entities}}}),Json::array({Json{{"id","p"}}})),"Total polyline points are bounded");
+      check_drawing_totals(requested,Json::array({usage(5000,100000,20000),usage(5000,100000,20000)}),"out");
+      require(exceeded(Json::array({usage(5000),usage(5001)}),requested),"Views that individually fit cannot exceed the entity limit together");
+      require(exceeded(Json::array({usage(1,100001),usage(1,100000)}),requested),"Total points are bounded");
+      require(exceeded(Json::array({usage(1,1,20000),usage(1,1,20001)}),requested),"Total examined edges are bounded");
       const auto anchors=[&](int count) { Json list=Json::array(); for(int i=0;i<count;++i) list.push_back({{"part_id","p"},{"point",{0,0,0}}}); return list; };
       check_drawing_totals(Json::array({Json{{"id","a"},{"balloon_anchors",anchors(32)}},Json{{"id","b"},{"balloon_anchors",anchors(32)}}}),Json::array(),"out");
       require(exceeded(Json::array(),Json::array({Json{{"id","a"},{"balloon_anchors",anchors(32)}},Json{{"id","b"},{"balloon_anchors",anchors(33)}}})),"Balloon anchors stay bounded across views");
+    }
+    {
+      // A cached view carries what it cost, so the same request passes or fails the
+      // drawing-wide limits identically whether its views are cached or not.
+      Temp limits; const auto root=limits.path/".cache"; Json diagnostics;
+      const Json section_a={{"id","a"},{"orientation","section"},{"section",{{"axis","z"},{"offset",2}}}},
+        section_b={{"id","b"},{"orientation","section"},{"section",{{"axis","z"},{"offset",3}}}};
+      const auto both=drawing_request(model,{{"views",Json::array({section_a,section_b})}});
+      evaluate_model(limits.path,model,both,&diagnostics);
+      const auto keys=diagnostics.at("projection_keys");
+      const auto entry=read_cache(root,keys[0].get<std::string>());
+      require(entry && entry->at("budget").at("entities").get<int>()>0 && entry->at("budget").contains("points") && entry->at("budget").contains("examined_edges"),
+        "A cached view records its budget usage");
+      for(const auto& key:keys) {
+        auto stored=read_cache(root,key.get<std::string>()).value();
+        stored["budget"]["entities"]=4000; stage_cache(root/(key.get<std::string>()+".json"),key.get<std::string>(),stored);
+      }
+      evaluate_model(limits.path,model,both,&diagnostics);
+      require(diagnostics.at("projection_hit"),"Both views come from the cache");
+      for(const auto& key:keys) {
+        auto stored=read_cache(root,key.get<std::string>()).value();
+        stored["budget"]["entities"]=6000; stage_cache(root/(key.get<std::string>()+".json"),key.get<std::string>(),stored);
+      }
+      try { evaluate_model(limits.path,model,both,&diagnostics); require(false,"Cached views that together exceed the limit must fail"); }
+      catch(const Error& e) { require(e.code=="limit_exceeded","Cached views still count toward the drawing-wide entity limit"); }
+      auto legacy=read_cache(root,keys[0].get<std::string>()).value(); legacy.erase("budget");
+      stage_cache(root/(keys[0].get<std::string>()+".json"),keys[0].get<std::string>(),legacy);
+      for(const auto& key:{keys[1]}) {
+        auto stored=read_cache(root,key.get<std::string>()).value(); stored["budget"]["entities"]=1;
+        stage_cache(root/(key.get<std::string>()+".json"),key.get<std::string>(),stored);
+      }
+      evaluate_model(limits.path,model,both,&diagnostics);
+      require(diagnostics.at("projection_hits")==Json::array({false,true}),"An entry without a recorded budget is reprojected, never trusted");
     }
     std::cout<<checks<<" geometry/projection cache checks passed\n"; return 0;
   } catch(const std::exception& e) { std::cerr<<"FAILED: "<<e.what()<<'\n'; return 1; }

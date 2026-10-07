@@ -258,6 +258,7 @@ function nativeBridge(respond) {
   check(state.value.status === 'ready' && state.value.error === null && state.value.payload.document_id === 'other' && state.value.document_id === 'other',
     'retargeting after an error loads the next document');
   const loaded = state.value.payload;
+  state.value.selection = { reference: { entity_id: 'edge-1' }, geometry: {} };  // picks must be disabled by the failure, not already null
   head = { document_id: 'other', revision: 2, failing: true };
   await state.pollOnce();
   check(state.value.status === 'error' && state.value.payload === loaded && state.value.selection === null && state.value.revision === 2,
