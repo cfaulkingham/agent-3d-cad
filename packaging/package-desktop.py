@@ -11,13 +11,13 @@ from pathlib import Path
 repo = Path(__file__).resolve().parent.parent
 native, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
 binary = Path(sys.argv[3]).resolve()
-version = (repo / 'VERSION').read_text().strip()
+version = (repo / 'VERSION').read_text(encoding='utf-8').strip()
 system = platform.system()
 arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'x64', 'AMD64': 'x64'}[platform.machine()]
 name = f'agent-3d-cad-desktop-{version}-{system}-{arch}'
 destination = output / name
 manifest_path = Path('share/agent-3d-cad/provenance.json')
-manifest = json.loads((native / manifest_path).read_text())
+manifest = json.loads((native / manifest_path).read_text(encoding='utf-8'))
 if manifest['project_version'] != version or manifest['system'] != system:
     raise SystemExit('Native bundle version/platform mismatch')
 def sha(file):
@@ -53,9 +53,9 @@ else:
 
 # Preserve complete, checksum-locked Rust dependency sources and all notices.
 # Crate archives remain compressed; this also covers inline copyright headers.
-host = subprocess.check_output(['rustc', '-vV'], text=True).split('host: ')[1].splitlines()[0]
+host = subprocess.check_output(['rustc', '-vV'], text=True, encoding='utf-8').split('host: ')[1].splitlines()[0]
 metadata = json.loads(subprocess.check_output(['cargo', 'metadata', '--manifest-path', str(repo / 'desktop/Cargo.toml'),
-    '--locked', '--offline', '--filter-platform', host, '--format-version', '1'], text=True))
+    '--locked', '--offline', '--filter-platform', host, '--format-version', '1'], text=True, encoding='utf-8'))
 resolved = {node['id'] for node in metadata['resolve']['nodes']}
 notices = destination / 'share/agent-3d-cad/notices/tauri'
 sources = notices / 'sources'
@@ -72,9 +72,9 @@ for package in metadata['packages']:
     shutil.copy2(archive, target)
     index.append({'name': package['name'], 'version': package['version'], 'license': package['license'],
                   'repository': package['repository'], 'source_archive': 'sources/' + target.name, 'sha256': sha(target)})
-(notices / 'dependencies.json').write_text(json.dumps(index, indent=2) + '\n')
+(notices / 'dependencies.json').write_text(json.dumps(index, indent=2) + '\n', encoding='utf-8')
 shutil.copy2(repo / 'desktop/Cargo.lock', notices / 'Cargo.lock')
-(notices / 'README.txt').write_text('Tauri desktop dependencies\n\nComplete original Cargo registry source archives, including their license and\ncopyright notices, are preserved in sources/. Each .crate is a gzip tar archive.\ndependencies.json records the declared license and archive hash; Cargo.lock pins\nversions and registry checksums. These sources are not needed at runtime.\nThe OS supplies WKWebView (macOS), WebView2 (Windows), or WebKitGTK (Linux).\n')
+(notices / 'README.txt').write_text('Tauri desktop dependencies\n\nComplete original Cargo registry source archives, including their license and\ncopyright notices, are preserved in sources/. Each .crate is a gzip tar archive.\ndependencies.json records the declared license and archive hash; Cargo.lock pins\nversions and registry checksums. These sources are not needed at runtime.\nThe OS supplies WKWebView (macOS), WebView2 (Windows), or WebKitGTK (Linux).\n', encoding='utf-8')
 manifest['desktop'] = {'framework': 'Tauri', 'version': '2.12.1', 'transport': 'stdio', 'webview': 'system'}
 manifest['files'] = []
 for file in sorted(destination.rglob('*')):
@@ -82,7 +82,7 @@ for file in sorted(destination.rglob('*')):
         if not file.resolve().is_relative_to(destination):
             raise SystemExit(f'Escaping bundle link: {file}')
         manifest['files'].append({'path': file.relative_to(destination).as_posix(), 'sha256': sha(file)})
-(destination / manifest_path).write_text(json.dumps(manifest, indent=2) + '\n')
+(destination / manifest_path).write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 extension = 'zip' if system == 'Windows' else 'tar.gz'
 archive = output / f'{name}.{extension}'
 subprocess.run(['cmake', '-E', 'tar', 'cf' if system == 'Windows' else 'czf', str(archive),

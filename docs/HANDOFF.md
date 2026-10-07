@@ -6,6 +6,24 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Windows desktop packaging encoding — 2026-10-07
+
+The same run `37685717405`, Windows job `113012879023`, passed **32/32 CTest
+suites**, schema/SDK checks, Windows installer/configuration checks, relocated
+bundle validation, **2/2 Tauri integration tests**, and the Rust release build.
+Packaging then failed decoding `cargo metadata`: Python 3.13 used Windows CP1252
+for Cargo’s UTF-8 JSON, encountering undefined byte `0x81` in dependency metadata.
+
+`packaging/package-desktop.py` now explicitly uses UTF-8 for Cargo/rustc output
+and its text manifests/notices. Reproduced the original `UnicodeDecodeError`
+locally against real Cargo metadata by forcing subprocess’s default decoder to
+CP1252, then ran the complete corrected packaging helper under that same forced
+default. It produced the desktop archive and all **515 provenance hashes**
+verified. The output is under `build-desktop/packaging-utf8-check/`; source logs
+are in `build-desktop/ci-intel-37685717405/windows-job.log`. This is a portable
+encoding regression check on macOS, not a claim that the corrected Windows CI
+packaging lane has already passed. No runtime or geometry changes.
+
 ## Intel CI resource-accounting regression — 2026-10-07
 
 Run `37685717405` at `348adbd`, Intel job `113012878963`, failed only
