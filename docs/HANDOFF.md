@@ -87,7 +87,11 @@ earlier suites plus `notices`, `renamed_worker` and the new `service` suite; abo
 36 s). The timing-sensitive suites (`jobs`, `service`, `live`, `cache`,
 `transactions`, `app_protocol`, `live_mcp_flow`, `renamed_worker`) passed four
 consecutive repeats. `tests/schema_conformance.py`: **295 checks across 19 tools**;
-`tests/mcp_sdk_smoke.py` (official MCP SDK 2.3.0, native stdio): **757 checks**. Two
+`tests/mcp_sdk_smoke.py` (official MCP SDK 2.3.0, native stdio): **752–762 checks**
+(varies with asynchronous polls). The final tree was also built from an empty build
+directory (no warnings) and passed the same 31/31, and `bundle-check` (relocated
+bundle, empty PATH: create/edit/reopen/query/STEP/STL/drawings/BOM/balloons/MCP and
+embedded app resource) passed. Two
 test races found and fixed on the way (a jobs admission-lock race that failed about
 half of runs; a lower-bound timing assumption in the lock-wait test).
 Test changes to flag for review: the heavy workload used by the cancel/kill/timeout/
