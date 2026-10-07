@@ -80,6 +80,40 @@ and public release preparation retain their separate acceptance gates. Complex
 cold thread drawings still take minutes. Next: profile remaining exact root/trim
 work before further optimization, or scope a workflow-driven product increment.
 
+## Codex local installation update — 2026-10-07
+
+The user authorized upgrading the installed CAD MCP after discovery showed that
+Codex still pointed at the older October 6 bundle. The current macOS arm64 native
+bundle, including assemblies/BOM, expanded drawings, live assembly visibility and
+`agentcad-hlr-midpoint-v2`, is now installed in a fresh version directory under
+`~/Applications/Agent3DCAD/`. Prior installations remain available.
+
+- `cmake --build build-app-protocol --parallel 4` passed. Relevant CTest suites
+  `installer`, `embedded_assets`, `runtime_filters`, `protocol`, `cli_smoke`,
+  `app_protocol` and `live_mcp_flow`: **7/7 passed in 3.48 seconds**.
+- `bundle-check` passed relocation and empty-PATH create/edit/reopen, exchanges,
+  drawings, BOM/balloons, MCP and embedded-resource checks. The local installer
+  independently verified **263 files** before and after copying. Provenance
+  SHA-256: `05e530b6e924390d9074d55b5832bde89c77b453f5722eead74149f5690aaa6a`.
+- The installed executable passed **291 schema checks across 19 tools** and
+  **497 official MCP SDK 2.3.0 interoperability checks**.
+- A byte-preserving atomic update changed only the registered CAD executable
+  path. The matching global native-cad skill was refreshed; timestamped config
+  and skill backups were retained. Existing workspace arguments and all unrelated
+  configuration bytes were preserved. `codex mcp get agent-3d-cad --json`
+  confirmed the new enabled registration.
+- An independent SDK connection using that actual registration discovered all
+  **19 tools**, including `cad_bom`, and read all **four existing documents**.
+  All **10 saved HEAD/revision JSON files** retained their pre-update SHA-256.
+
+Exact installation paths, backups, registration, preflight source hashes and logs
+are in `build/codex-update-20261007/`. No remote publication occurred. The current
+chat still exposes the previous 17 model-visible tools; `cad_viewer` is app-only.
+Computer Use explicitly denied access to Codex's own UI, and no automated MCP
+refresh tool is available. The user must restart the MCP connection or Codex to
+discover the new tool schemas and viewer resource in the running host. Fresh SDK
+acceptance is verified; a refreshed Codex-host session remains to be observed.
+
 ## Intel CI follow-up — diagnostic context
 
 The reported GitHub Actions run `37609850499`, Intel job `112754188016`, tested
