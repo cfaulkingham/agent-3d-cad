@@ -42,8 +42,10 @@ Developer builds may use CMake, a C++ compiler, and native dependencies.
 - Keep new code independent of build123d's Python semantics. Reusing sibling code
   requires a specific technical reason and preservation of applicable notices.
 
-A public GitHub repository exists (`origin`), but no release has been published.
-Native preview archives are CI artifacts only. The original project code is
+A public GitHub repository exists (`origin`); `v0.1.0-preview.1` is a published
+prerelease with native/desktop archives, Claude extensions and installers.
+Signing/notarization and remaining client/GUI validation are tracked in HANDOFF.
+The original project code is
 MIT-licensed (see `LICENSE` and `NOTICE`); third-party components keep their own
 licenses (`packaging/THIRD_PARTY.md`). Do not infer licenses from neighboring
 repositories, and keep third-party notices intact when reusing code.

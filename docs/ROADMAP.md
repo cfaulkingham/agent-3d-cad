@@ -177,10 +177,12 @@ evidence; no additional platform acceptance is implied by source implementation.
   requests containing exact references, and automatic revision refresh.
 - Native Save dialogs for STEP/STL and PDF/SVG/DXF drawing exports.
 
-Implementation is in source. Acceptance still requires new platform CI runs,
-fresh-machine GUI/runtime checks, client installation trials, publisher signing
-and macOS notarization before claiming a frictionless public release. Local
-macOS arm64 evidence and remaining limitations are in `HANDOFF.md`. Direct chat
+Commit `2065a69` passed all five platform CI lanes, including native tests,
+installer/configuration checks, relocated bundles, Tauri integration tests and
+packaging. Both Linux runtime-only container checks passed. Fresh-machine GUI
+checks, client installation trials, publisher signing and macOS notarization
+remain necessary before claiming a frictionless public release. Downloaded
+macOS arm64 package evidence and remaining limitations are in `HANDOFF.md`. Direct chat
 composer delivery is host-dependent; the standalone app uses Copy request and
 shared context. A historical-revision browser is not yet implemented; the
 library reopens saved projects at HEAD and existing tools can read/restore history.

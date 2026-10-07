@@ -4,7 +4,77 @@ Updated: 2026-10-07. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies 
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
-validation scope. Public release preparation remains separate.
+validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
+signing/notarization and remaining host validation are still open.
+
+## First versioned preview — 2026-10-07
+
+Commit `2065a692851604d29b72a4c2fc2ddd20960b1070` passed all five native jobs in
+[run 37688014915](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37688014915):
+macOS arm64/Intel x64, Linux arm64/x64 and Windows x64. Each job completed the
+native suites, schema/MCP interoperability, installer/configuration checks,
+relocated bundle tests, Tauri integration tests, release build and packaging.
+Both Linux runtime-only container checks passed. This closes the Intel test and
+Windows packaging acceptance gates described below; their earlier failure logs
+remain useful regression evidence.
+
+The owner authorized the first preview release. Annotated tag
+`v0.1.0-preview.1` points to that tested commit; its
+[release run 37691102208](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37691102208)
+passed all five platforms and the draft-release job. Each platform passed
+**32/32 native suites and 2/2 Tauri integration tests**, schema/MCP checks,
+installer/configuration tests, relocated bundles and archive generation. Both
+Linux runtime-only containers passed. The
+[prerelease](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1)
+was published on 2026-10-07 at 22:10:54 UTC, with ten archives, three Claude
+extensions, two installers and `SHA256SUMS`.
+
+The independent download audit caught an empty `files` inventory in all three
+Claude extensions. CI's `cmake --install ... --prefix bundle` used a relative
+prefix; the manifest's recursive glob requires an absolute root. The relocation
+test had used an absolute prefix and therefore missed the problem. Core archives
+from CPack had correct inventories; desktop packaging regenerated complete ones.
+Every non-provenance file in each original extension was byte-identical to its
+corresponding core archive. Before publication, rebuilt the three extensions
+from those verified core archives with the tagged `make-mcpb.py`, regenerated
+`SHA256SUMS` and replaced only those four draft assets. Each extension differs
+only in `share/agent-3d-cad/provenance.json`; no runtime bytes or tag changed.
+Downloaded the replacement assets again and verified exact byte equality.
+
+All **15 release assets** matched SHA-256; all **13 packages** passed full file
+inventory/hash, architecture, version, OCCT and license checks. macOS bundles
+record the intended minimum macOS 15.0. Desktop Rust source archives also match
+their dependency-index and Cargo.lock hashes. Evidence, full CI logs, manifests
+and test outputs are under `build-desktop/release-v0.1.0-preview.1/` locally.
+
+Downloaded macOS arm64 desktop smoke passed with empty PATH: version, create,
+edit, reopen, historical MCP read, embedded viewer resource, three client configs,
+STEP/STL/PDF/SVG and four DXFs, with unchanged source after export. The native
+Tauri window rendered the saved plate, shared revision-2 `face-11` and `edge-22`
+with a separate CLI process (`stale: false`), reopened the project from the
+library, saved a valid 79,262-byte STEP through the native dialog, then followed
+a thickness edit to revision 3 / 10 mm and cleared the old selection. This tested
+archive is byte-identical to the published macOS arm64 desktop asset.
+After publication, ran the release's unmodified `install.sh` against its public
+GitHub URLs with only OS utilities on PATH, installing into a new directory with
+spaces. The installed executable reports `0.1.0-preview.1` / OCCT 8.0.1, and all
+**515 installed file hashes** match provenance. No client settings were changed.
+
+Follow-up source fix: normalize the install root to an absolute path, reject an
+empty generated inventory, use an absolute CI install prefix, and have both
+Python packagers reject empty/duplicate/missing/unlisted file inventories before
+writing outputs. The relocated-bundle test now deliberately uses a relative
+prefix. It reproduced `Bundle provenance is empty` before the fix and passed the
+full create/edit/reopen/exports/drawings/BOM/MCP smoke afterward. New packaging
+fixtures reject all four inventory defects in both helpers and accept a complete
+MCPB; CI runs these fixtures. Local CTest `installer` and `notices` passed **2/2**.
+These packaging guards are a follow-up on main, separate from the immutable
+release tag and its tested runtime binaries.
+
+Remaining work: actual Claude extension installation and OpenCode/Grok/Muse host
+trials, Windows/Linux GUI checks, publisher signing and macOS notarization.
+The release is explicitly a preview; these remaining checks are not implied by
+successful CI or by macOS GUI evidence.
 
 ## Windows desktop packaging encoding — 2026-10-07
 

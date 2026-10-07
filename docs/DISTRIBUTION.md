@@ -211,7 +211,10 @@ The original code is MIT-licensed; `LICENSE` and `NOTICE` ship in each bundle's
 notices directory.
 CI uploads preview archives and test evidence as workflow artifacts with a
 14-day retention. Version tags additionally prepare the draft release described
-above; no public release has been published yet. `tests/notice_consistency.cmake`
+above. The first public prerelease is
+[`v0.1.0-preview.1`](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1);
+it remains unsigned/unnotarized, with actual host-validation limits recorded in
+`HANDOFF.md`. `tests/notice_consistency.cmake`
 (CTest `notices`) fails if the shipped third-party notice, the OCCT patch
 description and the installer's recorded modification identifier disagree, or
 if the notice stops stating the pinned OCCT source hash and relink instructions.

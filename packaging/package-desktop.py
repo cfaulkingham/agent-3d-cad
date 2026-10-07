@@ -18,6 +18,10 @@ name = f'agent-3d-cad-desktop-{version}-{system}-{arch}'
 destination = output / name
 manifest_path = Path('share/agent-3d-cad/provenance.json')
 manifest = json.loads((native / manifest_path).read_text(encoding='utf-8'))
+paths = [item['path'] for item in manifest['files']]
+actual = {file.relative_to(native).as_posix() for file in native.rglob('*') if file.is_file()}
+if not paths or len(paths) != len(set(paths)) or actual != set(paths) | {manifest_path.as_posix()}:
+    raise SystemExit('Native provenance must cover every file exactly once')
 if manifest['project_version'] != version or manifest['system'] != system:
     raise SystemExit('Native bundle version/platform mismatch')
 def sha(file):

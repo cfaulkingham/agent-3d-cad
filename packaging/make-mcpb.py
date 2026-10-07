@@ -7,6 +7,10 @@ import zipfile
 
 root, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
 provenance = json.loads((root / 'share/agent-3d-cad/provenance.json').read_text())
+paths = [entry['path'] for entry in provenance['files']]
+actual = {file.relative_to(root).as_posix() for file in root.rglob('*') if file.is_file()}
+if not paths or len(paths) != len(set(paths)) or actual != set(paths) | {'share/agent-3d-cad/provenance.json'}:
+    raise SystemExit('Bundle provenance must cover every file exactly once')
 system = provenance['system']
 if system not in ('Darwin', 'Windows'):
     raise SystemExit('Claude Desktop packages are built only for macOS and Windows')

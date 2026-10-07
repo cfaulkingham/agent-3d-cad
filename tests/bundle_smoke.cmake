@@ -1,9 +1,12 @@
 if(NOT DEFINED BUILD_DIR OR NOT DEFINED TEST_DIR)
   message(FATAL_ERROR "BUILD_DIR and TEST_DIR are required")
 endif()
+get_filename_component(BUILD_DIR "${BUILD_DIR}" ABSOLUTE)
+get_filename_component(TEST_DIR "${TEST_DIR}" ABSOLUTE)
 file(REMOVE_RECURSE "${TEST_DIR}")
 file(MAKE_DIRECTORY "${TEST_DIR}")
-execute_process(COMMAND "${CMAKE_COMMAND}" --install "${BUILD_DIR}" --config Release --prefix "${TEST_DIR}/staging"
+execute_process(COMMAND "${CMAKE_COMMAND}" --install "${BUILD_DIR}" --config Release --prefix staging
+  WORKING_DIRECTORY "${TEST_DIR}"
   RESULT_VARIABLE status OUTPUT_VARIABLE installed ERROR_VARIABLE diagnostics)
 if(NOT status EQUAL 0)
   message(FATAL_ERROR "Bundle install failed: ${installed}\n${diagnostics}")

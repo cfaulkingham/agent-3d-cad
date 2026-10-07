@@ -128,13 +128,16 @@ jobs:
           }
           python tests/client_config_test.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/packaging_provenance_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Relocated bundle without SDK environment
         run: |
           $build = Join-Path $PWD 'build'
           $smoke = Join-Path $PWD 'build/bundle-smoke'
           cmake "-DBUILD_DIR=$build" "-DTEST_DIR=$smoke" -P tests/bundle_smoke.cmake
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cmake --install build --config Release --prefix bundle
+          $bundle = Join-Path $PWD 'bundle'
+          cmake --install build --config Release --prefix $bundle
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Fresh Linux runtime container, with no development tools
         if: runner.os == 'Linux'

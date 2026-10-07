@@ -7,10 +7,9 @@ select faces and edges, and export STEP, STL, and PDF/SVG/DXF drawings.
 The native CAD engine runs locally. You do not install Python, Node, Rust,
 CMake, or a compiler to use a release bundle.
 
-**Preview:** release packaging is being prepared. No public release is available
-yet; [Actions](https://github.com/cfaulkingham/agent-3d-cad/actions) currently holds
-CI previews. The installation commands below work once the matching version is
-published. See [validation status](docs/HANDOFF.md) for what has actually been tested.
+**Preview:** [0.1.0-preview.1 is available](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1)
+for all five platform targets below. Packages are not publisher-signed or notarized.
+See [validation status](docs/HANDOFF.md) for tested behavior and remaining client/GUI checks.
 
 ## Install
 
