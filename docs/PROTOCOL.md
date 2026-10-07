@@ -356,7 +356,11 @@ block revision polling. The app never directly calls modeling mutations.
 The bridge accepts messages only from its parent window, pins the responding
 origin, bounds pending requests with timeouts, and disposes them on teardown.
 WebGL2/WebGL1 rendering and CPU ray picking use the exact evaluation mapping,
-depth-tested occlusion and explicit overlap ambiguity. GPU work is bounded to
+depth-tested occlusion and explicit overlap ambiguity. Edge polylines and face
+triangulations are sampled independently within `mesh.linear_deflection_mm`, so
+edge picking treats an edge sample up to twice that deflection behind the
+occluding triangle as visible, divided by the cosine between that triangle's
+normal and the view ray (at most 4×). GPU work is bounded to
 four million framebuffer pixels; pick traversal has a two-million-work budget.
 Native geometry/payload limits continue to apply. Tests exercise math and mocked
 GPU lifecycle. Real Codex-host rendering, a human edge pick, selective edit,
