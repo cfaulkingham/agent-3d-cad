@@ -79,6 +79,16 @@ CLI `--input -` reads JSON from stdin. Errors are JSON on stderr with exit code 
 `tools` publishes full input/output schemas. The [protocol](docs/PROTOCOL.md)
 describes feature and selection contracts, limits, errors and persistence.
 
+Repeated queries, exports and drawings automatically reuse exact geometry and
+projected drawing views in a bounded workspace cache. Drawing layout, dimensions,
+tolerances and formats can change without repeating projection. Model edits or
+native build changes invalidate the cache; removing it loses no editable work.
+Complex first-time threaded drawings may still need `cad_job` with a longer
+timeout. Developer benchmark: `python3 tests/cache_benchmark.py
+build/agent-3d-cad build/cache-benchmark` (isolated workspaces; two hatched sections
+of the full M20 knob, cold/warm/style-change and geometry-only timings). Optional
+`--views standard` exercises the much slower four-view hidden-line drawing.
+
 ## Jobs and retries
 
 Use `cad_job` for asynchronous geometry so MCP remains responsive during builds:
@@ -118,10 +128,13 @@ app-only transport tool. This is a local stdio service with no HTTP endpoint.
 No global host configuration is installed for you.
 
 `cad_drawing` creates revision-qualified vector drawings in isolated native
-workers, with hidden-line views, planar sections, geometry-checked dimensions,
+workers, with aligned first-/third-angle layouts, hatched planar sections,
+hidden-line views, geometry-checked linear/angular dimensions and explicit tolerances,
 PDF/SVG sheets, and one 1:1 mm DXF per view. It saves a reusable recipe; replay it
 against a later committed revision to regenerate. See [DRAWINGS.md](docs/DRAWINGS.md)
-and `examples/plate.drawing.json`. Drawing generation requires no extra runtime.
+and `examples/plate-section.drawing.json`. The paired `angular-plate` examples
+demonstrate angular dimensions and tolerance styles. Drawing generation requires
+no extra runtime.
 
 For a verified versioned local installation and explicit Codex registration, see
 the [installation instructions](docs/DISTRIBUTION.md#install-use-and-uninstall).

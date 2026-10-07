@@ -145,7 +145,7 @@ integers. See runtime schemas for exact closed field definitions.
 | `cad_import` | `path`, optional `request_id` | New document with immutable embedded STEP feature |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
 | `cad_export` | `revision`, `format` (`step`/`stl`) | Artifact path, bytes, units and identity |
-| `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF files, measured dimensions and saved recipe/manifest paths |
+| `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned first/third-angle layouts, section hatching, measured linear/angular dimensions, explicit tolerances and saved recipe/manifest paths |
 | `cad_view` | `revision`, optional `feature_id` | Offline HTML path, .view.json path, summary and evaluation identity |
 | `cad_preview` | `expected_revision`, `operations`, optional `feature_id` | Draft view artifacts; no commit |
 | `cad_resolve_selection` | Remaining evaluated pick fields | Measurements and available persistent selector |
@@ -297,7 +297,9 @@ hosts and native platforms retain their own acceptance gates.
 
 Use `{"action":"get","job_id":"plate_edit_2"}`, `cancel` with the same job_id,
 or `{"action":"list"}`. Submit supports create/apply/restore/import/query/export/
-preview/view/drawing. Drawing contracts, view coordinate conventions, references,
+preview/view/drawing. Drawing contracts, first-/third-angle and grid arrangements,
+section hatching, angular references and degree results, explicit manufacturing
+tolerances, view placement coordinates, references,
 regeneration and export limits are specified in [DRAWINGS.md](DRAWINGS.md).
 At most eight active jobs and four geometry workers are admitted
 per workspace. Excess admission returns `queue_full`. Jobs persist after CLI/MCP
@@ -310,6 +312,24 @@ code. Linux enforces address-space limits; Windows uses Job Objects; macOS check
 physical footprint every 10 ms (there can be sampling overshoot). Worker-local
 watchdogs also bound work if a coordinator exits. Geometry is serial in each
 worker; no OCCT object is shared between workers.
+
+Repeated operations automatically reuse a disposable `.cache` inside the
+workspace. Exact geometry is keyed by complete model contents, native build/SDK
+fingerprints, kernel and cache-format versions. Drawing projections additionally
+key the ordered views, hidden lines, section planes and hatch extraction. Changing
+labels, dimensions, tolerances, layout or export formats rerenders from those
+projections. Changing model contents invalidates both. Evaluation identities and
+revision checks are always fresh; cached data never serves as an editable source.
+
+Entries carry SHA-256 checksums. Geometry snapshots contain every feature's exact
+B-rep and provenance, with shapes validated when restored. Snapshot B-rep data
+is capped at 32 MiB and encoded cache entries at 64 MiB. The shared cache keeps at
+most 128 entries / 256 MiB, evicting oldest publications under a native lock.
+Busy, missing, unwritable, symlinked, corrupt and oversize cache entries are
+skipped and geometry is rebuilt as needed. The cache may be removed while the
+service is stopped; documents and exports are unaffected. The first projection
+of a complex threaded part can still require an explicit long-running job budget.
+No additional MCP tools, public response fields, or cache-management API are added.
 
 States are `queued`, `running`, `cancelling`, `succeeded`, `failed`, `cancelled`,
 `interrupted`; progress is coarse phase progress rather than a predicted percent.
@@ -343,6 +363,7 @@ workspace/
   views/<view_id>/state.json        # workspace-scoped association and context
   views/<view_id>/evaluations/      # frozen mesh JSON for live transfer
   .workers/                         # bounded worker slots and temporary files
+  .cache/<content-key>.json          # disposable exact geometry / view-set projections
 ```
 
 HEAD defines visibility; snapshots beyond it are uncommitted candidates. Document

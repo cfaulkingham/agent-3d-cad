@@ -1,0 +1,18 @@
+{
+  "document_id": "angular_plate",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"width": 40, "height": 40, "thickness": 6, "hole_radius": 4,
+                   "linear_allowance": 0.1, "angular_allowance": 0.5},
+    "features": [
+      {"id": "profile", "type": "sketch",
+       "workplane": {"origin": [0, 0, 0], "normal": [0, 0, 1], "x_direction": [1, 0, 0]},
+       "profile": {"type": "polygon", "points": [[0, 0], [{"parameter": "width"}, 0], [0, {"parameter": "height"}]]}},
+      {"id": "body", "type": "extrude", "input": "profile", "distance": {"parameter": "thickness"}},
+      {"id": "drilled", "type": "hole", "input": "body", "origin": [12, 12, 0],
+       "axis": [0, 0, 1], "radius": {"parameter": "hole_radius"}, "depth": {"parameter": "thickness"}}
+    ],
+    "output": "drilled"
+  }
+}

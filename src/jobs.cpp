@@ -3,6 +3,8 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/drawing.hpp"
+#include "agentcad/cache.hpp"
+#include "agentcad/model.hpp"
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -330,7 +332,7 @@ std::string sha256(const std::string& text) {
   return result.str();
 }
 
-Json evaluate_model(const fs::path& workspace, const Json& model, const Json& request) {
+Json evaluate_model(const fs::path& workspace, const Json& model, const Json& request, Json* cache_diagnostics) {
   check_job_cancelled();
   const auto started = std::chrono::steady_clock::now();
   directory(workspace / ".workers");
@@ -350,7 +352,8 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
     }
   }
   TemporaryDirectory files(workspace);
-  atomic_text(files.path / "input.json", Json{{"model", model}, {"request", request}, {"budget", current_budget}}.dump());
+  atomic_text(files.path / "input.json", Json{{"model", model}, {"request", request}, {"budget", current_budget},
+    {"cache_root",path_to_utf8(workspace/".cache")}}.dump());
   auto child = launch({"--internal-geometry-worker", files.path / "input.json", files.path / "output.json"}, true, current_budget.at("memory_mb"));
   try {
     atomic_text(files.path / "process.json", Json{{"pid",child.id()}}.dump());
@@ -374,13 +377,26 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
       throw Error(error.at("code"), error.at("message"), error.value("details", Json::object()));
     }
     if (status != 0) throw Error("worker_failed", "Geometry worker failed", {{"exit_status", status}});
+    // Only the coordinator publishes shared cache files. Never publish results
+    // from failed, timed-out or cancelled workers. Cache entries carry no HEAD,
+    // document identity, output path, or evaluation identity.
+    check_job_cancelled();
+    for(const auto* type:{"geometry","projection"}) {
+      if(response.at("cache").contains(std::string(type)+"_key")) {
+        check_job_cancelled();
+        publish_cache(workspace/".cache",files.path/(std::string(type)+".cache"),
+          response.at("cache").at(std::string(type)+"_key"));
+      }
+    }
+    check_job_cancelled();
+    if(cache_diagnostics) *cache_diagnostics=response.at("cache");
     return response.at("result");
   } catch (...) { child.stop(); throw; }
 }
 
 int geometry_worker_main(const fs::path& input, const fs::path& output) {
   try {
-    const auto payload = parse_json(read_text(input)); fields(payload, {"model", "request", "budget"});
+    const auto payload = parse_json(read_text(input)); fields(payload, {"model", "request", "budget"}, {"cache_root"});
     const auto limits = budget(payload.at("budget"));
 #if !defined(_WIN32) && !defined(__APPLE__)
     const auto bytes = static_cast<rlim_t>(limits.at("memory_mb").get<int>()) * 1024 * 1024;
@@ -398,18 +414,53 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity"});
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
-    BuiltModel model(payload.at("model"));
+    validate_model(payload.at("model"));
+    const auto cache_root=payload.contains("cache_root") ? path_from_utf8(text_field(payload,"cache_root")) : output.parent_path()/"unused-cache";
+    const auto geometry_key=geometry_cache_key(payload.at("model"));
+    auto cached=read_cache(cache_root,geometry_key);
+    if(cached && (!cached->contains("snapshot") || !cached->contains("summary"))) cached.reset();
+    Json diagnostics={{"geometry_key",geometry_key},{"geometry_hit",cached.has_value()},{"projection_hit",false}};
+    std::unique_ptr<BuiltModel> built;
+    auto geometry=[&]() -> BuiltModel& {
+      if(!built && cached) {
+        try { built=std::make_unique<BuiltModel>(payload.at("model"),cached->at("snapshot")); }
+        catch(const std::exception&) { cached.reset(); diagnostics["geometry_hit"]=false; }
+      }
+      if(!built) built=std::make_unique<BuiltModel>(payload.at("model"));
+      return *built;
+    };
     const auto feature = request.value("feature_id", std::string{});
-    Json result = {{"summary", model.summary(feature)}};
-    if (kind == "topology" || kind == "view") result["topology"] = model.topology(feature);
-    if (kind == "view") result["mesh"] = model.mesh(feature);
+    Json result=Json::object();
+    if (kind == "topology" || kind == "view") result["topology"] = geometry().topology(feature);
+    if (kind == "view") result["mesh"] = geometry().mesh(feature);
     if (kind == "drawing") {
       const auto& drawing=request.at("drawing");
-      result["drawing"]=render_drawing(model.drawing({{"views",drawing.at("views")},{"hidden_lines",drawing.at("hidden_lines")}}),drawing,request.at("identity"));
+      const Json spec={{"views",drawing.at("views")},{"hidden_lines",drawing.at("hidden_lines")}};
+      auto key_spec=spec;
+      for(auto& view:key_spec["views"]) view.erase("id");
+      const auto projection_key=projection_cache_key(geometry_key,key_spec);
+      diagnostics["projection_key"]=projection_key;
+      auto projected=read_cache(cache_root,projection_key);
+      if(projected && (!projected->contains("views") || projected->at("views").size()!=drawing.at("views").size())) projected.reset();
+      diagnostics["projection_hit"]=projected.has_value();
+      if(!projected) {
+        projected=geometry().drawing(spec);
+        stage_cache(output.parent_path()/"projection.cache",projection_key,*projected);
+      }
+      // Recipe names are presentation, and can change without projecting again.
+      for(std::size_t i=0;i<drawing.at("views").size();++i)
+        projected->at("views").at(i)["id"]=drawing.at("views").at(i).at("id");
+      result["drawing"]=render_drawing(*projected,drawing,request.at("identity"));
     }
-    if (kind == "export") model.export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
+    if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
     else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing") throw Error("invalid_argument", "Unknown geometry worker request");
-    write_result(output, {{"result", result}}); return 0;
+    result["summary"] = cached && feature.empty() ? cached->at("summary") : geometry().summary(feature);
+    if(!cached) {
+      try { stage_cache(output.parent_path()/"geometry.cache",geometry_key,
+        {{"snapshot",geometry().snapshot()},{"summary",geometry().summary()}}); }
+      catch(const std::exception&) { /* Oversize snapshots simply rebuild next time. */ }
+    }
+    write_result(output, {{"result", result},{"cache",diagnostics}}); return 0;
   } catch (const Error& e) { try { write_result(output, {{"error", e.json()}}); } catch (...) {} }
   catch (const std::exception& e) { try { write_result(output, {{"error", Error("worker_failed", e.what()).json()}}); } catch (...) {} }
   return 1;

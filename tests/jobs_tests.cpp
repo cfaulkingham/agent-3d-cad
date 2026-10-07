@@ -6,6 +6,7 @@
 #include <cmath>
 #include <iostream>
 #include <memory>
+#include <set>
 #include <thread>
 #include <vector>
 #ifdef _WIN32
@@ -26,6 +27,12 @@ struct Temp {
 };
 Json box() { return {{"schema_version",1},{"units","mm"},{"parameters",{{"size",10}}},
   {"features",Json::array({{{"id","base"},{"type","box"},{"size",Json::array({Json{{"parameter","size"}},10,10})}}})},{"output","base"}}; }
+std::set<fs::path> cache_entries(const fs::path& root) {
+  std::set<fs::path> result;
+  for(const auto& entry:fs::directory_iterator(root/".cache"))
+    if(entry.path().extension()==".json") result.insert(entry.path());
+  return result;
+}
 Json heavy_operations() {
   Json result = Json::array();
   std::string input = "base";
@@ -106,6 +113,7 @@ int run_tests(int argc, const char* const* argv) {
     require(queried.at("state")=="succeeded","job query succeeds");
     require(dispatch(temp.path,query).at("result")==queried.at("result"),"job submission deduplicated");
     McpSession session(service);
+    const auto initial_cache=cache_entries(temp.path);
     const Json initialization = {{"protocolVersion","2025-11-25"},{"capabilities",Json::object()},
       {"clientInfo",{{"name","jobs-test"},{"version","1"}}}};
     session.handle({{"jsonrpc","2.0"},{"id",1},{"method","initialize"},{"params",initialization}});
@@ -130,13 +138,16 @@ int run_tests(int argc, const char* const* argv) {
     }
     require(finished(temp.path,"cancelJob").at("state")=="cancelled","cancel terminates active geometry");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"cancel preserves HEAD");
+    require(cache_entries(temp.path)==initial_cache,"Cancelled worker publishes no cache");
     submit_heavy(temp.path,"killJob"); kill_worker(building_pid(temp.path));
     require(finished(temp.path,"killJob").at("state")=="failed","killed worker produces durable failure");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"worker crash preserves HEAD");
+    require(cache_entries(temp.path)==initial_cache,"Killed worker publishes no cache");
     submit_heavy(temp.path,"timeoutJob",200);
     const auto timed=finished(temp.path,"timeoutJob");
     require(timed.at("state")=="failed" && timed.at("error").at("code")=="job_timeout","wall deadline enforced");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"timeout preserves HEAD");
+    require(cache_entries(temp.path)==initial_cache,"Timed-out worker publishes no cache");
     submit_heavy(temp.path,"memoryJob",10000,128);
     const auto limited=finished(temp.path,"memoryJob");
     require(limited.at("state")=="failed","worker memory budget produces failure");
@@ -148,6 +159,7 @@ int run_tests(int argc, const char* const* argv) {
       limited.at("error").at("code")=="kernel_failure","OS memory containment rejects allocation or terminates worker");
 #endif
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"memory failure preserves HEAD");
+    require(cache_entries(temp.path)==initial_cache,"Memory-limited worker publishes no cache");
     const Json edit = {{"document_id","part"},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","size"},{"value",11}}})},{"request_id","crashAfterCommit"}};
     const auto edited=service.call("cad_apply",edit);
     // Model the exact crash window: revision and receipt are committed, but the

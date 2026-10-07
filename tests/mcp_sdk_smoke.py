@@ -193,6 +193,21 @@ async def smoke(executable, workspace):
         require(set(formats) == {"svg", "pdf", "dxf"}, "SDK drawing did not return all requested vector formats")
         require(formats["pdf"].startswith(b"%PDF-") and b"<svg" in formats["svg"] and b"ENTITIES" in formats["dxf"],
                 "Native drawing files do not contain the declared formats")
+        angular = await call(client, definitions, "cad_drawing", {
+            "document_id": "part", "revision": 2, "drawing": {
+                "views": [{"id": "front", "orientation": "front"}],
+                "general_tolerances": {"linear": .1},
+                "dimensions": [{"view": "front", "kind": "angular", "arc_radius": 4,
+                    "lines": [{"from": [0, 0], "to": [20, 0]}, {"from": [0, 0], "to": [0, 8]}],
+                    "manufacturing_tolerance": {"type": "symmetric", "value": .25}},
+                    {"view": "front", "kind": "width"}]}})
+        require(angular["dimensions"][0]["value_deg"] == 90 and "value_mm" not in angular["dimensions"][0],
+                "SDK angular dimension lost degree units")
+        require(angular["dimensions"][0]["lower_limit_deg"] == 89.75 and
+                angular["dimensions"][1]["lower_limit_mm"] == 19.9,
+                "SDK drawing did not preserve explicit and inherited manufacturing limits")
+        require(angular["dimensions"][0]["label"] == "90 +/-0.25 deg",
+                "SDK drawing did not report its printed tolerance label")
         await call(client, definitions, "cad_drawing", {"document_id": "part", "revision": 2, "drawing": {
             "views": [{"id": "front", "orientation": "front"}],
             "dimensions": [{"view": "front", "kind": "diameter", "center": [100, 100], "radius": 1}],

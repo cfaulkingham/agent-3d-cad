@@ -3,6 +3,7 @@
   "revision": 2,
   "drawing": {
     "title": "Four-hole mounting plate",
+    "layout": "third_angle",
     "dimensions": [
       {"view": "top", "kind": "width"},
       {"view": "top", "kind": "height"},

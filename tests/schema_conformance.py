@@ -58,6 +58,42 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     assert {item["kind"]: item["value_mm"] for item in first_drawing["dimensions"]} == {"width": 20, "height": 6}
     old_artifacts = {item["path"]: pathlib.Path(item["path"]).read_bytes() for item in first_drawing["artifacts"]}
     checks += 3
+    standard_recipe = {"layout": "first_angle", "sheet": "A3", "views": [
+        {"id": "front", "orientation": "front"}, {"id": "top", "orientation": "top"},
+        {"id": "right", "orientation": "right"},
+        {"id": "cut", "orientation": "section", "section": {"axis": "z", "offset": 3}, "hatch": True}]}
+    standard = call("cad_drawing", {"document_id": "part", "revision": 1, "drawing": standard_recipe})
+    assert standard["layout"] == "first_angle" and len(standard["view_layouts"]) == 4
+    layout = {p["view"]: p for p in standard["view_layouts"]}
+    assert layout["front"]["origin_mm"][0] == layout["top"]["origin_mm"][0]
+    assert layout["front"]["origin_mm"][1] == layout["right"]["origin_mm"][1]
+    checks += 3
+    for bad in [{"layout": "automatic"}, {"views": [{"id": "front", "orientation": "front", "hatch": True}]},
+                {"views": [{"id": "cut", "orientation": "section", "section": {"axis": "z", "offset": 3}, "hatch": 1}]}]:
+        assert not Draft202012Validator(tools["cad_drawing"]["inputSchema"]).is_valid(
+            {"document_id": "part", "revision": 1, "drawing": bad})
+        checks += 1
+    angular_recipe = {"views": [{"id": "top", "orientation": "top"}], "scale": 2,
+        "general_tolerances": {"linear": .1, "angular": .5}, "dimensions": [
+            {"view": "top", "kind": "angular", "arc_radius": 4, "lines": [
+                {"from": [0, 0], "to": [20, 0]}, {"from": [0, 0], "to": [0, 10]}],
+             "manufacturing_tolerance": {"type": "limits", "lower": 89.5, "upper": 90.5}},
+            {"view": "top", "kind": "width", "manufacturing_tolerance": {"type": "symmetric", "value": .01}},
+            {"view": "top", "kind": "height", "manufacturing_tolerance": {"type": "deviation", "lower": -.02, "upper": .01}}]}
+    angular = call("cad_drawing", {"document_id": "part", "revision": 1, "drawing": angular_recipe})
+    assert angular["dimensions"][0]["value_deg"] == 90 and "value_mm" not in angular["dimensions"][0]
+    assert angular["dimensions"][0]["lower_limit_deg"] == 89.5
+    assert angular["dimensions"][1]["upper_limit_mm"] == 20.01
+    assert angular["dimensions"][2]["label"] == "10 +0.01/-0.02"
+    checks += 4
+    for bad_dimension in [
+        {"view": "top", "kind": "angular", "lines": []},
+        {"view": "top", "kind": "angular", "lines": angular_recipe["dimensions"][0]["lines"], "sweep": "clockwise"},
+        {"view": "top", "kind": "width", "manufacturing_tolerance": {"type": "limits", "lower": 1}},
+        {"view": "top", "kind": "width", "manufacturing_tolerance": {"type": "symmetric", "value": .1, "units": "mm"}}]:
+        assert not Draft202012Validator(tools["cad_drawing"]["inputSchema"]).is_valid(
+            {"document_id": "part", "revision": 1, "drawing": {"dimensions": [bad_dimension]}})
+        checks += 1
     operations = [{"op": "set_parameter", "name": "height", "value": 8}]
     call("cad_apply", {"document_id": "part", "expected_revision": 1, "operations": operations})
     regenerated = call("cad_drawing", {"document_id": "part", "revision": 2, "drawing": saved_recipe["drawing"]})

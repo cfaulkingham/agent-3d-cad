@@ -108,17 +108,21 @@ Json tool_definitions() {
       {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}}},{"document_id","revision","format"},
       object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}}},
         {"document_id","revision","format","path","bytes","units"}),false),
-    tool("cad_drawing","Generate a dimensioned vector drawing of a committed revision. Native hidden-line views, plane sections, PDF/SVG sheets and per-view 1:1 mm DXF. Save the returned recipe to regenerate after edits; never changes the model.",
+    tool("cad_drawing","Generate a vector drawing of a committed revision. Measured linear/angular dimensions, explicit manufacturing tolerances, aligned first/third-angle layouts, hidden-line views, hatched sections, PDF/SVG sheets and per-view 1:1 mm DXF. Save the recipe to regenerate after edits; never changes the model.",
       {{"document_id",id},{"revision",revision},{"drawing",drawing_schema()}},{"document_id","revision"},
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
         {"scale",{{"type","number"},{"exclusiveMinimum",0}}},
         {"sheet_mm",{{"type","array"},{"items",{{"type","number"},{"exclusiveMinimum",0}}},{"minItems",2},{"maxItems",2}}},
+        {"layout",{{"enum",{"grid","first_angle","third_angle"}}}},
+        {"view_layouts",array(object({{"view",id},
+          {"origin_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}},
+          {"cell_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",4},{"maxItems",4}}}},
+          {"view","origin_mm","cell_mm"}),6)},
         {"path",text},{"recipe_path",text},{"projection_tolerance_mm",{{"const",0.02}}},
         {"artifacts",array(object({{"format",{{"enum",{"svg","pdf","dxf"}}}},{"path",text},
           {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),8)},
-        {"dimensions",array(object({{"view",id},{"kind",{{"enum",{"width","height","diameter","radius","horizontal","vertical"}}}},
-          {"value_mm",{{"type","number"},{"minimum",0}}}},{"view","kind","value_mm"}),32)}},
-        {"document_id","revision","kernel_version","units","scale","sheet_mm","path","recipe_path","artifacts","dimensions","projection_tolerance_mm"}),false),
+        {"dimensions",array(drawing_dimension_result_schema(),32)}},
+        {"document_id","revision","kernel_version","units","scale","sheet_mm","layout","view_layouts","path","recipe_path","artifacts","dimensions","projection_tolerance_mm"}),false),
     tool("cad_view","Save an offline interactive HTML viewer and .view.json. Pick a face or edge and copy/save its revision-qualified reference.",
       {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
       object(identity,{"schema_version","document_id","revision","evaluation_id","feature_id","draft","summary","path","data_path"}),false),
@@ -281,6 +285,7 @@ Json Service::call(const std::string& tool,const Json& args) {
     try {
       Json result=identity;result["units"]="mm";result["scale"]=evaluated.at("scale");
       result["sheet_mm"]=evaluated.at("sheet_mm");result["dimensions"]=evaluated.at("dimensions");
+      result["layout"]=evaluated.at("layout");result["view_layouts"]=evaluated.at("view_layouts");
       result["projection_tolerance_mm"]=0.02;
       result["path"]=path_to_utf8(destination/"manifest.json");
       result["recipe_path"]=path_to_utf8(destination/"drawing.json");

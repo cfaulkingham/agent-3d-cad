@@ -50,12 +50,29 @@ the editable source; exports are independent manufacturing/review outputs.
 Measurements use millimeters. Native geometry validity is not a DFM certificate.
 
 For an engineering drawing, call `cad_drawing` with the saved `document_id` and
-explicit `revision`. Default views are top, front, right and isometric on an A4
-landscape sheet. Request measured width/height dimensions, or circle dimensions
+explicit `revision`. Default views are top, front, right and isometric in a
+third-angle arrangement on an A4 landscape sheet. Set `layout` explicitly to
+`third_angle`, `first_angle`, or `grid`; custom `views` without a layout preserve
+grid ordering. Standard layouts require front and align corresponding coordinates.
+Request measured width/height dimensions, or circle dimensions
 using geometric center/radius rules. Use model parameter references for dimensions
 that should regenerate after edits. Front uses world X/Z, top uses X/Y and right
-uses Y/Z drawing coordinates. An optional `section` view is a true plane profile,
-not a cutaway projection. Check runtime schemas and the packaged DRAWINGS.md.
+uses Y/Z drawing coordinates. An optional `section` view is a true plane profile
+with material hatching that leaves holes empty; set the view's `hatch: false` for
+outline only. Check runtime schemas and the packaged DRAWINGS.md.
+
+For an angular dimension, supply `kind: angular` and two directed `lines` with
+`from`/`to` points on actual projected straight edges. The service measures their
+directions and intersection; `sweep: major` requests the reflex angle, and
+`arc_radius` controls annotation placement in mm. Results use `value_deg`.
+Manufacturing allowances must be explicit: `manufacturing_tolerance` supports
+`symmetric` value, signed `deviation` lower/upper, or absolute `limits` lower/upper.
+Use mm for lengths and degrees for angles. Optional `general_tolerances` linear/
+angular values supply symmetric defaults; per-dimension allowances override them.
+The existing circle `tolerance` is only a matching rule. Tolerances must fit six
+decimal places; results distinguish measured and displayed nominals and report
+the effective acceptance bounds. Never choose manufacturing allowances for a
+user's part merely to demonstrate the feature.
 
 PDF/SVG contain scaled sheets; each DXF contains one view at 1:1 in millimeters.
 Return the artifact paths and source revision. Never infer material, tolerances,

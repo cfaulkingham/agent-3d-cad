@@ -5,6 +5,15 @@ It does not edit the model or advance HEAD. CLI and MCP use the same service;
 projection and rendering run in a bounded native geometry worker. The installed
 runtime needs no Python, Node, browser print engine, or PDF conversion program.
 
+Repeated drawings reuse exact geometry and complete projected view sets from a
+bounded, disposable workspace cache. Changing sheet layout, dimensions, explicit
+tolerances, notes, view names or formats rerenders without repeating projection.
+Model/build changes invalidate geometry and projections; changing the ordered
+views, hidden lines or section/hatch settings invalidates the view-set projection.
+The first exact hidden-line drawing of a complex threaded part can still exceed
+the normal job budget. Cache contents are never editable source or stable
+selection identities; deleting them only causes regeneration.
+
 ```json
 {
   "document_id": "plate",
@@ -22,7 +31,8 @@ runtime needs no Python, Node, browser print engine, or PDF conversion program.
 ```
 
 Omitting `drawing` selects an A4 landscape sheet with top, front, right and
-isometric views, automatic common scale, hidden lines, and all export formats.
+isometric views in third-angle arrangement, automatic common scale, hidden
+lines, and all export formats.
 Dimensions are explicitly requested. `examples/plate.drawing.json` and
 `examples/duplex-35-sprocket.drawing.json` are complete requests.
 
@@ -42,14 +52,49 @@ the camera position relative to the part, not a world transformation:
 | section, axis y | plane Y = offset | +X | +Z |
 | section, axis z | plane Z = offset | +X | +Y |
 
-The sheet uses individually labeled view cells, rather than implying a standard
-first-angle or third-angle layout. Drawing coordinates are millimeters before
-sheet scale is applied; negative coordinates are valid.
+`layout` selects `third_angle`, `first_angle`, or `grid`:
+
+- Third angle: top above front, right to the right of front, isometric above right.
+- First angle: top below front, right to the left of front, isometric below right.
+- Grid: labeled cells in recipe order, without implying a projection convention.
+
+Standard arrangements align front/top world X coordinates and front/right world
+Z coordinates at one common scale, including when dimension lanes differ. They
+require a front view, accept at most one of each orthographic/isometric
+orientation, and reserve the three orthographic cells even when a view is omitted.
+Up to three auxiliary views (isometric plus sections) occupy the remaining cell
+and an optional third column. The layout never silently falls back to a grid.
+The title block identifies the convention. Drawing coordinates are millimeters
+before sheet scale is applied; negative coordinates are valid.
+
+For compatibility, a recipe with explicit `views` and no `layout` retains the
+original grid arrangement. A recipe without `views` defaults to third angle.
+Set `layout` explicitly in new reusable recipes.
 
 A section view also requires `section: {"axis":"z","offset":3}`. This is the
 actual planar cross-section profile, not a cutaway view of everything behind
 the plane. A plane that has no section curves fails explicitly. The offset can
 use a model parameter or the existing bounded scalar expression syntax.
+
+Sections are hatched by default. The kernel intersects the solid with the plane
+to obtain material faces, including their inner boundaries. Thin 45-degree lines
+are clipped to those regions: holes and keyways stay empty, disconnected material
+is included, and overlapping material intervals are united. Spacing is 2.5 mm on
+the sheet (therefore 2.5/scale mm in a view's 1:1 DXF). Hatching uses the same
+analytic lines/circles/arcs and bounded polyline approximation as the outlines.
+It is annotation and cannot become a dimension reference. Set `hatch: false`
+on a section view to export only its outline. A tangent profile with curves but
+no material area fails with `invalid_drawing` when hatching is requested.
+
+```json
+{"layout":"third_angle", "views":[
+  {"id":"front","orientation":"front"},
+  {"id":"top","orientation":"top"},
+  {"id":"right","orientation":"right"},
+  {"id":"cut","orientation":"section",
+   "section":{"axis":"z","offset":3},"hatch":true}
+]}
+```
 
 OpenCascade's exact B-rep hidden-line algorithm produces visible and hidden
 edges. Lines, circles and circular arcs remain analytic vector entities. Other
@@ -70,14 +115,83 @@ Each dimension names a `view`. Up to 32 dimensions are accepted:
   must resolve uniquely within 0.02 mm to a line segment, circular curve, full
   circle center, or a curve endpoint. The measured coordinate
   difference supplies the value; arbitrary dimension text is not accepted.
+- `angular` requires two directed `lines`, each with `from: [x,y]` and
+  `to: [x,y]`. Both points must match the same projected straight line within
+  0.02 mm and be more than 0.04 mm apart. The resolved line directions supply
+  the angle; the ordered `from`/`to` points select its rays. Coincident collinear
+  fragments are one reference, but distinct nearby lines fail as ambiguous.
+  The line intersection supplies the vertex, including virtual intersections
+  beyond trimmed edges. Curves/polyline segments, parallel lines and collinear
+  pairs cannot define an angular dimension. `sweep` defaults to `minor` (0–180
+  degrees); `major` requests the reflex angle (180–360 degrees). Neither accepts
+  an arbitrary nominal angle. These are angles in the selected 2D projection,
+  not measurements of a 3D angle from an isometric image.
+
+An angular dimension draws a circular arc with tangential arrows, extension
+lines and a labeled leader. Optional `arc_radius` controls that annotation's
+radius in model millimeters; it is not a measured part radius. By default it is
+35% of the shorter matched segment. Angular arcs and virtual vertices participate
+in layout fitting without changing width/height measurements. Unreadably small
+arcs fail explicitly: increase `arc_radius` or the sheet scale. PDF/SVG preserve
+the vector arc; a DXF stores an analytic ARC on `DIMENSIONS`, at 1:1 mm.
+
+```json
+{"view":"top", "kind":"angular", "arc_radius":12,
+ "lines":[{"from":[40,0],"to":[0,0]},
+          {"from":[40,0],"to":[0,40]}],
+ "manufacturing_tolerance":{"type":"symmetric","value":0.25}}
+```
+
+For a matching right-triangle profile, this measures and prints `45 +/-0.25 deg`.
 
 Coordinates and radii accept numbers, model parameter references, and bounded
 scalar expressions. Circle `tolerance` controls matching only. No matching
 tolerance is printed as a fabrication tolerance. View references are geometric
 rules; no transient face or edge index becomes a stable design reference.
-Printed dimension labels round to three decimal places, omitting trailing zeros;
-the response retains unrounded measured values. Display precision is not a
-fabrication tolerance.
+Untoleranced dimension labels round to three decimal places, omitting trailing
+zeros. The response retains unrounded measured values as `value_mm` for lengths
+and `value_deg` for angles. Every dimension also returns its printed `label`;
+angular results include `vertex_mm` and `arc_radius_mm`. Display precision is
+not a fabrication tolerance.
+
+## Explicit manufacturing tolerances
+
+Any requested dimension may specify `manufacturing_tolerance`:
+
+| Type | Fields | Example printed label |
+|---|---|---|
+| `symmetric` | positive `value` | `40 +/-0.1` |
+| `deviation` | signed `lower`, `upper`, with lower < upper | `40 +0.01/-0.02` |
+| `limits` | absolute nonnegative `lower`, `upper`, with lower < upper | `39.9..40.2 LIMITS` |
+
+Lengths use mm and angular tolerances use degrees; angular labels append `deg`.
+Unilateral deviations are supported, including zero bounds and same-sign signed
+deviations. Limits must contain the displayed measured nominal. Acceptance
+bounds cannot be negative or exceed 360 degrees for angles. Circle `tolerance`
+continues to control reference matching only; it never assigns fabrication limits.
+
+Optional `general_tolerances: {"linear":0.1,"angular":0.5}` supplies symmetric
+defaults for dimensions without an individual override. Either member can be
+omitted. Defaults are printed in the sheet's notes and in each standalone DXF;
+an individual tolerance is printed beside its dimension and takes precedence.
+No allowance is inferred if neither is supplied. These general values apply to
+the requested dimensions in the drawing, not undocumented model features.
+
+Tolerance values and `arc_radius` accept literals, parameters and bounded scalar
+expressions. Tolerance expressions must use the dimension's `mm` or `deg`
+context. General `linear` and `angular` values use those respective contexts.
+Explicit tolerances support up to six decimal places; finer values fail instead
+of silently changing the requested allowance. Toleranced nominal labels use six
+decimal places with trailing zeros omitted. Symmetric/deviation limits are based
+on this displayed nominal. The response retains both the unrounded measurement
+and `display_value_mm` or `display_value_deg`, effective `manufacturing_tolerance`,
+`tolerance_source` (`dimension` or `general`), and `lower_limit_mm`/`upper_limit_mm`
+or `lower_limit_deg`/`upper_limit_deg`. A sheet scale never changes these values.
+Geometric projection precision remains the independent 0.02 mm contract above.
+
+`examples/angular-plate.create.json` and `examples/angular-plate.drawing.json`
+demonstrate angular measurement, all three tolerance styles and general defaults.
+The allowances are explicit demonstration values, not inferred production fits.
 
 `title`, `material`, and `notes` supply explicit annotations. They use bounded
 printable ASCII text for consistent native PDF/font and DXF interoperability.
@@ -94,12 +208,17 @@ are a unique nonempty subset of `svg`, `pdf`, and `dxf`.
 
 - SVG and PDF contain the drawing sheet, annotations, center marks and dimensions.
 - Each view gets a separate DXF in **1:1 model millimeters**, independent of
-  sheet scale. Layers `VISIBLE`, `HIDDEN`, `CENTER` and `DIMENSIONS` separate
-  geometry, center marks and dimension annotations. These are view
+  sheet scale. Layers `VISIBLE`, `HIDDEN`, `CENTER`, `DIMENSIONS` and `HATCH`
+  separate geometry and annotations. Hatching is clipped LINE entities on its
+  own layer, not a CAD editor's associative HATCH object. These are view
   projections, not automatically approved laser-cut or manufacturing profiles.
 
 The response contains artifact paths and byte counts, measured dimensions,
-sheet dimensions, scale, a recipe path, and a manifest path. Each generation
+sheet dimensions, scale, `layout`, `view_layouts`, a recipe path, and a manifest
+path. Each placement contains `view`, `cell_mm: [x,y,width,height]`, and
+`origin_mm: [x,y]` in sheet coordinates measured right/down from its top left.
+A projected model point `[u,v]` maps to `[origin.x+scale*u, origin.y-scale*v]`.
+Each generation
 uses a fresh directory under `exports/`; the manifest is written last, after
 all files and the recipe succeed and cancellation is rechecked. Previous
 drawings remain intact. Abrupt termination may leave an unpublished directory;
@@ -107,6 +226,9 @@ a directory without its final manifest is not a completed export.
 
 Projection limits apply across all views: 10,000 entities, 200,000 coordinate
 points, 40,000 extracted edges, and finite projected coordinates within +/-1e9 mm.
+Section material boundaries count toward these limits as well as their outlines.
+Hatching is additionally bounded to 2,001 scan lines per view, two million
+boundary-intersection checks and 20,000 output segments per drawing.
 The output feature also retains the existing 10,000-face/edge topology limit.
 The combined generated artifact content is bounded to 32 MiB. Inputs remain
 subject to the model's scalar and protocol limits. Exceeding a limit fails

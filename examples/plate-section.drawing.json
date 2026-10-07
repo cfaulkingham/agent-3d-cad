@@ -1,0 +1,23 @@
+{
+  "document_id": "plate",
+  "revision": 2,
+  "drawing": {
+    "title": "Four-hole mounting plate - section",
+    "layout": "third_angle",
+    "views": [
+      {"id": "front", "orientation": "front"},
+      {"id": "top", "orientation": "top"},
+      {"id": "right", "orientation": "right"},
+      {"id": "section", "orientation": "section", "hatch": true,
+       "section": {"axis": "z", "offset": {
+         "expression": {"op": "multiply", "args": [{"parameter": "thickness"}, 0.5], "unit": "mm"}
+       }}}
+    ],
+    "dimensions": [
+      {"view": "top", "kind": "width"},
+      {"view": "front", "kind": "height"},
+      {"view": "section", "kind": "diameter", "center": [10, 10], "radius": {"parameter": "hole_radius"}}
+    ],
+    "notes": ["Material and manufacturing tolerances unspecified."]
+  }
+}

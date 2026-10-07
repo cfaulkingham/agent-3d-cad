@@ -14,6 +14,10 @@ struct QueryLimits {
 class BuiltModel {
 public:
   explicit BuiltModel(const Json& model);
+  // Private-format, exact B-rep snapshots for disposable caches. Restoring still
+  // validates shapes; no OCCT objects or persistent topology IDs escape here.
+  BuiltModel(const Json& model, const Json& snapshot);
+  Json snapshot() const;
   ~BuiltModel();
   BuiltModel(BuiltModel&&) noexcept;
   BuiltModel& operator=(BuiltModel&&) noexcept;

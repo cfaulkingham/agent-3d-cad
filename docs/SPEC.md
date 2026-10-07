@@ -193,9 +193,24 @@ memory limits, queue admission, cancellation, and recovery before untrusted
 remote use. Cancellation may terminate a worker but must not interrupt a
 partially published transaction in the transport process.
 
-No persistent cache in M0: queries and exports rebuild a committed model. Later
-caches must include model intent, kernel/build identity, tolerances, and artifact
-format version. Losing the cache must not lose editable documents.
+Geometry and drawing projections use a disposable workspace cache. Keys include
+the complete canonical model intent (including embedded imports), native source,
+toolchain/configuration and OCCT SDK binary fingerprints, kernel version and
+cache format version. Source fingerprints cover geometry/projection tolerances
+and algorithms. Exact B-rep snapshots preserve every feature and its provenance;
+restoration validates shapes and topology counts inside a bounded worker. Meshes
+and evaluation identities remain fresh, with evaluation-local selection IDs.
+
+Projection keys additionally include the complete ordered view set, hidden-line
+choice and section plane/hatch settings. View names, revision/document identity,
+sheet layout, dimensions, explicit tolerances, notes and output formats are
+rendered afresh. Projections retain their original aggregate geometry budgets.
+Only successful workers stage reusable results; coordinators check cancellation
+before atomically publishing cache entries. Cache writes never publish HEAD or
+artifacts. Checksummed entries are optional, bounded and evicted oldest-first;
+missing, damaged or unavailable entries rebuild. Losing the cache must not lose
+editable documents. This is whole-model/view-set caching, not incremental feature
+rebuilding or a source of persistent topology naming.
 
 ## 8. Distribution and viewer direction
 

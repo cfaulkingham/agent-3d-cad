@@ -77,6 +77,24 @@ static_assert(OCC_VERSION_HEX == 0x080001, "agent-3d-cad requires OCCT 8.0.1");
 
 namespace agentcad {
 namespace {
+// Bound optional snapshot serialization before allocating a giant string.
+class SnapshotBuffer final : public std::streambuf {
+public:
+  std::string bytes;
+  explicit SnapshotBuffer(std::size_t limit):limit_(limit) {}
+protected:
+  std::streamsize xsputn(const char* data,std::streamsize count) override {
+    if(count<0 || static_cast<std::size_t>(count)>limit_-bytes.size()) return 0;
+    bytes.append(data,static_cast<std::size_t>(count)); return count;
+  }
+  int_type overflow(int_type value) override {
+    if(traits_type::eq_int_type(value,traits_type::eof())) return traits_type::not_eof(value);
+    if(bytes.size()>=limit_) return traits_type::eof();
+    bytes.push_back(traits_type::to_char_type(value)); return value;
+  }
+private:
+  std::size_t limit_;
+};
 using ShapeMap = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
 struct FeatureGeometry {
   TopoDS_Shape shape;
@@ -564,6 +582,43 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
   impl_->output = text_field(model, "output");
   impl_->shape = shapes.at(impl_->output);
 }
+BuiltModel::BuiltModel(const Json& model, const Json& snapshot) : impl_(std::make_unique<Impl>()) {
+  validate_model(model);
+  try {
+    if(snapshot.at("features").size()!=model.at("features").size())
+      throw Error("cache_miss","Cached feature count mismatch");
+    for(const auto& feature:model.at("features")) {
+      const auto id=text_field(feature,"id");
+      const auto& entry=snapshot.at("features").at(id);
+      std::istringstream stream(entry.at("brep").get<std::string>());
+      TopoDS_Shape shape; BRepTools::Read(shape,stream,BRep_Builder{});
+      if(stream.fail() || shape.IsNull()) throw Error("cache_miss","Cannot read cached B-rep");
+      if(feature.at("type")!="sketch") check_shape(shape);
+      else if(!BRepCheck_Analyzer(shape).IsValid()) throw Error("cache_miss","Invalid cached sketch");
+      auto& geometry=impl_->features.emplace(id,FeatureGeometry(shape)).first->second;
+      if(geometry.faces.Extent()!=entry.at("faces") || geometry.edges.Extent()!=entry.at("edges"))
+        throw Error("cache_miss","Cached topology count mismatch");
+      geometry.provenance=entry.at("provenance");
+    }
+    impl_->output=text_field(model,"output");
+    impl_->shape=impl_->features.at(impl_->output).shape;
+  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+}
+Json BuiltModel::snapshot() const {
+  try {
+    Json features=Json::object(); std::size_t bytes=0;
+    for(const auto& [id,geometry]:impl_->features) {
+      SnapshotBuffer buffer(32*1024*1024-bytes); std::ostream stream(&buffer);
+      // Tessellation is derived data. Store exact curves, surfaces and topology.
+      BRepTools::Write(geometry.shape,stream,false,false,TopTools_FormatVersion_CURRENT);
+      auto brep=std::move(buffer.bytes); bytes+=brep.size();
+      if(!stream || bytes>32*1024*1024) throw Error("limit_exceeded","Geometry snapshot exceeds cache budget");
+      features[id]={{"brep",std::move(brep)},{"faces",geometry.faces.Extent()},
+        {"edges",geometry.edges.Extent()},{"provenance",geometry.provenance}};
+    }
+    return {{"features",std::move(features)}};
+  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+}
 BuiltModel::~BuiltModel() = default;
 BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
 BuiltModel& BuiltModel::operator=(BuiltModel&&) noexcept = default;
@@ -909,11 +964,13 @@ Json BuiltModel::drawing(const Json& spec) const {
   Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance}};
   std::set<std::string> ids;
   for (const auto& view : spec.at("views")) {
-    fields(view,{"id","orientation"},{"section"});
+    fields(view,{"id","orientation"},{"section","hatch"});
     const auto id = text_field(view,"id"); identifier(id);
     if (!ids.insert(id).second) throw Error("invalid_argument", "Drawing view IDs must be unique", {{"view_id",id}});
     try {
       const auto orientation = text_field(view,"orientation");
+      if (view.contains("hatch") && (orientation!="section" || !view.at("hatch").is_boolean()))
+        throw Error("invalid_argument", "Only section views accept a boolean hatch flag");
       std::string axis;
       double offset = 0;
       if (orientation == "section") {
@@ -923,6 +980,7 @@ Json BuiltModel::drawing(const Json& spec) const {
       } else if (view.contains("section")) throw Error("invalid_argument", "Only section views accept a section plane");
       const auto frame = drawing_frame(orientation,axis);
       DrawingView projected(budget);
+      Json regions=Json::array();
       if (orientation == "section") {
         gp_Pnt location(0,0,0);
         if (axis == "x") location.SetX(offset);
@@ -939,6 +997,31 @@ Json BuiltModel::drawing(const Json& spec) const {
         gp_Trsf transform; transform.SetTransformation(gp_Ax3(frame));
         BRepBuilderAPI_Transform flatten(section.Shape(),transform,true);
         projected.append(flatten.Shape(),false);
+        if (view.value("hatch",true) && !projected.entities.empty()) {
+          // Intersect the solid with the plane to retain material faces and
+          // their inner wires. Raw section edges alone cannot distinguish
+          // cavities, touching solids or overlapping regions reliably.
+          // Pattern compounds may contain interfering solids. Boolean common
+          // on that entire compound is not a reliable material classification;
+          // intersect each solid and let the renderer union its hatch intervals.
+          ShapeMap solids; TopExp::MapShapes(impl_->shape,TopAbs_SOLID,solids);
+          for (int s=1;s<=solids.Extent();++s) {
+            NCollection_List<TopoDS_Shape> solid_argument; solid_argument.Append(solids(s));
+            BRepAlgoAPI_Common material;
+            material.SetArguments(solid_argument); material.SetTools(tools);
+            material.SetNonDestructive(true); material.SetRunParallel(false); material.Build();
+            if (!material.IsDone() || material.HasErrors())
+              throw Error("kernel_failure", "Section material intersection failed");
+            BRepBuilderAPI_Transform flat_material(material.Shape(),transform,true);
+            ShapeMap faces; TopExp::MapShapes(flat_material.Shape(),TopAbs_FACE,faces);
+            for (int f=1;f<=faces.Extent();++f) {
+              if (!BRepCheck_Analyzer(faces(f)).IsValid()) throw Error("kernel_failure", "Section material face is invalid");
+              DrawingView region(budget); region.append(faces(f),false);
+              regions.push_back(std::move(region.entities));
+            }
+          }
+          if (regions.empty()) throw Error("invalid_drawing", "Section has no material area to hatch; disable hatching for a tangent profile");
+        }
       } else {
         occ::handle<HLRBRep_Algo> algorithm = new HLRBRep_Algo;
         algorithm->Add(impl_->shape,0);
@@ -959,7 +1042,9 @@ Json BuiltModel::drawing(const Json& spec) const {
       projected.remove_covered_hidden_lines();
       if (projected.entities.empty()) throw Error(orientation == "section" ? "empty_section" : "empty_projection", "Drawing view contains no curves");
       const auto b = projected.bounds.Get();
-      result["views"].push_back({{"id",id},{"orientation",orientation},{"bounds_mm",{b.Xmin,b.Ymin,b.Xmax,b.Ymax}},{"entities",std::move(projected.entities)}});
+      Json output={{"id",id},{"orientation",orientation},{"bounds_mm",{b.Xmin,b.Ymin,b.Xmax,b.Ymax}},{"entities",std::move(projected.entities)}};
+      if (orientation=="section" && view.value("hatch",true)) output["section_regions"]=std::move(regions);
+      result["views"].push_back(std::move(output));
     } catch (const Error& e) {
       auto details = e.details; details["view_id"] = id;
       throw Error(e.code,e.what(),details);

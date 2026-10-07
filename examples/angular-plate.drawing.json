@@ -1,0 +1,24 @@
+{
+  "document_id": "angular_plate",
+  "revision": 1,
+  "drawing": {
+    "title": "Angular plate - dimension and tolerance example",
+    "sheet": "A4",
+    "layout": "grid",
+    "scale": 2,
+    "views": [{"id": "top", "orientation": "top"}, {"id": "front", "orientation": "front"}],
+    "general_tolerances": {"linear": {"parameter": "linear_allowance"}, "angular": {"parameter": "angular_allowance"}},
+    "dimensions": [
+      {"view": "top", "kind": "angular", "arc_radius": 12,
+       "lines": [{"from": [{"parameter": "width"}, 0], "to": [0, 0]},
+                 {"from": [{"parameter": "width"}, 0], "to": [0, {"parameter": "height"}]}],
+       "manufacturing_tolerance": {"type": "symmetric", "value": 0.25}},
+      {"view": "top", "kind": "diameter", "center": [12, 12], "radius": {"parameter": "hole_radius"},
+       "manufacturing_tolerance": {"type": "limits", "lower": 7.98, "upper": 8.02}},
+      {"view": "top", "kind": "width"},
+      {"view": "top", "kind": "height", "manufacturing_tolerance": {"type": "deviation", "lower": -0.02, "upper": 0.01}},
+      {"view": "front", "kind": "height", "manufacturing_tolerance": {"type": "symmetric", "value": 0.05}}
+    ],
+    "notes": ["Explicit demonstration allowances; dimensions measured from the saved model."]
+  }
+}

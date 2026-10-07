@@ -5,6 +5,234 @@ Actual Codex-host rendering and select–edit–refresh are demonstrated on macO
 arm64. Native previews passed all five macOS/Linux/Windows CI lanes and independent
 Arch Linux x86_64 validation. Public release preparation remains separate.
 
+## Latest increment — geometry and projection caching
+
+Implemented automatic disposable caching through the shared native worker path:
+
+- `.cache` holds exact OCCT B-rep snapshots for every feature, provenance and the
+  output summary, plus complete ordered drawing view sets. Restoring geometry
+  validates every shape and topology count inside the bounded worker. Triangles
+  are regenerated; selection/evaluation IDs remain fresh. No public MCP fields,
+  tools, document format changes or cache API were added.
+- SHA-256 keys cover the complete model intent (including embedded STEP content),
+  native source/header fingerprints, toolchain/configuration, selected OCCT SDK
+  binaries, kernel and cache-format versions. Source fingerprints include current
+  geometry/projection tolerances. Projection keys add the ordered views, hidden
+  lines, section planes and hatch extraction. Titles, sheet layout, dimensions,
+  tolerances, formats and view names rerender using the same projections.
+- Entries have payload checksums; reads and writes are bounded. Exact B-rep text
+  is limited to 32 MiB, encoded entries to 64 MiB and the workspace cache to 128
+  entries / 256 MiB. A native lock protects oldest-publication-first eviction and
+  atomic writes. Missing, corrupt, oversized, symlinked, unavailable or busy
+  caches fall back to rebuilding/skipped publication. Interrupted cache writes
+  are cleaned on the next successful publication. Cache loss cannot lose intent.
+- Workers only read shared cache and stage new entries. Coordinators check
+  cancellation before publishing results from successful workers. Revision locks,
+  mutation validation, HEAD publication, resource limits and artifact identities
+  are preserved. Cache hits do not share OCCT objects between processes/threads.
+
+Executed locally on macOS arm64 / OCCT 8.0.1:
+
+- `cmake --build build-app-protocol --parallel 4` and
+  `ctest --test-dir build-app-protocol --output-on-failure`: **20/20 passed in
+  25.15 seconds**. The new cache suite includes **44,578 checks**: exact feature
+  geometry/provenance round trips for threaded, sketched, lofted and imported
+  models; equivalent per-face mesh area/oriented volume and selection edges;
+  cold/warm drawing artifacts; changed annotations/names/layout/formats; model,
+  hidden-line and section invalidation; checksums, damaged B-reps, deletion,
+  >1 MiB entries, quotas, concurrent publication and symlink fallback. The job
+  suite's **46 checks** include no cache publication from cancelled, crashed,
+  timed-out or memory-limited workers. Rendering failures after staging also
+  publish no cache. Existing drawing/viewer/transaction regressions pass.
+- **189 schema checks across 18 tools**, **296 MCP SDK 2.3.0 interoperability
+  checks** (counts vary with polling), and `git diff --check` passed.
+- `cmake --build build-app-protocol --target bundle-check --parallel 4` passed
+  native relocation with empty PATH and removed SDK environment. It now also
+  requires geometry/projection cache entries and checks repeated angular
+  PDF/SVG/DXF artifacts have identical SHA-256 hashes.
+- Reproducible developer benchmark:
+  `python3 tests/cache_benchmark.py build-app-protocol/agent-3d-cad build/cache-demo`.
+  The clean run uses the unmodified full M20 threaded knob, with two hatched
+  section views, width/height dimensions and PDF/SVG/DXF outputs. Durable job
+  timestamps include coordinator/worker/cache/artifact publication:
+
+  | Operation | Seconds |
+  | --- | ---: |
+  | Cold model creation and geometry cache | 1.373 |
+  | Cold section drawing (both caches removed) | 5.682 |
+  | Repeated drawing, median of three | 0.126 |
+  | Changed A3 sheet/title/general tolerances | 0.127 |
+  | Geometry cached, projections removed | 4.544 |
+  | Changed thread length, rebuilt new revision | 1.814 |
+
+  Repeated section generation is **45.1x faster** in this local run. All warm
+  PDF/SVG/DXF bytes match cold artifacts. Geometry-only regenerated dimensions
+  agree within 1e-8; styled dimensions match the 38 mm height and exact model
+  width. Editing thread length changes volume while historical source remains
+  unchanged. Report, manifests and artifacts:
+  `build/cache-demo/cache-benchmark-2bbbfeg7/`. Suite, SDK, schema and bundle logs
+  are in `build/cache-demo/`. The benchmark has optional `--views standard`.
+
+Limits and remaining work: this caches whole models and complete ordered view
+sets, not incremental features or independent views. Meshes and rendered files
+are not cached. Entry count/size eviction is oldest-first, not LRU. A full
+four-view hidden-line drawing of the M20 knob still hit a **240-second cold job
+limit**; earlier synchronous attempts hit 30 seconds. The failed job/state is
+retained under `build/cache-demo/cache-benchmark-_g4wzpwl/`; its subsequent
+orthographic/top diagnostic probes were cancelled. Caching does not fix that
+first-generation HLR bottleneck and no warm full-view speed claim is made.
+These changes have local macOS evidence, not a new five-platform CI claim. No
+commit, global installation, remote push or release was performed.
+
+Next: editable assemblies with multiple parts, placements, mates and exploded
+views; separately, investigate first-time exact HLR performance on complex
+threaded solids. Those capabilities remain planned.
+
+## Latest increment — angular dimensions and explicit tolerances
+
+Implemented the user's next drawing increment through the shared native service,
+CLI/MCP schemas, and isolated drawing jobs:
+
+- `kind: angular` measures two directed projected straight-line references.
+  Each reference's `from` and `to` points must resolve to the same supporting
+  line; nearby distinct matches fail. The actual line directions and intersection
+  supply the angle and vertex, including virtual intersections. `sweep` selects
+  minor or reflex angles; optional model-mm `arc_radius` sets annotation size.
+  Parallel/collinear lines and unreadably small arcs fail explicitly. Arcs and
+  virtual vertices participate in sheet fitting without changing width/height
+  measurements. PDF/SVG render tangential arrows and extension/leader lines;
+  DXF preserves analytic annotation ARC entities at 1:1 mm.
+- Per-dimension `manufacturing_tolerance` supports symmetric allowances, signed
+  lower/upper deviations (including unilateral/same-sign values), and absolute
+  limits. Optional `general_tolerances.linear`/`.angular` supply symmetric mm/deg
+  defaults, overridden by individual dimensions. General notes are printed in
+  both sheets and standalone DXFs. No tolerance is inferred, and the old circle
+  `tolerance` remains a matching rule only.
+- Tolerance scalars preserve parameters and bounded expressions with mm/deg
+  contexts. Explicit allowances support six decimal places; finer input fails
+  rather than rounding away intent. Toleranced nominals display six decimals,
+  trimming zeros; deviations apply to that displayed nominal and absolute limits
+  must contain it. Results distinguish unrounded `value_mm`/`value_deg` from
+  `display_value_mm`/`display_value_deg`, report the exact printed label, effective
+  allowance/source, and acceptance bounds. Projection accuracy is unchanged.
+  Longer tolerance labels move outside short dimension spans to avoid crossing
+  extension lines; unfittable annotations fail.
+- Added editable `examples/angular-plate.create.json` and its drawing request
+  with explicit demonstration allowances. The user's existing sprocket drawing
+  was not assigned guessed manufacturing tolerances. Updated discovery contracts,
+  protocol/drawing docs, README, packaged native-cad guidance and roadmap.
+
+Executed locally on macOS arm64 with exact OCCT 8.0.1:
+
+- `cmake --build build-app-protocol --parallel 4` followed by
+  `ctest --test-dir build-app-protocol --output-on-failure`: **19/19 passed in
+  19.37 seconds**, including **1,876 drawing checks**. New checks cover measured
+  acute/obtuse/reflex and section angles; analytic DXF arc radius/sweep; ambiguous,
+  missing and parallel references; signed/micron tolerances, explicit limits,
+  general overrides and DXF preservation; wrong units and invalid ranges;
+  failed-publication rollback; parameterized regeneration after reopening; and
+  asynchronous angular drawing jobs. `git diff --check` passed.
+- Final independent contracts: **189 schema checks across 18 tools** and **286
+  official MCP SDK 2.3.0 interoperability checks**. Counts can vary with job
+  polling. These include successful native angular/tolerance requests and degree
+  output schemas that cannot be confused with linear `value_mm` results.
+- `cmake --build build-app-protocol --target bundle-check --parallel 4` passed
+  relocation with empty PATH and SDK environment removed. The smoke now creates
+  the angular plate and checks its 45-degree result, 44.75-degree lower limit,
+  exact printed tolerance label and 7.98 mm bore lower limit.
+- Generated 45-degree and 315-degree example sheets and visually reviewed their
+  Poppler-rendered PDFs. **40 independent pypdf/ezdxf checks** verified two
+  single-page PDFs, four clean DXF audits with zero errors/fixes, mm units,
+  explicit/general tolerance text, and both annotation arcs' center, radius and
+  sweep at 1:1 mm. Editable source read back unchanged after export. PDFs, PNGs,
+  manifests, independent-reader results and all logs are retained under
+  `build/drawing-angular-demo/`.
+
+Limitations: angular dimensions reference straight lines in the selected 2D
+projection, not arbitrary curved-edge tangents or 3D angles inferred from an
+isometric view. Labels use portable ASCII (`deg`, `+/-`, and `.. LIMITS`); this is
+not a GD&T or standards-certification implementation. These changes have local
+macOS native/bundle evidence; the older five-platform CI results do not validate
+this increment. No global installation, remote push or release was performed.
+
+Next: measured geometry/projection caching, particularly repeated drawings of
+threaded parts; then editable assemblies with placement, mates and exploded
+drawings. These remain planned capabilities.
+
+## Latest increment — aligned drawing layouts and section hatching
+
+The user selected hatching and standard layouts as the next increment. The
+existing macOS Codex select/edit/refresh acceptance below already closes the
+viewer loop; this work does not claim a new host/platform acceptance run.
+
+Implemented through the shared native `cad_drawing` service and bounded workers:
+
+- `layout: third_angle | first_angle | grid`. Standard layouts align front/top
+  world X and front/right world Z at a common fitted scale, even with unequal
+  annotation margins. View ordering in a recipe does not change the arrangement.
+  A front view is required; duplicate orthographic/isometric orientations fail.
+  Isometric and up to two additional section cells fit beside the orthographic
+  group; absent orthographic views leave reserved cells. The title block states
+  the convention. Defaults without custom views use third angle; existing custom
+  view recipes without `layout` retain grid ordering. `view_layouts` reports
+  sheet cells and origins with documented coordinate mapping.
+- Section views default to material hatching, with `hatch: false` for outlines.
+  OCCT intersects each solid with the section plane, retaining faces and inner
+  boundaries. The renderer clips 45-degree lines at 2.5 mm sheet spacing using
+  analytic lines/circles/arcs and the existing bounded polyline approximation.
+  Face intervals are united, preserving cavities, disconnected material and
+  nested islands without parity cancellation between overlapping solids.
+  An added overlap regression exposed empty material output from intersecting
+  a whole interfering pattern compound; per-solid intersection fixes that case.
+  A tangent profile without material area fails explicitly unless hatch is off.
+- PDF/SVG use thin hatch strokes; 1:1 DXFs retain clipped line entities on a
+  separate `HATCH` layer. Hatch geometry never participates in dimension matching.
+  All material boundaries share the existing projection budgets. Additional
+  limits bound scan lines, intersection work and output segments. Failed layout
+  fitting or hatching publishes no drawing and never changes model HEAD.
+- Updated discovery schemas, protocol/drawing docs, packaged native-cad guidance,
+  and examples. `examples/plate-section.drawing.json` uses a parameterized section
+  offset; the keyed sprocket recipe now requests third angle explicitly.
+
+Executed on macOS arm64, exact OCCT 8.0.1:
+
+- `cmake --build build-app-protocol --parallel 4` and
+  `ctest --test-dir build-app-protocol --output-on-failure`: **19/19 passed in
+  18.45 seconds**. The final additional tangent-section regression passed the
+  drawing suite in **1.08 seconds**, now **1,825 checks**. Coverage includes
+  layout placement/alignment, negative coordinates and unequal annotations;
+  bore/keyway voids, islands, disconnected/overlapping material, circular seams,
+  elliptical polyline sections, multiple scales, explicit hatch disablement,
+  tangent profiles, work limits, failed scale rollback, existing regeneration
+  and asynchronous job behavior. `git diff --check` passed.
+- **179 schema checks across 18 tools** and **283 official MCP SDK 2.3.0 checks**
+  passed. Native schemas accept the new contracts and reject invalid layout/
+  hatch shapes. Logs: `build/drawing-layout-demo/{schema,mcp}.log`.
+- `cmake --build build-app-protocol --target bundle-check --parallel 4` passed
+  verified relocation with empty PATH and SDK environment removed. Its smoke
+  now additionally generates the parameterized plate section, checks third-angle
+  metadata, and verifies actual hatch strokes in the exported SVG. No global
+  installation or host registration was changed.
+- Recreated the keyed 13-tooth sprocket in an isolated workspace, applied its
+  saved revision-2 fillet, and generated both first-/third-angle A3 sheets plus
+  the parameterized plate section. The sprocket source read back unchanged.
+  Poppler rendered both final sprocket PDFs for visual inspection. Independent
+  pypdf checks verified three single-page PDFs, revision/convention labels and
+  all eight sprocket dimensions. All **14 DXFs** passed ezdxf audit with zero
+  errors/fixes and mm units. They contain **98 hatch segments**; 101 samples per
+  sprocket hatch segment stayed in the hub material outside the bore/keyway.
+  Evidence, PDFs, PNGs, manifests and CTest logs: `build/drawing-layout-demo/`.
+
+Limitations: section views remain plane profiles, not cutaway projections with
+cutting-plane arrows; hatching has one fixed angle/spacing and does not encode
+material conventions. DXF hatch lines are not associative HATCH objects. These
+changes have local macOS build/bundle evidence; the earlier five-platform CI
+results below do not validate this increment. No remote push or release was made.
+
+Next: angular dimensions and explicit manufacturing tolerances; then measured
+geometry/projection caching (especially threaded parts); then editable assemblies
+with placement, mates and exploded drawings. Those capabilities remain planned.
+
 ## Latest increment — GitHub CI and independent Arch Linux validation
 
 The user created and checked in the public repository

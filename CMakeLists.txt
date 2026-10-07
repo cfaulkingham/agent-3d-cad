@@ -27,7 +27,8 @@ if(NOT nlohmann_json_FOUND)
 endif()
 
 include(cmake/EmbedViewerApp.cmake)
-add_library(cad_core src/json.cpp src/model.cpp src/kernel.cpp src/storage.cpp src/service.cpp src/mcp.cpp src/runtime.cpp src/jobs.cpp src/viewer.cpp src/live.cpp src/drawing.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer_app.cpp")
+add_library(cad_core src/json.cpp src/model.cpp src/kernel.cpp src/storage.cpp src/service.cpp src/mcp.cpp src/runtime.cpp src/jobs.cpp src/cache.cpp src/viewer.cpp src/live.cpp src/drawing.cpp "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer_app.cpp")
+include(cmake/CacheIdentity.cmake)
 target_include_directories(cad_core PUBLIC include)
 target_link_libraries(cad_core PUBLIC nlohmann_json::nlohmann_json
   PRIVATE TKPrim TKBO TKFillet TKMesh TKDESTEP TKDESTL TKOffset TKHLR)
@@ -80,7 +81,7 @@ if(BUILD_TESTING)
     -DCAD_EXE=$<TARGET_FILE:agent-3d-cad> -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
     -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-smoke -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
   set_tests_properties(cli_smoke PROPERTIES TIMEOUT 60)
-  foreach(suite topology jobs viewer modeling live app_protocol drawing)
+  foreach(suite topology jobs viewer modeling live app_protocol drawing cache)
     add_executable(cad_${suite}_tests tests/${suite}_tests.cpp)
     target_link_libraries(cad_${suite}_tests PRIVATE cad_core)
     target_include_directories(cad_${suite}_tests SYSTEM PRIVATE "${OpenCASCADE_INCLUDE_DIR}")

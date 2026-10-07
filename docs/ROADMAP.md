@@ -113,6 +113,11 @@ no test stub substitutes for that evidence. Full sibling parity is not implied.
 - Native B-rep hidden-line projection and planar cross-sections.
 - Geometry-checked dimensions, center marks, labeled sheets and revision metadata.
 - Native PDF/SVG sheets and independent per-view 1:1 mm DXF outputs.
+- Aligned first-/third-angle view arrangements and clipped section hatching,
+  with an explicit grid/outline-only option. See HANDOFF.md for local evidence.
+- Geometry-checked minor/reflex angular dimensions and explicit symmetric,
+  deviation and limit tolerances, with optional general allowances and per-view
+  DXF preservation. See HANDOFF.md for local evidence.
 - Saved parameterized recipes for explicit regeneration after model edits.
 - No end-user PDF converter, Python or Node runtime.
 
@@ -124,6 +129,15 @@ bundle generation with empty PATH. HANDOFF.md records executed evidence.
 
 ## Later, only when driven by actual workflows
 
-Assemblies and kinematics, full drafting/GD&T, multi-sheet drawings, manufacturing
+Geometry/projection caching is implemented: bounded, checksummed exact feature
+snapshots and complete view sets, content/build invalidation, fresh render and
+evaluation identity, corruption/deletion fallback, and coordinator publication.
+Native regression tests and a reproducible threaded-part benchmark are provided;
+executed local results are recorded in HANDOFF.md. No public cache API is needed.
+
+Next: editable assemblies with placements, mates and exploded drawings. These
+remain planned, with no assembly API advertised yet.
+
+Further work: kinematics, full drafting/GD&T, multi-sheet drawings, manufacturing
 checks, distributed execution, remote collaborative editing, and additional
 authoring frontends. Python/build123d API parity remains outside the product.
