@@ -33,17 +33,20 @@ std::set<fs::path> cache_entries(const fs::path& root) {
     if(entry.path().extension()==".json") result.insert(entry.path());
   return result;
 }
+// A valid model that is heavy inside the per-feature replication budget: a
+// 64 x 64 pin grid (4,096 solids, the documented maximum) cut through one plate
+// by a single Boolean. It builds for several seconds and well past 128 MiB, so
+// cancellation, kill, deadline and memory limits all act during the build.
 Json heavy_operations() {
+  const Json features = Json::array({
+    {{"id","plate"},{"type","box"},{"size",{1300,1300,5}},{"origin",{-10,-10,0}}},
+    {{"id","pin"},{"type","cylinder"},{"radius",4},{"height",20},{"origin",{0,0,-5}}},
+    {{"id","row"},{"type","pattern"},{"input","pin"},{"count",64},{"step",{20,0,0}}},
+    {{"id","grid"},{"type","pattern"},{"input","row"},{"count",64},{"step",{0,20,0}}},
+    {{"id","perforated"},{"type","cut"},{"left","plate"},{"right","grid"}}});
   Json result = Json::array();
-  std::string input = "base";
-  for (int i = 0; i < 3; ++i) {
-    const auto id = "array" + std::to_string(i);
-    const Json feature = {{"id",id},{"type","pattern"},{"input",input},{"count",64},
-      {"step",Json::array({(i==0 ? 20 : 0),(i==1 ? 20 : 0),(i==2 ? 20 : 0)})}};
-    result.push_back({{"op","add_feature"},{"feature",feature}});
-    input = id;
-  }
-  result.push_back({{"op","set_output"},{"feature_id",input}}); return result;
+  for (const auto& feature : features) result.push_back({{"op","add_feature"},{"feature",feature}});
+  result.push_back({{"op","set_output"},{"feature_id","perforated"}}); return result;
 }
 Json dispatch(const fs::path& root, const Json& args) {
   for (int attempt = 0;; ++attempt) {

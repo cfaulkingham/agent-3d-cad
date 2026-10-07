@@ -130,6 +130,15 @@ struct BuiltModel::Impl {
   }
 };
 std::string kernel_version() { return OCC_VERSION_COMPLETE; }
+std::string kernel_failure_message(const std::exception& failure) {
+  const char* message=failure.what();
+  if (message && *message) return message;
+  // OCCT 8 failures are std::exceptions without RTTI handles; ExceptionType()
+  // names the concrete class, which is the only evidence an empty one carries.
+  if (const auto* occt=dynamic_cast<const Standard_Failure*>(&failure))
+    return std::string(occt->ExceptionType())+" raised by OpenCascade without a message";
+  return "Kernel failure without a message";
+}
 void configure_kernel_logging() {
   auto printer = new Message_PrinterOStream("cerr", true);
   printer->SetToColorize(false);
@@ -138,6 +147,13 @@ void configure_kernel_logging() {
 }
 
 namespace {
+// A hole must remove more than this fraction of its input volume. It sits far
+// above volume-integration round-off and far below any physically drilled hole.
+constexpr double hole_removal_tolerance = 1e-9;
+// The single conversion of an OCCT failure into a domain error.
+Error occt_error(const Standard_Failure& failure, Json details = Json::object(), const std::string& code = "kernel_failure") {
+  return Error(code, kernel_failure_message(failure), std::move(details));
+}
 int count(const TopoDS_Shape& shape, TopAbs_ShapeEnum kind) {
   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
   TopExp::MapShapes(shape, kind, map);
@@ -176,6 +192,16 @@ void check_shape(const TopoDS_Shape& shape) {
   BRepGProp::VolumeProperties(shape,aggregate);
   if (!std::isfinite(aggregate.Mass()) || aggregate.Mass()<=0)
     throw Error("invalid_shape", "Feature has nonpositive or nonfinite aggregate volume");
+}
+// Patterns and assemblies copy exact solids without Boolean cost, so nesting
+// multiplies them geometrically (three 64-copy patterns: 262,144 solids). Each
+// such feature's output is bounded from its inputs before any copy is made.
+constexpr std::size_t replication_solid_limit = 4096;
+constexpr std::size_t replication_face_limit = 65536;
+void replication_budget(std::size_t solids, std::size_t faces) {
+  if (solids > replication_solid_limit || faces > replication_face_limit)
+    throw Error("limit_exceeded", "Feature would replicate more solids or faces than its per-feature budget",
+      {{"solid_limit",replication_solid_limit},{"face_limit",replication_face_limit},{"solids",solids},{"faces",faces}});
 }
 Json point(const gp_Pnt& p) { return {p.X(), p.Y(), p.Z()}; }
 Json direction(const gp_Dir& d) { return {d.X(), d.Y(), d.Z()}; }
@@ -330,6 +356,12 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
                                const std::map<std::string,FeatureGeometry>& sources,
                                Json& history,bool& history_truncated) {
   const auto& parts=feature.at("parts");
+  std::size_t replicated_solids=0,replicated_faces=0;
+  for (const auto& part:parts) {
+    const auto& source=sources.at(text_field(part,"input"));
+    replicated_solids+=count(source.shape,TopAbs_SOLID); replicated_faces+=source.faces.Extent();
+  }
+  replication_budget(replicated_solids,replicated_faces);
   std::map<std::string,const Json*> incoming;
   if (feature.contains("mates")) for (const auto& mate:feature.at("mates")) incoming.emplace(text_field(mate,"child"),&mate);
   std::map<std::string,gp_Trsf> transforms;
@@ -358,7 +390,7 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
           transforms.emplace(id,parent->second*local_frame(mate.at("parent_frame"),parameters)*offset*rotation*
             local_frame(mate.at("child_frame"),parameters).Inverted());
         } catch (const Standard_Failure& e) {
-          throw Error("kernel_failure",e.what(),{{"part_id",id},{"mate_id",mate.at("id")}});
+          throw occt_error(e,{{"part_id",id},{"mate_id",mate.at("id")}});
         }
       }
       progress=true;
@@ -381,7 +413,7 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
       operations.push_back(std::move(operation));
     } catch (const Error& e) {
       auto details=e.details; details["part_id"]=id; throw Error(e.code,e.what(),details);
-    } catch (const Standard_Failure& e) { throw Error("kernel_failure",e.what(),{{"part_id",id}}); }
+    } catch (const Standard_Failure& e) { throw occt_error(e,{{"part_id",id}}); }
   }
   check_shape(compound);
   FeatureGeometry result(compound); result.parts=std::move(resolved);
@@ -600,8 +632,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         TopoDS_Compound compound; builder.MakeCompound(compound);
         const auto delta=vector3(feature.at("step"),parameters);
         const auto input=text_field(feature,"input");
+        const auto copies=feature.at("count").get<int>();
+        const auto& source=impl_->features.at(input);
+        replication_budget(static_cast<std::size_t>(count(source.shape,TopAbs_SOLID))*copies,static_cast<std::size_t>(source.faces.Extent())*copies);
         std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> instances;
-        for (int i=0; i<feature.at("count").get<int>(); ++i) {
+        for (int i=0; i<copies; ++i) {
           gp_Trsf transform; transform.SetTranslation(gp_Vec(delta[0]*i,delta[1]*i,delta[2]*i));
           auto operation=std::make_unique<BRepBuilderAPI_Transform>(shapes.at(input),transform,true);
           if (!operation->IsDone()) throw Error("kernel_failure","Pattern instance failed");
@@ -615,15 +650,24 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         for (std::size_t i=0; i<instances.size() && !history_truncated; ++i)
           record_history(*instances[i],impl_->features.at(input),input,target,history,history_truncated,nullptr,static_cast<int>(i));
       } else if (type == "hole") {
+        const auto input=text_field(feature,"input");
+        const auto& body=shapes.at(input);
         const auto tool=BRepPrimAPI_MakeCylinder(gp_Ax2(origin,parameter_direction(feature.at("axis"),parameters)),scalar(feature.at("radius"),parameters),scalar(feature.at("depth"),parameters)).Shape();
         BRepAlgoAPI_Cut operation;
         NCollection_List<TopoDS_Shape> left,right;
-        left.Append(shapes.at(text_field(feature,"input"))); right.Append(tool);
+        left.Append(body); right.Append(tool);
         operation.SetArguments(left); operation.SetTools(right);
         operation.SetNonDestructive(true); operation.SetRunParallel(false); operation.Build();
         if (!operation.IsDone() || operation.HasErrors()) throw Error("kernel_failure","Hole cut failed");
         shape=operation.Shape();
-        const auto input=text_field(feature,"input");
+        // A hole that misses, stops short of, or only touches its input leaves
+        // a valid but unchanged solid. That is a failed intent, not a revision.
+        GProp_GProps before,after;
+        BRepGProp::VolumeProperties(body,before); BRepGProp::VolumeProperties(shape,after);
+        const double removed=before.Mass()-after.Mass();
+        if (!(removed > hole_removal_tolerance*before.Mass()))
+          throw Error("invalid_model","Hole does not enter its input solid; it removes no material",
+            {{"source_feature_id",input},{"removed_volume_mm3",removed},{"input_volume_mm3",before.Mass()}});
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "import_step") {
         STEPControl_Reader reader;
@@ -634,8 +678,16 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         if (reader.ReadStream("embedded.step",stream) != IFSelect_RetDone)
           throw Error("kernel_failure","Embedded STEP content could not be imported");
         reader.SetSystemLengthUnit(1.0); // OCCT length-unit scale 1 is millimeters.
-        if (reader.TransferRoots() <= 0)
-          throw Error("kernel_failure","Embedded STEP content could not be imported");
+        // TransferRoots skips roots that fail and returns only the successful
+        // count. Anything short of every root is a lost part, never an import.
+        const int roots=reader.NbRootsForTransfer();
+        const int transferred=reader.TransferRoots();
+        const Json counts={{"transferred_roots",transferred},{"total_roots",roots}};
+        if (roots <= 0 || transferred <= 0)
+          throw Error("kernel_failure","Embedded STEP content could not be imported",counts);
+        if (transferred != roots)
+          throw Error("kernel_failure","Embedded STEP import transferred only "+std::to_string(transferred)+" of "+
+            std::to_string(roots)+" root entities; partial imports are rejected",counts);
         shape=reader.OneShape();
       } else if (type == "cut") {
         BRepAlgoAPI_Cut operation;
@@ -662,10 +714,13 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
       } else if (type == "fillet") {
-        BRepBuilderAPI_Copy copy(shapes.at(text_field(feature, "input")));
+        const auto input=text_field(feature,"input");
+        const auto& source=impl_->features.at(input);
+        BRepBuilderAPI_Copy copy(source.shape);
         BRepFilletAPI_MakeFillet operation(copy.Shape());
-        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edges;
-        TopExp::MapShapes(copy.Shape(), TopAbs_EDGE, edges);
+        // Select and describe edges in the input feature's own evaluation, the
+        // IDs topology(input) reports; the copy is reached only via its history.
+        const auto& edges=source.edges;
         std::vector<int> selected;
         const auto& selector = feature.at("edges");
         Json candidates = Json::array();
@@ -684,12 +739,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           const auto code = selected.empty() ? "selection_missing" : selected.size() > expected ? "selection_ambiguous" : "selection_count_mismatch";
           throw Error(code, "Geometric selector did not match its expected edge count", {{"source_feature_id", feature.at("input")}, {"expected_count", expected}, {"actual_count", selected.size()}, {"matches", matched}, {"candidates", candidates}, {"candidates_truncated", edges.Extent() > 64}});
         }
-        for (const auto i : selected) operation.Add(scalar(feature.at("radius"), parameters), TopoDS::Edge(edges(i)));
+        for (const auto i : selected) operation.Add(scalar(feature.at("radius"), parameters), TopoDS::Edge(copy.ModifiedShape(edges(i))));
         operation.Build();
         if (!operation.IsDone()) throw Error("kernel_failure", "Fillet failed; try a smaller radius or change the input geometry");
         shape = operation.Shape();
-        const auto input=text_field(feature,"input");
-        record_history(operation,impl_->features.at(input),input,shape,history,history_truncated,&copy);
+        record_history(operation,source,input,shape,history,history_truncated,&copy);
       }
       if (type != "sketch") check_shape(shape);
       shapes.emplace(id, shape);
@@ -699,7 +753,7 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       auto details = e.details; details["feature_id"] = id;
       throw Error(e.code, e.what(), details);
     } catch (const Standard_Failure& e) {
-      throw Error("kernel_failure", e.what(), {{"feature_id", id}});
+      throw occt_error(e, {{"feature_id", id}});
     }
   }
   impl_->output = text_field(model, "output");
@@ -738,7 +792,7 @@ BuiltModel::BuiltModel(const Json& model, const Json& snapshot) : impl_(std::mak
     }
     impl_->output=text_field(model,"output");
     impl_->shape=impl_->features.at(impl_->output).shape;
-  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
 }
 Json BuiltModel::snapshot() const {
   try {
@@ -757,37 +811,39 @@ Json BuiltModel::snapshot() const {
         {"edges",geometry.edges.Extent()},{"provenance",geometry.provenance}};
     }
     return {{"features",std::move(features)}};
-  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
 }
 BuiltModel::~BuiltModel() = default;
 BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
 BuiltModel& BuiltModel::operator=(BuiltModel&&) noexcept = default;
 
 Json BuiltModel::summary(const std::string& feature_id) const {
-  const auto& geometry = impl_->feature(feature_id);
-  const auto& shape = geometry.shape;
-  const auto solids = count(shape, TopAbs_SOLID);
-  GProp_GProps volume, area;
-  if (solids) BRepGProp::VolumeProperties(shape, volume);
-  BRepGProp::SurfaceProperties(shape, area);
-  Bnd_Box box;
-  BRepBndLib::AddOptimal(shape, box, false, false);
-  const auto limits = box.Get();
-  const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
-  Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
-    {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
-    {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
-    {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
-    {"edge_count", count(shape, TopAbs_EDGE)}};
-  if (!geometry.parts.empty()) {
-    result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
-    for (const auto& part:geometry.parts) {
-      GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
-      result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
-        {"bounds_mm",bounds(part.shape)},{"volume_mm3",mass.Mass()}});
+  try {
+    const auto& geometry = impl_->feature(feature_id);
+    const auto& shape = geometry.shape;
+    const auto solids = count(shape, TopAbs_SOLID);
+    GProp_GProps volume, area;
+    if (solids) BRepGProp::VolumeProperties(shape, volume);
+    BRepGProp::SurfaceProperties(shape, area);
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(shape, box, false, false);
+    const auto limits = box.Get();
+    const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
+    Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
+      {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
+      {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
+      {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
+      {"edge_count", count(shape, TopAbs_EDGE)}};
+    if (!geometry.parts.empty()) {
+      result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
+      for (const auto& part:geometry.parts) {
+        GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
+        result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
+          {"bounds_mm",bounds(part.shape)},{"volume_mm3",mass.Mass()}});
+      }
     }
-  }
-  return result;
+    return result;
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limits) const {
@@ -836,7 +892,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       if (matching == 1) edge["selector"] = selector;
     }
     return result;
-  } catch (const Standard_Failure& e) { throw Error("kernel_failure", e.what(), {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) const {
@@ -888,7 +944,7 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
       result["edges"].push_back(std::move(item));
     }
     return result;
-  } catch (const Standard_Failure& e) { throw Error("kernel_failure", e.what(), {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 namespace {
@@ -970,7 +1026,7 @@ Json balloon_anchors(const Json& requested,const std::vector<AssemblyPart>& part
       if (!part_id.empty()) details["part_id"]=part_id;
       throw Error(e.code,e.what(),details);
     } catch (const Standard_Failure& e) {
-      throw Error("kernel_failure",e.what(),{{"feature_id",feature_id},{"part_id",part_id}});
+      throw occt_error(e,{{"feature_id",feature_id},{"part_id",part_id}});
     }
   }
   return result;
@@ -1331,7 +1387,7 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
     } catch (const Error& e) {
       auto details = e.details; details["view_id"] = id;
       throw Error(e.code,e.what(),details);
-    } catch (const Standard_Failure& e) { throw Error("kernel_failure",e.what(),{{"view_id",id}}); }
+    } catch (const Standard_Failure& e) { throw occt_error(e,{{"view_id",id}}); }
   }
   return result;
 }
@@ -1366,7 +1422,7 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       if (output.fail()) throw Error("export_failed", "STL stream close failed");
     } else throw Error("invalid_argument", "Export format must be step or stl");
   } catch (const Standard_Failure& e) {
-    throw Error("export_failed", e.what());
+    throw occt_error(e, Json::object(), "export_failed");
   }
 }
 }

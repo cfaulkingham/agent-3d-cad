@@ -44,7 +44,9 @@ Part ordering does not control mate evaluation.
 
 Assemblies contain 1–64 parts and up to 63 mates; the entire document permits at
 most 256 assembly parts. Ordinary document, topology, mesh, worker and artifact
-limits still apply. An input may contain multiple solids, such as a pattern or
+limits still apply, and the per-feature replication budget in
+[PROTOCOL.md](PROTOCOL.md) bounds an assembly to 4,096 solids and 65,536 faces
+summed over its part inputs. An input may contain multiple solids, such as a pattern or
 STEP import, but is treated as one part instance. Nested assemblies and ordinary
 solid operations consuming an assembly are rejected. Edit or transform source
 features before assembling them. Source features and part IDs are distinct
@@ -182,7 +184,11 @@ the output), and exports that committed assembly as independent JSON and CSV,
 with a manifest written after all artifacts succeed. Its `bom` object contains
 `assembly_id`, `items` and `total_quantity`; each item contains `item_number`,
 `input`, `quantity`, `part_ids`, and any supplied metadata. Generation leaves
-HEAD and historical exports unchanged. Drawing `bom: true` uses the same rows;
+HEAD and historical exports unchanged. The CSV guards against spreadsheet
+formula injection: a text cell (`input`, `part_number`, `description`,
+`material`, `part_ids`) that begins with `=`, `+`, `-`, `@`, tab or carriage
+return gets a leading `'` inside its quoted field. Numeric `item_number` and
+`quantity` cells are never altered, and JSON keeps the exact saved metadata. Drawing `bom: true` uses the same rows;
 geometry-checked balloons identify their item numbers in assembled or exploded
 views. See [DRAWINGS.md](DRAWINGS.md) for anchors, labels and table exports.
 Standalone BOM export and BOM drawings also support `cad_job`; wait for terminal

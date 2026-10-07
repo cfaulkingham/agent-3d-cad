@@ -40,4 +40,7 @@ private:
 };
 std::string kernel_version();
 void configure_kernel_logging();
+// Message for a caught kernel failure. OCCT may throw with an empty message;
+// the OCCT exception type is reported then, so the result is never empty.
+std::string kernel_failure_message(const std::exception& failure);
 }

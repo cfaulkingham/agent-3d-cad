@@ -77,6 +77,34 @@ void pattern_history_tests() {
   for (const auto& face : mesh.at("triangle_faces")) require(represented_results.contains(face),"pattern mesh face shares lineage topology IDs");
   for (const auto& edge : mesh.at("edges")) require(represented_results.contains(edge.at("id")),"pattern mesh edge shares lineage topology IDs");
 }
+// Failing fillet selectors report descriptors from the input feature's own
+// evaluated enumeration: the same IDs and geometry that topology(input) lists.
+void fillet_diagnostic_tests(const Json& input_topology) {
+  std::map<std::string,Json> input_edges;
+  for (const auto& edge : input_topology.at("edges")) {
+    auto descriptor=edge; descriptor.erase("selector");
+    input_edges.emplace(edge.at("id"),descriptor);
+  }
+  const auto failure=[](const Json& selector) {
+    try { BuiltModel invalid(fillet(selector)); } catch (const Error& e) { return e; }
+    throw std::runtime_error("Expected a selector failure");
+  };
+  Json selector={{"type","geometric"},{"feature_id","base"},{"curve_kind","circle"},{"expected_count",4}};
+  auto e=failure(selector);
+  require(e.code=="selection_missing" && e.details.at("source_feature_id")=="base","missing selector reports its input feature, got "+e.code+": "+e.what());
+  require(e.details.at("candidates").size()==input_edges.size() && e.details.at("candidates_truncated")==false,"every input edge is a candidate");
+  for (const auto& candidate : e.details.at("candidates")) {
+    const auto found=input_edges.find(candidate.at("id"));
+    require(found!=input_edges.end() && found->second==candidate,"candidate "+candidate.at("id").get<std::string>()+" is the input feature's evaluated edge");
+  }
+  selector=vertical(); selector["expected_count"]=1;
+  e=failure(selector);
+  require(e.code=="selection_ambiguous" && e.details.at("matches").size()==4,"ambiguous selector reports every match");
+  for (const auto& match : e.details.at("matches")) {
+    const auto found=input_edges.find(match.at("id"));
+    require(found!=input_edges.end() && found->second==match,"match "+match.at("id").get<std::string>()+" is the input feature's evaluated edge");
+  }
+}
 void topology_tests() {
   pattern_history_tests();
   auto model = fillet(vertical());
@@ -111,6 +139,7 @@ void topology_tests() {
   }
   require(represented_faces == faces && represented_edges == edges, "all topology represented in mesh");
   require(built.topology("base") == topo, "meshing preserves evaluation topology mapping");
+  fillet_diagnostic_tests(topo);
   require(built.topology().at("feature_id") == "rounded", "default output topology");
   const auto rounded_topology = built.topology();
   require(rounded_topology.at("provenance").at("dependencies") == Json::array({"base"}), "feature graph provenance");

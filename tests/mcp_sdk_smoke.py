@@ -55,16 +55,17 @@ def box_model():
 
 
 def heavy_edits():
-    edits = []
-    previous = "base"
-    for index in range(3):
-        feature_id = f"copies{index}"
-        step = [0, 0, 0]
-        step[index] = 30
-        edits.append({"op": "add_feature", "feature": {
-            "id": feature_id, "type": "pattern", "input": previous, "count": 64, "step": step}})
-        previous = feature_id
-    return edits + [{"op": "set_output", "feature_id": previous}]
+    # A valid model that is heavy inside the per-feature replication budget:
+    # a 64 x 64 pin grid (4,096 solids) cut through one plate by one Boolean.
+    features = [
+        {"id": "plate", "type": "box", "size": [1300, 1300, 5], "origin": [-10, -10, 0]},
+        {"id": "pin", "type": "cylinder", "radius": 4, "height": 20, "origin": [0, 0, -5]},
+        {"id": "row", "type": "pattern", "input": "pin", "count": 64, "step": [20, 0, 0]},
+        {"id": "grid", "type": "pattern", "input": "row", "count": 64, "step": [0, 20, 0]},
+        {"id": "perforated", "type": "cut", "left": "plate", "right": "grid"},
+    ]
+    return [{"op": "add_feature", "feature": feature} for feature in features] + [
+        {"op": "set_output", "feature_id": "perforated"}]
 
 
 async def discover(client):

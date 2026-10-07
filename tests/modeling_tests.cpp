@@ -8,6 +8,7 @@
 #include <STEPControl_Writer.hxx>
 #include <RWStl.hxx>
 #include <STEPControl_Reader.hxx>
+#include <Standard_ConstructionError.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
@@ -25,6 +26,7 @@
 #include <numbers>
 #include <random>
 #include <sstream>
+#include <tuple>
 using namespace agentcad;
 namespace {
 int checks=0;
@@ -41,6 +43,111 @@ Json rectangle(double width=20,double height=30) { return {{"type","rectangle"},
 Json circle(double radius=2) { return {{"type","circle"},{"radius",radius}}; }
 Json extruded(Json profile=rectangle()) { return document(Json::array({sketch("profile",profile),{{"id","part"},{"type","extrude"},{"input","profile"},{"distance",10}}}),"part"); }
 Json expression(const std::string& op,Json a,Json b,const std::string& unit="mm") { return {{"expression",{{"op",op},{"args",Json::array({a,b})},{"unit",unit}}}}; }
+Error captured(const std::function<void()>& action) {
+  try { action(); } catch(const Error& e) { return e; }
+  throw std::runtime_error("Expected a domain error");
+}
+void step_root_tests(const std::filesystem::path& directory) {
+  // Two independent products give the STEP reader two transfer roots.
+  STEPControl_Writer writer;
+  writer.SetShapeProcessFlags(ShapeProcess::OperationsFlags{});
+  require(writer.Transfer(BRepPrimAPI_MakeBox(10,10,10).Shape(),STEPControl_AsIs)==IFSelect_RetDone,"first root transfers");
+  require(writer.Transfer(BRepPrimAPI_MakeBox(gp_Pnt(20,0,0),5,5,5).Shape(),STEPControl_AsIs)==IFSelect_RetDone,"second root transfers");
+  const auto output=directory/"two-roots.step";
+  const auto bytes=output.u8string(); const std::string filename(bytes.begin(),bytes.end());
+  require(writer.Write(filename.c_str())==IFSelect_RetDone,"multi-root fixture writes");
+  std::ifstream stream(output); std::ostringstream text; text<<stream.rdbuf();
+  const auto complete=text.str();
+  const auto import=[](const std::string& content) {
+    return document(Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}}),"imported");
+  };
+  const auto roots=[](const std::string& content) {
+    STEPControl_Reader reader; std::istringstream input(content);
+    require(reader.ReadStream("fixture.step",input)==IFSelect_RetDone,"fixture parses");
+    const int total=reader.NbRootsForTransfer();
+    return std::pair<int,int>{total,reader.TransferRoots()};
+  };
+  require(roots(complete)==std::pair<int,int>{2,2},"fixture has two transferable roots");
+  const auto both=BuiltModel(import(complete)).summary();
+  near(both.at("volume_mm3"),1125,1e-6); require(both.at("solid_count")==2,"every STEP root is imported");
+  // Detach one product from its shape by renaming its PRODUCT_DEFINITION_SHAPE
+  // to an entity type no reader recognizes. The file still parses with two
+  // product roots, but OCCT's TransferRoots skips the shapeless one and
+  // reports one success; a reader trusting that count silently loses a part.
+  auto partial=complete;
+  const std::string link="PRODUCT_DEFINITION_SHAPE(";
+  const auto first=partial.find(link), second=first==std::string::npos ? first : partial.find(link,first+1);
+  require(second!=std::string::npos,"fixture links two products to shapes");
+  partial.replace(second,link.size(),"UNTRANSFERABLE_DEFINITION_SHAPE(");
+  const auto corrupted=roots(partial);
+  require(corrupted==std::pair<int,int>{2,1},"corrupted fixture transfers only one of two roots, got "+std::to_string(corrupted.first)+"/"+std::to_string(corrupted.second));
+  const auto e=captured([&]{BuiltModel invalid(import(partial));});
+  require(e.code=="kernel_failure" && e.details.at("feature_id")=="imported","partial STEP import fails as a feature-level kernel failure, got "+e.code+": "+e.what());
+  require(e.details.at("transferred_roots")==1 && e.details.at("total_roots")==2,"partial STEP import reports transferred and total roots");
+}
+Json hole(Json origin,Json axis,double radius,double depth) {
+  return {{"id","bored"},{"type","hole"},{"input","part"},{"origin",origin},{"axis",axis},{"radius",radius},{"depth",depth}};
+}
+void hole_effect_tests() {
+  // A hole is a material-removing intent. A cut that leaves its input unchanged
+  // is a modeling error, never a silently successful no-op revision.
+  const auto bored=[](Json feature) { auto model=extruded(); model["features"].push_back(feature); model["output"]="bored"; return model; };
+  for(const auto& [origin,axis,depth,reason] : std::initializer_list<std::tuple<Json,Json,double,const char*>>{
+      {{100,100,0},{0,0,1},10,"origin beside the body"},
+      {{10,15,20},{0,0,1},5,"direction pointing away from the body"},
+      {{10,15,15},{0,0,-1},4,"too shallow to reach the body"},
+      {{10,15,15},{0,0,-1},5,"touching the top face without entering it"}}) {
+    const auto e=captured([&]{BuiltModel invalid(bored(hole(origin,axis,2,depth)));});
+    require(e.code=="invalid_model",std::string("hole ")+reason+" fails as invalid_model, got "+e.code+": "+e.what());
+    require(e.details.at("feature_id")=="bored" && e.details.at("source_feature_id")=="part",std::string("hole ")+reason+" names the hole and its input");
+    near(e.details.at("removed_volume_mm3").get<double>(),0,1e-6);
+  }
+  // Blind, through, overlong and side-entry holes all remove their material.
+  near(BuiltModel(bored(hole({10,15,10},{0,0,-1},2,4))).summary().at("volume_mm3"),6000-16*std::numbers::pi);
+  near(BuiltModel(bored(hole({10,15,0},{0,0,1},2,10))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
+  near(BuiltModel(bored(hole({10,15,12},{0,0,-1},2,20))).summary().at("volume_mm3"),6000-40*std::numbers::pi);
+  near(BuiltModel(bored(hole({0,15,5},{1,0,0},2,3))).summary().at("volume_mm3"),6000-12*std::numbers::pi);
+}
+void replication_budget_tests() {
+  const auto base=Json{{"id","base"},{"type","box"},{"size",{10,10,10}}};
+  const auto pattern=[](const std::string& id,const std::string& input,int count,Json step) {
+    return Json{{"id",id},{"type","pattern"},{"input",input},{"count",count},{"step",step}};
+  };
+  // Three nested levels multiply 16 x 16 x 64 copies; the budget rejects the
+  // final level from its input size before allocating any of its instances.
+  auto nested=document(Json::array({base,pattern("array0","base",16,{20,0,0}),pattern("array1","array0",16,{0,20,0}),
+    pattern("array2","array1",64,{0,0,20})}),"array2");
+  auto e=captured([&]{BuiltModel invalid(nested);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="array2","nested pattern exceeds the per-feature solid budget, got "+e.code+": "+e.what());
+  require(e.details.at("solid_limit")==4096 && e.details.at("solids")==16384 && e.details.at("face_limit")==65536 && e.details.at("faces")==98304,
+    "budget failure reports requested and permitted solids and faces");
+  // The documented boundary is inclusive: a full 64 x 64 grid remains supported.
+  auto grid=document(Json::array({base,pattern("array0","base",64,{20,0,0}),pattern("array1","array0",64,{0,20,0})}),"array1");
+  require(BuiltModel(grid).summary().at("solid_count")==4096,"a 64 x 64 pattern grid is within the per-feature budget");
+  // Faces are budgeted as well: 130 faces x 64 x 8 = 66,560 exceeds 65,536.
+  Json points=Json::array();
+  for(int i=0;i<128;++i) points.push_back({5*std::cos(2*std::numbers::pi*i/128),5*std::sin(2*std::numbers::pi*i/128)});
+  auto faceted=document(Json::array({sketch("profile",{{"type","polygon"},{"points",points}}),
+    {{"id","prism"},{"type","extrude"},{"input","profile"},{"distance",2}},
+    pattern("row","prism",64,{20,0,0}),pattern("rows","row",8,{0,20,0})}),"rows");
+  e=captured([&]{BuiltModel invalid(faceted);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="rows" && e.details.at("faces")==66560 && e.details.at("solids")==512,
+    "pattern face budget is enforced, got "+e.code+": "+e.what());
+  // Assemblies replicate their inputs too and share the same per-feature budget.
+  Json parts=Json::array();
+  for(int i=0;i<64;++i) parts.push_back({{"id","p"+std::to_string(i)},{"input","pair"}});
+  auto assembled=document(Json::array({base,pattern("row","base",64,{20,0,0}),pattern("pair","row",2,{0,20,0}),
+    {{"id","assembly"},{"type","assembly"},{"parts",parts}}}),"assembly");
+  e=captured([&]{BuiltModel invalid(assembled);});
+  require(e.code=="limit_exceeded" && e.details.at("feature_id")=="assembly" && e.details.at("solids")==8192,
+    "assembly replication shares the per-feature budget, got "+e.code+": "+e.what());
+}
+void failure_message_tests() {
+  require(kernel_failure_message(Standard_ConstructionError("bad axis"))=="bad axis","OCCT message is reported unchanged");
+  const auto anonymous=kernel_failure_message(Standard_ConstructionError(""));
+  require(anonymous.find("Standard_ConstructionError")!=std::string::npos,"empty OCCT message names the exception type: "+anonymous);
+  require(!kernel_failure_message(std::runtime_error("")).empty(),"non-OCCT failures never produce an empty message");
+}
 void thread_tests() {
   const auto directory=std::filesystem::temp_directory_path()/("agentcad-thread-"+std::to_string(std::random_device{}()));
   require(std::filesystem::create_directory(directory),"isolated thread STEP workspace");
@@ -262,6 +369,10 @@ void tests() {
   error("invalid_model",[&]{validate_model(model);});
   model["features"][0]["content"]="not a STEP file"; model["features"][0]["sha256"]=sha256("not a STEP file");
   error("kernel_failure",[&]{BuiltModel invalid(model);});
+  step_root_tests(directory);
+  hole_effect_tests();
+  replication_budget_tests();
+  failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");
   require(defs.at("feature").at("oneOf").size()==15,"modeling and assembly schemas discoverable");
