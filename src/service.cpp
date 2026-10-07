@@ -199,13 +199,33 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
   else fields(args,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
   identifier(text_field(args,"document_id"));
-  if(args.contains("feature_id")) identifier(text_field(args,"feature_id"));
+  if(args.contains("feature_id")) model_identifier(text_field(args,"feature_id"));
   if(args.contains("request_id")) identifier(text_field(args,"request_id"));
   for(const auto* key:{"revision","expected_revision","source_revision","from_revision","to_revision"})
     if(args.contains(key)) revision_number(args.at(key));
 }
 
+Error service_error(std::exception_ptr error) {
+  try { std::rethrow_exception(error); }
+  catch (const Error& e) { return e; }
+  // Unvalidated JSON shapes surface as nlohmann access/type errors.
+  catch (const Json::exception& e) { return Error("invalid_argument", std::string("Malformed JSON value: ") + e.what()); }
+  catch (const fs::filesystem_error& e) {
+    Json details = Json::object();
+    if (!e.path1().empty()) details["path"] = path_to_utf8(e.path1());
+    return Error("storage_error", e.what(), details);
+  }
+  catch (const std::exception& e) { return Error("internal_error", e.what()); }
+  catch (...) { return Error("internal_error", "Unknown failure"); }
+}
+
 Json Service::call(const std::string& tool,const Json& args) {
+  try { return execute(tool,args); }
+  catch (const Error&) { throw; }
+  catch (...) { throw service_error(std::current_exception()); }
+}
+
+Json Service::execute(const std::string& tool,const Json& args) {
   if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
     return live_call(*this,store_,tool,args);
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
@@ -252,20 +272,27 @@ Json Service::call(const std::string& tool,const Json& args) {
       }
       return std::nullopt;
     };
-    { DocumentLock lock(store_.root(),id);if(auto replay=precondition())return *replay;
+    // Mutation admission and publication wait (boundedly) for transient holders
+    // such as viewer sync; expected_revision is rechecked once the lock is held.
+    { DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
       if(tool=="cad_create") model=args.at("model");
       else if(tool=="cad_restore") model=store_.read(id,revision_number(args.at("source_revision"))).at("model");
       else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"));
       else {
         const auto content=read_text(path_from_utf8(text_field(args,"path")));
         if(content.size()>512*1024)throw Error("limit_exceeded","Embedded STEP imports are limited to 512 KiB");
+        // Documents embed STEP as a JSON (UTF-8) string; transcoding would change
+        // the bytes and SHA-256 that define the imported feature.
+        if(const auto offset=invalid_utf8_offset(content))
+          throw Error("invalid_argument","STEP file is not valid UTF-8 at byte "+std::to_string(*offset)+
+            "; cad_import embeds the file unchanged as UTF-8 text (ISO 10303-21 encodes other text with \\X2\\ escapes)",{{"byte_offset",*offset}});
         model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},
           {"features",Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}})},{"output","imported"}};
       }
     }
     validate_model(model);
     const auto evaluated=evaluate_model(store_.root(),model,{{"kind","summary"}});
-    DocumentLock lock(store_.root(),id);if(auto replay=precondition())return *replay;
+    DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
     check_job_cancelled();
     Json receipt=Json::object();
     if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",{{"summary",evaluated.at("summary")}}}};
@@ -310,7 +337,7 @@ Json Service::call(const std::string& tool,const Json& args) {
         check_job_cancelled();write_artifact(target,content);
         result["artifacts"].push_back({{"format",format},{"path",path_to_utf8(target)},{"bytes",content.size()}});
       }
-      DocumentLock lock(store_.root(),id);check_job_cancelled();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
       write_artifact(destination/"manifest.json",result.dump(2)+"\n");
       return result;
     } catch(...) {std::error_code ignored;fs::remove_all(destination,ignored);throw;}
@@ -354,7 +381,7 @@ Json Service::call(const std::string& tool,const Json& args) {
       auto saved=identity;saved["schema_version"]=1;saved["drawing"]=recipe;saved["resolved_drawing"]=spec;
       saved["model_sha256"]=sha256(record.at("model").dump());
       write_artifact(destination/"drawing.json",saved.dump(2)+"\n");
-      DocumentLock lock(store_.root(),id);check_job_cancelled();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
       write_artifact(destination/"manifest.json",result.dump(2)+"\n");
       return result;
     } catch(...) {std::error_code ignored;fs::remove_all(destination,ignored);throw;}
@@ -372,10 +399,13 @@ Json Service::call(const std::string& tool,const Json& args) {
   if(format!="step"&&format!="stl")throw Error("invalid_argument","Export format must be step or stl");
   const auto exports=store_.root()/"exports";directory(exports);
   const auto target=exports/(id+"-r"+std::to_string(revision)+"."+format),temporary=temporary_file(exports);
+  std::uintmax_t bytes=0;
   try {
     evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"path",path_to_utf8(temporary)}});
-    DocumentLock lock(store_.root(),id);check_job_cancelled();publish_file(temporary,target);
+    std::error_code size_error;bytes=fs::file_size(temporary,size_error);
+    if(size_error)throw Error("storage_error","Cannot measure export: "+size_error.message());
+    DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();publish_file(temporary,target);
   }catch(...){std::error_code ignored;fs::remove(temporary,ignored);throw;}
-  return {{"document_id",id},{"revision",revision},{"format",format},{"path",path_to_utf8(target)},{"bytes",fs::file_size(target)},{"units","mm"}};
+  return {{"document_id",id},{"revision",revision},{"format",format},{"path",path_to_utf8(target)},{"bytes",bytes},{"units","mm"}};
 }
 }

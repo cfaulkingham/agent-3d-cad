@@ -104,9 +104,9 @@ std::optional<Json> McpSession::handle(const Json& request) {
         return response(tool_result(service_.call(name, params.value("arguments", Json::object()))));
       } catch (const Error& e) {
         return response(tool_result({{"error", e.json()}}, true));
-      } catch (const Json::exception& e) {
-        return response(tool_result({{"error", Error("invalid_argument", e.what()).json()}}, true));
       } catch (const std::exception& e) {
+        // Service::call already translated its exceptions (service_error); what
+        // remains here, e.g. serializing the reply, is internal as in the CLI.
         return response(tool_result({{"error", Error("internal_error", e.what()).json()}}, true));
       }
     }
