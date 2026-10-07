@@ -24,7 +24,7 @@ not sufficient release acceptance. No browser window or Tauri app is involved.
 
 | Host | Package / connection | Current boundary |
 |---|---|---|
-| Claude Desktop | Native binary `.mcpb`, with an optional project-folder setting | Actual local update, create, embedded viewer, selected-edge context and PDF generation verified on macOS arm64; full edit/reopen/export/install journey remains required |
+| Claude Desktop | Native binary `.mcpb`, with an optional project-folder setting | Actual local update, create, selected-edge edit, live viewer refresh, saved-document listing and STEP/STL/PDF generation verified on macOS arm64; file retrieval and complete restart/reopen/install journey remain required |
 | ChatGPT desktop | Local Agent Plugins package containing the native MCP server, modeling skill and setup skill | Package built; host loading and rendering still required; local marketplace is a test/distribution path, not public-directory approval |
 
 Claude documents binary desktop extensions and host-managed installation in
@@ -72,6 +72,15 @@ root as its local plugin source. Keep the extracted folder intact. This catalog
 is for host testing; no directory approval is implied.
 
 ## Required evidence before 1.0
+
+Planned file-delivery implementation: use the MCP Apps
+[`ui/download-file` request](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiDownloadFileRequest.html)
+when the host advertises
+[`downloadFile`](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiHostCapabilities.html).
+Provide exported files as bounded MCP resources with MIME types and filenames;
+do not expose arbitrary local file reads. Verify the host's actual save/download
+action with STEP, STL and drawings. Capability support in either target host is
+not yet established. This API is planned, not implemented by the current viewer.
 
 Run the complete journey in a fresh host profile on each supported host/platform:
 

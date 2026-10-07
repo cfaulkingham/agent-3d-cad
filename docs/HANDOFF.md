@@ -37,16 +37,40 @@ The host ignores reinstalling an identical extension version. A local-only test
 wrapper used manifest version `0.1.0-preview.1.1` to exercise its Update action;
 this did not change VERSION, native binary version or any release/tag. The owner
 approved the local extension access prompt. The installed executable matches the
-tested native bundle by SHA-256. Actual initialize, tools/list and resources/list
+tested native bundle by SHA-256. The installed local wrapper's SHA-256 is
+`e5b3818e248c5a8356e8d75275da57eb367979191e811f64dab75079f58d2dae`;
+the ordinary generated MCPB's is
+`79fb2069dab40640d74e9717f13cd745882d8e28bec7ace4b85fe47cb378e6d8`.
+Actual initialize, tools/list and resources/list
 succeeded. Claude created `plugin_test_plate`, rendered the embedded viewer at
 revision 1, and read a selected 80 mm edge with its exact document/revision/
 evaluation reference through `cad_context`. The viewer created a **3,940-byte
-PDF** with a valid `%PDF-` header in the default workspace. This is actual host
-evidence, not just a protocol simulation. Select–edit–refresh, restart/library,
-complete exports and upgrade/uninstall preservation remain unverified in Claude.
-UI testing stopped when no Claude window was available; do not infer completion
-from the agent's conversational claim. Doubled pasted text was observed but its
-cause has not been established; do not claim a clipboard implementation bug.
+PDF** with a valid `%PDF-` header in the default workspace. Quick Edit sent the
+selected-edge request with its complete view/document/revision/evaluation
+context. Claude added a parametric 2 mm `front_top_fillet`, committing revision
+2: one valid solid, seven faces, fifteen edges and volume **23,931.327 mm³**.
+The same embedded viewer refreshed to revision 2 and cleared the old selection.
+This is actual host select–edit–refresh evidence, not just a protocol simulation.
+
+The follow-up opened a library view and read revision 1 without restoring it;
+HEAD remained at revision 2. Its first `cad_list` and STEP export calls timed out
+in the host after four minutes each. The server continued answering viewer
+requests. A single `cad_list` retry succeeded, returning `plugin_test_plate` at
+revision 2 with `truncated: false`. The export retry exposed Claude's per-tool
+approval prompts. With the local export calls approved, the actual host created
+revision-2 **STEP (20,073 bytes), binary STL (2,084 bytes / 40 triangles), and
+A4 PDF (6,883 bytes)**. Independent filesystem inspection verified STEP start/end
+markers, STL byte count, PDF header, HEAD still at revision 2, and the viewer's
+cleared selection. Drawing settings and a provenance manifest were saved too.
+This proves file generation; the host still reports local paths rather than
+delivering files to the user. The library widget rendered, but reopening a
+project through its list, host restart and update/uninstall preservation remain
+unfinished acceptance checks. Do not attribute the earlier timeouts to a
+particular cause without evidence.
+Computer-use scrolling failed with `noWindowsAvailable` despite readable Claude
+accessibility state; some input was interrupted by user interaction. Doubled
+pasted text was observed but its cause has not been established; do not claim a
+clipboard implementation bug.
 
 `packaging/make-plugin.py` creates native-only Agent Plugins packages with
 portable plugin/MCP metadata, an OpenAI onboarding skill, the modeling skill,
@@ -73,6 +97,28 @@ MCP SDK 2.3.0 interoperability passed **932 checks**; version and all three clie
 configuration round trips passed without creating a workspace.
 Evidence and packages: `build-desktop/plugin-check-host/`;
 native test log: `build-desktop/plugin-check/ctest-host-fix.log`.
+
+Implementation commit `6eefb7967dc60055a8228b343f90c0c5a367176a` passed all five
+native jobs in
+[run 37701114813](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37701114813).
+Each lane passed **32/32 CTest suites**, official MCP SDK 2.3.0 interoperability,
+packaging provenance/configuration checks, relocated bundles and the complete
+empty-PATH plugin workflow, including history and all export formats. Both Linux
+runtime-only containers passed. Plugin ZIPs were uploaded on all five lanes;
+Claude MCPBs were uploaded on macOS arm64/Intel and Windows x64. Legacy Tauri and
+the release job were skipped. The log records these platform-specific counts
+(SDK counts include polling and are not fixed assertions):
+
+| Platform | Schema checks / 19 tools | SDK checks |
+|---|---:|---:|
+| Linux arm64 | 293 | 502 |
+| Linux x64 | 291 | 502 |
+| macOS arm64 | 289 | 792 |
+| macOS Intel x64 | 293 | 1,607 |
+| Windows x64 | 305 | 747 |
+
+CI log: `build-desktop/plugin-check-host/ci-main-37701114813.log`. A passing
+package workflow does not prove either host's complete installation journey.
 
 Next: finish both actual host journeys, resolve in-host file retrieval (current
 exports report local paths), establish easy architecture selection, and implement
