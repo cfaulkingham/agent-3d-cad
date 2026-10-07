@@ -1,0 +1,363 @@
+{
+  "document_id": "duplex_35_sprocket_13t_keyed",
+  "revision": 2,
+  "drawing": {
+    "title": "Duplex #35 sprocket - 13 teeth - 5/8 in keyed bore",
+    "sheet": "A3",
+    "hidden_lines": true,
+    "formats": [
+      "pdf",
+      "svg",
+      "dxf"
+    ],
+    "views": [
+      {
+        "id": "top",
+        "orientation": "top"
+      },
+      {
+        "id": "front",
+        "orientation": "front"
+      },
+      {
+        "id": "right",
+        "orientation": "right"
+      },
+      {
+        "id": "iso",
+        "orientation": "isometric"
+      },
+      {
+        "id": "hub_section",
+        "orientation": "section",
+        "section": {
+          "axis": "z",
+          "offset": -5
+        }
+      }
+    ],
+    "dimensions": [
+      {
+        "view": "top",
+        "kind": "diameter",
+        "center": [
+          0,
+          0
+        ],
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "outside_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "view": "front",
+        "kind": "height"
+      },
+      {
+        "view": "front",
+        "kind": "vertical",
+        "from": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          0
+        ],
+        "to": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "parameter": "row_spacing"
+          }
+        ]
+      },
+      {
+        "view": "front",
+        "kind": "vertical",
+        "from": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          0
+        ],
+        "to": [
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "hub_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "parameter": "row_width"
+          }
+        ]
+      },
+      {
+        "view": "hub_section",
+        "kind": "diameter",
+        "center": [
+          0,
+          0
+        ],
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "hub_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "view": "hub_section",
+        "kind": "diameter",
+        "center": [
+          0,
+          0
+        ],
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "bore_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "view": "hub_section",
+        "kind": "horizontal",
+        "from": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "keyway_width"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                -1
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bore_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "parameter": "keyway_radial_depth"
+                }
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "to": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "keyway_width"
+                },
+                0.5
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bore_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "parameter": "keyway_radial_depth"
+                }
+              ],
+              "unit": "mm"
+            }
+          }
+        ]
+      },
+      {
+        "view": "hub_section",
+        "kind": "vertical",
+        "from": [
+          0,
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bore_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                -1
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "to": [
+          0,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bore_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "parameter": "keyway_radial_depth"
+                }
+              ],
+              "unit": "mm"
+            }
+          }
+        ]
+      }
+    ],
+    "notes": [
+      "ANSI #35-2; 13 teeth per row; rows aligned; pitch 9.525 mm.",
+      "Bore 5/8 in; through keyway for 3/16 in square key.",
+      "Keyway radial depth 2.0066 mm; opposite bore wall to roof 17.8816 mm.",
+      "Outer hub end edge R1 mm; tooth-tip bevel 0.5 mm.",
+      "Dimensions in mm. Nominal geometry; material, shaft fit and tolerances unspecified.",
+      "Hub section is the true profile at Z=-5 mm; view cells individually labeled."
+    ]
+  }
+}

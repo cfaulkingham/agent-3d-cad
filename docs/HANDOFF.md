@@ -825,3 +825,68 @@ explicit tolerances, then performance/caching and assemblies. Native platform
 validation has passed. The live Codex viewer loop has real rendering/selection/
 refresh evidence on macOS; other GPU hosts and offline artifact interactions
 retain their own independent gates.
+
+## Direct MCP model — 13-tooth duplex #35, keyed 5/8-inch bore
+
+On 2026-10-06, the installed native service created
+`duplex_35_sprocket_13t_keyed`, revision 1, for the user's explicit 13-tooth,
+5/8-inch bore and keyway request. Its 53 supported features create two aligned
+13-tooth rows with exact seat/working/topping arcs, a type-B hub and a through
+3/16-inch keyway. Complete intent, sources, dimensions and edit limits are in
+`examples/duplex-35-sprocket-13t-keyed.create.json` and its `.prompt.md`.
+
+Native validation reports one valid solid, 273 faces, 802 edges and volume
+17,888.61949253724 mm3. Independent OCCT 8.0.1 STEP read-back with healing disabled
+retained one valid solid and volume within 0.01 mm3. All 568 clearance/material
+probes passed, including both tooth rows, bushing seating, phase, inter-row
+clearance, bore and keyway walls. Exact cylindrical seat/working/topping face
+counts are 26/52/52. STL validation found 3,512 triangles and 5,268 edges, each
+with two incident triangles at 0.00001 mm quantization. Export did not change
+editable intent. Verification source and evidence: `build/sprocket35-13t/`.
+The actual Codex MCP App was opened once as `sprocket35_13t_keyed_01a113a0`;
+DOM and GPU screenshot inspection confirmed revision 1 and the two rows/keyway.
+
+The first create job was rejected for duplicate `tooth_row_cut_13` identity;
+no document was published. Corrected job `duplex35_13t_keyed_20261006_v2`
+succeeded. STEP/STL are saved in the native workspace's exports directory.
+No service implementation, installed bundle or pre-existing model changed.
+Hub dimensions are documented assumptions; manufacturing fit/material/load rating
+remain unspecified. Existing platform-validation next tasks above are unchanged.
+
+### Follow-up — selected hub edge rounded to 1 mm
+
+The user's MCP App Quick Edit selected revision-1 `edge-787`, the circular
+outside edge of the projecting hub at Z=-17.5006 mm, and requested a 1 mm round.
+`cad_read`, `cad_context` and `cad_resolve_selection` confirmed current revision 1
+and one unique circular edge. `cad_apply(expected_revision=1)` added parameter
+`hub_edge_radius=1`, the `rounded_hub_edge` fillet and output change, committing
+revision 2. The edit recipe is
+`examples/duplex-35-sprocket-13t-keyed.edit.json`.
+
+Revision 2 is one valid solid, 274 faces, 804 edges, volume
+17,869.923224229355 mm3. Topology confirms the new toroidal face spans exactly
+Z=-17.5006 to -16.5006 mm. The existing live viewer followed revision 2, cleared
+the old selection and displayed the rounded outer hub edge; its DOM/screenshot
+were inspected. Revision-qualified STEP/STL exports succeeded as `-r2.step` and
+`-r2.stl`. No additional manufacturing fit or load validation is claimed.
+
+### Drawing export — 13-tooth keyed sprocket revision 2
+
+The user requested drawings of the current sprocket. Installed `cad_job` /
+`cad_drawing` job `sprocket35_13t_keyed_drawing_r2_v1` generated an A3 landscape
+sheet at 2:1 with top/front/right/isometric views and a true hub section at
+Z=-5 mm. PDF/SVG and five 1:1 mm DXFs are in the native workspace export folder
+`duplex_35_sprocket_13t_keyed-r2-drawing-eval_93a432aeb7e1e6b8ad2bd3e4d5d36d85`.
+The reusable request is `examples/duplex-35-sprocket-13t-keyed.drawing.json`.
+
+All eight requested dimensions resolved to actual geometry: OD 44.45, overall
+length 31.75, row spacing 10.1346, row width 4.1148, hub diameter 28.178125,
+bore 15.875, keyway width 4.7625 and opposite bore wall-to-keyway-roof 17.8816 mm.
+Poppler rendered the single-page PDF for visual inspection; pypdf confirmed all
+eight printed dimension labels and revision 2. All five DXFs passed independent
+ezdxf audit with zero errors/fixes and millimeter units. An initial validation
+process loaded a Python 3.14 NumPy into Python 3.12; reusing the bundled compatible
+NumPy corrected the verifier environment without changing artifacts. Native
+source read-back remained byte-equivalent JSON to its pre-export response.
+Review evidence and the complete 132,638-byte ZIP are under
+`build/sprocket35-13t/`; no model revision or service implementation changed.

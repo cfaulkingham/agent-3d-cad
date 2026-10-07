@@ -1,0 +1,45 @@
+{
+  "document_id": "duplex_35_sprocket_13t_keyed",
+  "expected_revision": 1,
+  "request_id": "sprocket35_13t_hub_edge_r1mm_20261006",
+  "operations": [
+    {
+      "op": "set_parameter",
+      "name": "hub_edge_radius",
+      "value": 1
+    },
+    {
+      "op": "add_feature",
+      "feature": {
+        "id": "rounded_hub_edge",
+        "type": "fillet",
+        "input": "sprocket",
+        "radius": {
+          "parameter": "hub_edge_radius"
+        },
+        "edges": {
+          "center": {
+            "point": [
+              6.675272523373993e-14,
+              7.979953521447344e-16,
+              -17.5006
+            ],
+            "tolerance": 0.00001
+          },
+          "curve_kind": "circle",
+          "expected_count": 1,
+          "feature_id": "sprocket",
+          "length": {
+            "tolerance": 0.00001,
+            "value": 88.52419049193489
+          },
+          "type": "geometric"
+        }
+      }
+    },
+    {
+      "op": "set_output",
+      "feature_id": "rounded_hub_edge"
+    }
+  ]
+}

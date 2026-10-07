@@ -1,0 +1,2266 @@
+{
+  "document_id": "duplex_35_sprocket_13t_keyed",
+  "request_id": "duplex35_13t_keyed_20261006_v2",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "chain_pitch": 9.525,
+      "bushing_diameter": 5.08,
+      "form_clearance": 0.0381,
+      "row_width": 4.1148,
+      "row_spacing": 10.1346,
+      "bore_diameter": 15.875,
+      "hub_diameter": 28.178125,
+      "hub_length": 31.75,
+      "tip_bevel": 0.5,
+      "outside_diameter": 44.45,
+      "keyway_width": 4.7625,
+      "keyway_radial_depth": 2.0066
+    },
+    "features": [
+      {
+        "id": "bushing_seat",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "bushing_diameter"
+                    },
+                    0.5025
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "form_clearance"
+              }
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          0,
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "chain_pitch"
+                },
+                2.0892907344301888
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "working_curve_blank",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "bushing_diameter"
+                    },
+                    1.3025
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "form_clearance"
+              }
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "bushing_diameter"
+                },
+                -0.6162736471105557
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "chain_pitch"
+                      },
+                      2.0892907344301888
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bushing_diameter"
+                      },
+                      0.5101046871741667
+                    ],
+                    "unit": "mm"
+                  }
+                }
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "working_curve_lower_trim",
+        "type": "box",
+        "size": [
+          200,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "subtract",
+                    "args": [
+                      {
+                        "expression": {
+                          "op": "multiply",
+                          "args": [
+                            {
+                              "parameter": "chain_pitch"
+                            },
+                            2.0892907344301888
+                          ],
+                          "unit": "mm"
+                        }
+                      },
+                      {
+                        "expression": {
+                          "op": "multiply",
+                          "args": [
+                            {
+                              "expression": {
+                                "op": "add",
+                                "args": [
+                                  {
+                                    "expression": {
+                                      "op": "multiply",
+                                      "args": [
+                                        {
+                                          "parameter": "bushing_diameter"
+                                        },
+                                        0.5025
+                                      ],
+                                      "unit": "mm"
+                                    }
+                                  },
+                                  {
+                                    "parameter": "form_clearance"
+                                  }
+                                ],
+                                "unit": "mm"
+                              }
+                            },
+                            0.6376308589677083
+                          ],
+                          "unit": "mm"
+                        }
+                      }
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                100
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "row_width"
+                },
+                4
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "origin": [
+          -100,
+          -100,
+          -2
+        ]
+      },
+      {
+        "id": "working_curve_left_trim",
+        "type": "box",
+        "size": [
+          100,
+          200,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "row_width"
+                },
+                4
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "origin": [
+          -100,
+          -100,
+          -2
+        ]
+      },
+      {
+        "id": "working_curve_upper",
+        "type": "cut",
+        "left": "working_curve_blank",
+        "right": "working_curve_lower_trim"
+      },
+      {
+        "id": "working_curve_right",
+        "type": "cut",
+        "left": "working_curve_upper",
+        "right": "working_curve_left_trim"
+      },
+      {
+        "id": "working_curve_left",
+        "type": "instance",
+        "input": "working_curve_right",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            {
+              "expression": {
+                "op": "multiply",
+                "args": [
+                  {
+                    "parameter": "row_width"
+                  },
+                  0.5
+                ],
+                "unit": "mm"
+              }
+            }
+          ],
+          "axis": [
+            0,
+            1,
+            0
+          ],
+          "angle_deg": 180
+        }
+      },
+      {
+        "id": "tangent_flank_profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            -1
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "polygon",
+          "points": [
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                -0.6162736471105557
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "add",
+                                    "args": [
+                                      {
+                                        "expression": {
+                                          "op": "multiply",
+                                          "args": [
+                                            {
+                                              "parameter": "bushing_diameter"
+                                            },
+                                            1.3025
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      },
+                                      {
+                                        "parameter": "form_clearance"
+                                      }
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                0.8993817760868756
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    -1
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.5101046871741667
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      1.3025
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "bushing_diameter"
+                          },
+                          -0.6162736471105557
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      1.3025
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.8993817760868756
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.5101046871741667
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      1.3025
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "bushing_diameter"
+                          },
+                          1.3593185443964728
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.8437793457852021
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.8993817760868756
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "subtract",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.3350419300025808
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.8437793457852021
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "subtract",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                1.3593185443964728
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "subtract",
+                                    "args": [
+                                      {
+                                        "expression": {
+                                          "op": "multiply",
+                                          "args": [
+                                            {
+                                              "parameter": "bushing_diameter"
+                                            },
+                                            0.8437793457852021
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      },
+                                      {
+                                        "parameter": "form_clearance"
+                                      }
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                0.8993817760868756
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    -1
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "subtract",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.3350419300025808
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.8437793457852021
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      {
+        "id": "tangent_flank",
+        "type": "extrude",
+        "input": "tangent_flank_profile",
+        "distance": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "id": "topping_gap_blank_profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            -1
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "polygon",
+          "points": [
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "subtract",
+                                    "args": [
+                                      {
+                                        "expression": {
+                                          "op": "multiply",
+                                          "args": [
+                                            {
+                                              "parameter": "chain_pitch"
+                                            },
+                                            2.0892907344301888
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      },
+                                      {
+                                        "expression": {
+                                          "op": "multiply",
+                                          "args": [
+                                            {
+                                              "parameter": "bushing_diameter"
+                                            },
+                                            0.3350419300025808
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      }
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "expression": {
+                                          "op": "subtract",
+                                          "args": [
+                                            {
+                                              "expression": {
+                                                "op": "multiply",
+                                                "args": [
+                                                  {
+                                                    "parameter": "bushing_diameter"
+                                                  },
+                                                  0.8437793457852021
+                                                ],
+                                                "unit": "mm"
+                                              }
+                                            },
+                                            {
+                                              "parameter": "form_clearance"
+                                            }
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      },
+                                      0.4371640662758286
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.2464778630319775
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    -1
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "subtract",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.3350419300025808
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.8437793457852021
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "chain_pitch"
+                                      },
+                                      2.0892907344301888
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.3350419300025808
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "subtract",
+                                    "args": [
+                                      {
+                                        "expression": {
+                                          "op": "multiply",
+                                          "args": [
+                                            {
+                                              "parameter": "bushing_diameter"
+                                            },
+                                            0.8437793457852021
+                                          ],
+                                          "unit": "mm"
+                                        }
+                                      },
+                                      {
+                                        "parameter": "form_clearance"
+                                      }
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                0.4371640662758286
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    0.2464778630319775
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "subtract",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "chain_pitch"
+                                },
+                                2.0892907344301888
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "bushing_diameter"
+                                },
+                                0.3350419300025808
+                              ],
+                              "unit": "mm"
+                            }
+                          }
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "subtract",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "bushing_diameter"
+                                      },
+                                      0.8437793457852021
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                {
+                                  "parameter": "form_clearance"
+                                }
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.4371640662758286
+                        ],
+                        "unit": "mm"
+                      }
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "add",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "multiply",
+                              "args": [
+                                {
+                                  "parameter": "outside_diameter"
+                                },
+                                0.5
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          10
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    0.2464778630319775
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "outside_diameter"
+                          },
+                          0.5
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    10
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "expression": {
+                              "op": "add",
+                              "args": [
+                                {
+                                  "expression": {
+                                    "op": "multiply",
+                                    "args": [
+                                      {
+                                        "parameter": "outside_diameter"
+                                      },
+                                      0.5
+                                    ],
+                                    "unit": "mm"
+                                  }
+                                },
+                                10
+                              ],
+                              "unit": "mm"
+                            }
+                          },
+                          0.2464778630319775
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    -1
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "add",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "outside_diameter"
+                          },
+                          0.5
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    10
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      {
+        "id": "topping_gap_blank",
+        "type": "extrude",
+        "input": "topping_gap_blank_profile",
+        "distance": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "id": "right_topping_circle",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "subtract",
+            "args": [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "bushing_diameter"
+                    },
+                    0.8437793457852021
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "form_clearance"
+              }
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "bushing_diameter"
+                },
+                1.3593185443964728
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "chain_pitch"
+                      },
+                      2.0892907344301888
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bushing_diameter"
+                      },
+                      0.3350419300025808
+                    ],
+                    "unit": "mm"
+                  }
+                }
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "left_topping_circle",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "subtract",
+            "args": [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "bushing_diameter"
+                    },
+                    0.8437793457852021
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "form_clearance"
+              }
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "row_width"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        },
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bushing_diameter"
+                      },
+                      1.3593185443964728
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                -1
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "chain_pitch"
+                      },
+                      2.0892907344301888
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bushing_diameter"
+                      },
+                      0.3350419300025808
+                    ],
+                    "unit": "mm"
+                  }
+                }
+              ],
+              "unit": "mm"
+            }
+          },
+          -1
+        ]
+      },
+      {
+        "id": "topping_gap_right",
+        "type": "cut",
+        "left": "topping_gap_blank",
+        "right": "right_topping_circle"
+      },
+      {
+        "id": "topping_gap",
+        "type": "cut",
+        "left": "topping_gap_right",
+        "right": "left_topping_circle"
+      },
+      {
+        "id": "gap_seat_working_right",
+        "type": "fuse",
+        "left": "bushing_seat",
+        "right": "working_curve_right"
+      },
+      {
+        "id": "gap_both_working_curves",
+        "type": "fuse",
+        "left": "gap_seat_working_right",
+        "right": "working_curve_left"
+      },
+      {
+        "id": "gap_tangent_flanks",
+        "type": "fuse",
+        "left": "gap_both_working_curves",
+        "right": "tangent_flank"
+      },
+      {
+        "id": "chain_gap_tool",
+        "type": "fuse",
+        "left": "gap_tangent_flanks",
+        "right": "topping_gap"
+      },
+      {
+        "id": "row_blank_profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            -1,
+            0
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "polygon",
+          "points": [
+            [
+              0,
+              0
+            ],
+            [
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "outside_diameter"
+                          },
+                          0.5
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "parameter": "tip_bevel"
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              },
+              0
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "outside_diameter"
+                    },
+                    0.5
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "tip_bevel"
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "multiply",
+                  "args": [
+                    {
+                      "parameter": "outside_diameter"
+                    },
+                    0.5
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "parameter": "row_width"
+                    },
+                    {
+                      "parameter": "tip_bevel"
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              }
+            ],
+            [
+              {
+                "expression": {
+                  "op": "subtract",
+                  "args": [
+                    {
+                      "expression": {
+                        "op": "multiply",
+                        "args": [
+                          {
+                            "parameter": "outside_diameter"
+                          },
+                          0.5
+                        ],
+                        "unit": "mm"
+                      }
+                    },
+                    {
+                      "parameter": "tip_bevel"
+                    }
+                  ],
+                  "unit": "mm"
+                }
+              },
+              {
+                "parameter": "row_width"
+              }
+            ],
+            [
+              0,
+              {
+                "parameter": "row_width"
+              }
+            ]
+          ]
+        }
+      },
+      {
+        "id": "row_blank",
+        "type": "revolve",
+        "input": "row_blank_profile",
+        "axis": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "direction": [
+            0,
+            0,
+            1
+          ]
+        },
+        "angle_deg": 360
+      },
+      {
+        "id": "tooth_row_cut_1",
+        "type": "cut",
+        "left": "row_blank",
+        "right": "chain_gap_tool"
+      },
+      {
+        "id": "chain_gap_2",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 27.692307692307693
+        }
+      },
+      {
+        "id": "tooth_row_cut_2",
+        "type": "cut",
+        "left": "tooth_row_cut_1",
+        "right": "chain_gap_2"
+      },
+      {
+        "id": "chain_gap_3",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 55.38461538461539
+        }
+      },
+      {
+        "id": "tooth_row_cut_3",
+        "type": "cut",
+        "left": "tooth_row_cut_2",
+        "right": "chain_gap_3"
+      },
+      {
+        "id": "chain_gap_4",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 83.07692307692308
+        }
+      },
+      {
+        "id": "tooth_row_cut_4",
+        "type": "cut",
+        "left": "tooth_row_cut_3",
+        "right": "chain_gap_4"
+      },
+      {
+        "id": "chain_gap_5",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 110.76923076923077
+        }
+      },
+      {
+        "id": "tooth_row_cut_5",
+        "type": "cut",
+        "left": "tooth_row_cut_4",
+        "right": "chain_gap_5"
+      },
+      {
+        "id": "chain_gap_6",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 138.46153846153845
+        }
+      },
+      {
+        "id": "tooth_row_cut_6",
+        "type": "cut",
+        "left": "tooth_row_cut_5",
+        "right": "chain_gap_6"
+      },
+      {
+        "id": "chain_gap_7",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 166.15384615384616
+        }
+      },
+      {
+        "id": "tooth_row_cut_7",
+        "type": "cut",
+        "left": "tooth_row_cut_6",
+        "right": "chain_gap_7"
+      },
+      {
+        "id": "chain_gap_8",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 193.84615384615384
+        }
+      },
+      {
+        "id": "tooth_row_cut_8",
+        "type": "cut",
+        "left": "tooth_row_cut_7",
+        "right": "chain_gap_8"
+      },
+      {
+        "id": "chain_gap_9",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 221.53846153846155
+        }
+      },
+      {
+        "id": "tooth_row_cut_9",
+        "type": "cut",
+        "left": "tooth_row_cut_8",
+        "right": "chain_gap_9"
+      },
+      {
+        "id": "chain_gap_10",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 249.23076923076923
+        }
+      },
+      {
+        "id": "tooth_row_cut_10",
+        "type": "cut",
+        "left": "tooth_row_cut_9",
+        "right": "chain_gap_10"
+      },
+      {
+        "id": "chain_gap_11",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 276.9230769230769
+        }
+      },
+      {
+        "id": "tooth_row_cut_11",
+        "type": "cut",
+        "left": "tooth_row_cut_10",
+        "right": "chain_gap_11"
+      },
+      {
+        "id": "chain_gap_12",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 304.61538461538464
+        }
+      },
+      {
+        "id": "tooth_row_cut_12",
+        "type": "cut",
+        "left": "tooth_row_cut_11",
+        "right": "chain_gap_12"
+      },
+      {
+        "id": "chain_gap_13",
+        "type": "instance",
+        "input": "chain_gap_tool",
+        "rotation": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "axis": [
+            0,
+            0,
+            1
+          ],
+          "angle_deg": 332.3076923076923
+        }
+      },
+      {
+        "id": "tooth_row_cut_13",
+        "type": "cut",
+        "left": "tooth_row_cut_12",
+        "right": "chain_gap_13"
+      },
+      {
+        "id": "second_tooth_row",
+        "type": "instance",
+        "input": "tooth_row_cut_13",
+        "translation": [
+          0,
+          0,
+          {
+            "parameter": "row_spacing"
+          }
+        ]
+      },
+      {
+        "id": "duplex_hub",
+        "type": "cylinder",
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "hub_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        },
+        "height": {
+          "parameter": "hub_length"
+        },
+        "origin": [
+          0,
+          0,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "expression": {
+                    "op": "add",
+                    "args": [
+                      {
+                        "parameter": "row_width"
+                      },
+                      {
+                        "parameter": "row_spacing"
+                      }
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "parameter": "hub_length"
+                }
+              ],
+              "unit": "mm"
+            }
+          }
+        ]
+      },
+      {
+        "id": "first_row_and_hub",
+        "type": "fuse",
+        "left": "duplex_hub",
+        "right": "tooth_row_cut_13"
+      },
+      {
+        "id": "aligned_duplex_rows",
+        "type": "fuse",
+        "left": "first_row_and_hub",
+        "right": "second_tooth_row"
+      },
+      {
+        "id": "bored_sprocket",
+        "type": "hole",
+        "input": "aligned_duplex_rows",
+        "origin": [
+          0,
+          0,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "expression": {
+                    "op": "subtract",
+                    "args": [
+                      {
+                        "expression": {
+                          "op": "add",
+                          "args": [
+                            {
+                              "parameter": "row_width"
+                            },
+                            {
+                              "parameter": "row_spacing"
+                            }
+                          ],
+                          "unit": "mm"
+                        }
+                      },
+                      {
+                        "parameter": "hub_length"
+                      }
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": {
+          "expression": {
+            "op": "multiply",
+            "args": [
+              {
+                "parameter": "bore_diameter"
+              },
+              0.5
+            ],
+            "unit": "mm"
+          }
+        },
+        "depth": {
+          "expression": {
+            "op": "add",
+            "args": [
+              {
+                "parameter": "hub_length"
+              },
+              2
+            ],
+            "unit": "mm"
+          }
+        }
+      },
+      {
+        "id": "keyway_tool",
+        "type": "box",
+        "size": [
+          {
+            "parameter": "keyway_width"
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "expression": {
+                    "op": "multiply",
+                    "args": [
+                      {
+                        "parameter": "bore_diameter"
+                      },
+                      0.5
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                {
+                  "parameter": "keyway_radial_depth"
+                }
+              ],
+              "unit": "mm"
+            }
+          },
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "hub_length"
+                },
+                2
+              ],
+              "unit": "mm"
+            }
+          }
+        ],
+        "origin": [
+          {
+            "expression": {
+              "op": "multiply",
+              "args": [
+                {
+                  "parameter": "keyway_width"
+                },
+                -0.5
+              ],
+              "unit": "mm"
+            }
+          },
+          0,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "expression": {
+                    "op": "subtract",
+                    "args": [
+                      {
+                        "expression": {
+                          "op": "add",
+                          "args": [
+                            {
+                              "parameter": "row_width"
+                            },
+                            {
+                              "parameter": "row_spacing"
+                            }
+                          ],
+                          "unit": "mm"
+                        }
+                      },
+                      {
+                        "parameter": "hub_length"
+                      }
+                    ],
+                    "unit": "mm"
+                  }
+                },
+                1
+              ],
+              "unit": "mm"
+            }
+          }
+        ]
+      },
+      {
+        "id": "sprocket",
+        "type": "cut",
+        "left": "bored_sprocket",
+        "right": "keyway_tool"
+      }
+    ],
+    "output": "sprocket"
+  }
+}
