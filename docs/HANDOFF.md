@@ -6,6 +6,80 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Intel regression resolved and current native matrix validated — 2026-10-07
+
+Native source commit `541e3bf7f68224dfd8512ff49cda88ec85932469` passed the
+[complete five-platform workflow](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37650153048).
+This supersedes the pending Intel/native-platform status in the historical notes
+below. OCCT remains pinned to 8.0.1 with `agentcad-hlr-midpoint-v2`.
+
+The Intel failure was the right-handed D12, pitch 1.25, length 3.75 thread's front
+hidden entity 78: 22 versus 23 adaptive polyline vertices after B-rep roundtrip.
+Diagnostic runs `37648289620` / `416b3ae` and `37648841811` / `bf274c7` retained
+both actual projections and source snapshots while preserving the strict failure.
+The snapshots are byte-identical, endpoints are unchanged, and the bidirectional
+continuous polyline-distance upper bound is **0.00451554744 mm**, within the
+existing 0.02 mm drawing tolerance. Intel independently passed 398 exact projected
+curves / 25,870 paired samples with maximum sampled deviation **3.77814108e-9 mm**,
+plus the physical occlusion, balloon visibility and streaming-root checks. The
+B-rep checks are finite numerical evidence, not a continuous-domain proof.
+
+The corrected regression permits differing adaptive polyline vertex counts only
+after the exact visible/hidden curve checks pass. A bidirectional continuous
+polyline-distance bound must meet the existing 0.02 mm drawing tolerance. Curve
+counts, visibility metadata, endpoints, and equal-size numeric arrays retain
+strict comparisons. Negative controls reject changed visibility, endpoints,
+interiors, curve types and missing curves. The native test can replay an archived
+fixture JSON directly; both Intel archives passed replay. Production geometry and
+tool/document contracts are unchanged. Exact projection capture is an optional
+bounded internal kernel diagnostic; ordinary tool calls do not request it.
+CI retains native test logs, exact projections, snapshots and metrics on success
+as well as failure.
+
+Final CI evidence (all **28/28 CTest suites** passed on every lane):
+
+| Platform | CTest seconds | Schema checks / tools | Official MCP SDK 2.3.0 checks | Performance geometry checks |
+|---|---:|---:|---:|---:|
+| Linux x64 | 50.50 | 293 / 19 | 437 | 69284 |
+| Linux arm64 | 66.74 | 291 / 19 | 442 | 69493 |
+| macOS arm64 | 83.24 | 291 / 19 | 517 | 68977 |
+| macOS Intel x64 | 236.23 | 295 / 19 | 567 | 69411 |
+| Windows x64 | 125.47 | 285 / 19 | 457 | 70467 |
+
+Schema/SDK totals include successful asynchronous polls and therefore vary with
+execution timing. Every lane passed relocated empty-PATH create/edit/reopen,
+STEP/STL, drawings, assemblies/BOM/balloons, MCP and embedded app-resource checks,
+then produced its native preview archive. Both Linux lanes additionally passed
+the clean runtime container with no Python, Rust, Node, CMake or compiler.
+
+Independently downloaded all five archives from that exact run and verified
+**1,365 manifest-listed files**, complete file inventories, executable binary
+architectures, OCCT version/modification notices and original SDK provenance.
+The final runtime files match their post-relocation hashes; the original SDK hash
+matches the v2 modification manifest. macOS archives target **15.0**. Archive hashes:
+
+| Platform | Archive SHA-256 |
+|---|---|
+| macOS arm64 | `6600b6a44da03b09e260dbfc60184b2d1bfccd9785160785787db40e8e3b1b37` |
+| macOS Intel x64 | `de3f6f26eed24b3563c47f1e1e8edbd5b7d8c9e4000b60be46a0d76aed985621` |
+| Linux arm64 | `db3e541e4d739ec5b49dd0f10eada6cc1a85df4d1352e96d8695bc59daf7814c` |
+| Linux x64 | `0e1767a9b3ce362af5e97f06725a13c425605d02842c560fcd71193bac8c5f99` |
+| Windows x64 | `2bcca17bf6673829d3661849e0c0773a8c3a7b1959c61762a1d45c48d4dc8cd7` |
+
+Local macOS arm64 also passed `cmake --build build-app-protocol --parallel 4`,
+`ctest --test-dir build-app-protocol --output-on-failure` (**28/28 in 46.12 s**;
+**69,055 performance geometry checks**) and native `bundle-check`.
+Logs, downloaded artifacts, verification scripts and exact commands/results are
+under `build/intel-perf-fix/`; the consolidated machine-readable record is
+`validation-report.json`. The committed native code/tests/workflow match the
+validated source; subsequent documentation updates do not change those inputs.
+
+Limits: this validates the current native preview/SDK/bundle matrix. Independent
+offline browser/GPU-host interactions, original-code licensing, signing/notarization
+and public release preparation retain their separate acceptance gates. Complex
+cold thread drawings still take minutes. Next: profile remaining exact root/trim
+work before further optimization, or scope a workflow-driven product increment.
+
 ## Intel CI follow-up — diagnostic context
 
 The reported GitHub Actions run `37609850499`, Intel job `112754188016`, tested

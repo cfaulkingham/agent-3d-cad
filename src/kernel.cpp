@@ -1179,7 +1179,7 @@ struct DrawingView {
 };
 }
 
-Json BuiltModel::drawing(const Json& spec) const {
+Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
   fields(spec,{"views"},{"hidden_lines"});
   if (!spec.at("views").is_array() || spec.at("views").empty() || spec.at("views").size()>6)
     throw Error("invalid_argument", "A drawing requires 1 to 6 views");
@@ -1188,6 +1188,8 @@ Json BuiltModel::drawing(const Json& spec) const {
   const bool hidden = spec.value("hidden_lines",true);
   topology_limit(impl_->feature(""),QueryLimits{});
   DrawingBudget budget;
+  std::size_t projection_bytes=0;
+  if (exact_projections) *exact_projections=Json::array();
   Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance}};
   std::set<std::string> ids;
   std::size_t anchor_count=0;
@@ -1297,14 +1299,26 @@ Json BuiltModel::drawing(const Json& spec) const {
         HLRBRep_HLRToShape extraction(algorithm);
         // Sharp boundaries, tangent transitions and silhouettes form the view.
         // C2 sewn seams and arbitrary surface isoparameters are not part edges.
-        projected.append(extraction.VCompound(),false);
-        projected.append(extraction.Rg1LineVCompound(),false);
-        projected.append(extraction.OutLineVCompound(),false);
+        Json exact=Json::array();
+        const auto append=[&](const TopoDS_Shape& curves,bool concealed) {
+          if (exact_projections) {
+            SnapshotBuffer buffer(32*1024*1024-projection_bytes); std::ostream stream(&buffer);
+            if (!curves.IsNull()) BRepTools::Write(curves,stream,false,false,TopTools_FormatVersion_CURRENT);
+            if (!stream) throw Error("limit_exceeded","Exact projection diagnostics exceed cache budget");
+            projection_bytes+=buffer.bytes.size();
+            exact.push_back({{"hidden",concealed},{"brep",std::move(buffer.bytes)}});
+          }
+          projected.append(curves,concealed);
+        };
+        append(extraction.VCompound(),false);
+        append(extraction.Rg1LineVCompound(),false);
+        append(extraction.OutLineVCompound(),false);
         if (hidden) {
-          projected.append(extraction.HCompound(),true);
-          projected.append(extraction.Rg1LineHCompound(),true);
-          projected.append(extraction.OutLineHCompound(),true);
+          append(extraction.HCompound(),true);
+          append(extraction.Rg1LineHCompound(),true);
+          append(extraction.OutLineHCompound(),true);
         }
+        if (exact_projections) exact_projections->push_back({{"id",id},{"curves",std::move(exact)}});
       }
       projected.remove_covered_hidden_lines();
       if (projected.entities.empty()) throw Error(orientation == "section" ? "empty_section" : "empty_projection", "Drawing view contains no curves");
