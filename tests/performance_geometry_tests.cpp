@@ -182,6 +182,44 @@ double equivalent_projection(const Json& a,const Json& b,double tolerance,const 
   } else equivalent(a,b,path);
   return worst;
 }
+Json projection_comparison_payload(const Json& drawing,const std::string& path) {
+  auto result=drawing;
+  // Older archived evidence predates per-view resource accounting.
+  if (!result.contains("view_budgets")) return result;
+  const auto& views=drawing.at("views");
+  const auto& budgets=drawing.at("view_budgets");
+  require(budgets.is_array() && budgets.size()==views.size(),"One resource budget per view at "+path);
+  for (std::size_t v=0;v<views.size();++v) {
+    const auto where=path+".view_budgets["+std::to_string(v)+"]";
+    const auto& usage=budgets[v];
+    for (const auto* key:{"entities","points","examined_edges"})
+      require(usage.at(key).is_number_integer() && usage.at(key)>=0,"Nonnegative integer budget at "+where+"."+key);
+    // Validate each budget before summing, including evidence replay.
+    check_drawing_totals(Json::array(),Json::array({usage}),"projection-regression");
+    std::size_t entities=0,points=0;
+    const auto count=[&](const Json& group) {
+      require(group.is_array(),"Drawing entity array at "+path);
+      entities+=group.size();
+      for (const auto& entity:group) points+=entity.contains("points") ? entity.at("points").size() : 1;
+    };
+    count(views[v].at("entities"));
+    if (views[v].contains("section_regions"))
+      for (const auto& region:views[v].at("section_regions")) count(region);
+    require(usage.at("entities").get<std::size_t>()>=entities && usage.at("points").get<std::size_t>()>=points,
+      "Resource budget covers emitted geometry at "+where);
+    // Accounting includes work later removed by hidden-line clipping. Preserve
+    // that overhead exactly, while allowing only the point-count change already
+    // justified by the exact-curve and continuous polyline comparisons. Entity
+    // and examined-edge budgets still compare strictly, as do all other fields.
+    result["view_budgets"][v]["points"]=usage.at("points").get<std::size_t>()-points;
+  }
+  check_drawing_totals(views,budgets,"projection-regression");
+  return result;
+}
+double equivalent_drawing(const Json& a,const Json& b,double tolerance,const std::string& path) {
+  return equivalent_projection(projection_comparison_payload(a,path+" original"),
+    projection_comparison_payload(b,path+" restored"),tolerance,path);
+}
 void projection_comparison_controls() {
   const Json original={{"kind","polyline"},{"hidden",false},{"points",{{0,0},{1,0},{2,0}}}};
   const Json resampled={{"kind","polyline"},{"hidden",false},{"points",{{0,0},{0.5,0},{1.5,0},{2,0}}}};
@@ -200,6 +238,31 @@ void projection_comparison_controls() {
   try { equivalent_projection(Json::array({original}),Json::array(),0.02); }
   catch (const std::runtime_error&) { missing_rejected=true; }
   require(missing_rejected,"Projection comparison rejects a missing curve");
+
+  const auto drawing_payload=[](const Json& entity) {
+    return Json{{"views",Json::array({Json{{"id","front"},{"entities",Json::array({entity})}}})},
+      // Include two clipped lines, so unused work must remain accounted for.
+      {"view_budgets",Json::array({Json{{"entities",3},{"examined_edges",3},{"points",entity.at("points").size()+4}}})}};
+  };
+  const auto original_drawing=drawing_payload(original),resampled_drawing=drawing_payload(resampled);
+  near(equivalent_drawing(original_drawing,resampled_drawing,0.02,"resampled budget"),0);
+  const auto rejects_budget=[&](const Json& candidate) {
+    bool rejected=false;
+    try { equivalent_drawing(original_drawing,candidate,0.02,"budget control"); }
+    catch (const std::exception&) { rejected=true; }
+    require(rejected,"Drawing comparison rejects invalid or unexplained budget changes");
+  };
+  auto bad_budget=resampled_drawing; bad_budget["view_budgets"][0]["points"]=7; rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget["view_budgets"][0]["points"]=9; rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget["view_budgets"][0]["points"]=3; rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget["view_budgets"][0]["points"]=-1; rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget["view_budgets"][0]["points"]=200001; rejects_budget(bad_budget);
+  for (const auto* key:{"entities","examined_edges"}) {
+    bad_budget=resampled_drawing; bad_budget["view_budgets"][0][key]=4; rejects_budget(bad_budget);
+  }
+  bad_budget=resampled_drawing; bad_budget["view_budgets"]=Json::array(); rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget.erase("view_budgets"); rejects_budget(bad_budget);
+  bad_budget=resampled_drawing; bad_budget["views"][0]["entities"][0]["points"][1]={0.5,0.2}; rejects_budget(bad_budget);
 }
 double curve_distance(const Json& view,bool hidden,double x,double y) {
   double nearest=std::numeric_limits<double>::infinity();
@@ -369,8 +432,9 @@ void verify_thread(const Json& model,double height) {
   // Exact visible/hidden trims have already passed the stricter native check.
   // Only adaptive polyline vertex cardinality may differ after B-rep roundtrip;
   // equal-size arrays, entity counts, metadata and endpoints remain strict.
+  // Resource point accounting must change by exactly the emitted point delta.
   const double tolerance=result.at("tolerance_mm");
-  const double bound=equivalent_projection(result,restored_result,tolerance,"restored "+fixture);
+  const double bound=equivalent_drawing(result,restored_result,tolerance,"restored "+fixture);
   save_evidence(fixture+"-polyline-report",{{"continuous_deviation_bound_mm",bound},{"tolerance_mm",tolerance}});
   std::cout<<fixture<<": continuous polyline deviation bound "<<bound<<" mm\n";
 }
@@ -383,10 +447,10 @@ int main(int argc,char** argv) {
     if (argc>1) {
       require(argc==2,"Replay expects one saved projection evidence file");
       std::ifstream input(argv[1]); Json evidence; input>>evidence;
-      const double bound=equivalent_projection(evidence.at("original"),evidence.at("restored"),
-        evidence.at("original").at("tolerance_mm"),"archived projection");
       if (evidence.contains("original_exact"))
         equivalent_exact_projections(evidence.at("original_exact"),evidence.at("restored_exact"),"archived projection");
+      const double bound=equivalent_drawing(evidence.at("original"),evidence.at("restored"),
+        evidence.at("original").at("tolerance_mm"),"archived projection");
       std::cout<<"Archived projection continuous deviation bound: "<<bound<<" mm\n";
       return 0;
     }

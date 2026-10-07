@@ -6,6 +6,43 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Intel CI resource-accounting regression — 2026-10-07
+
+Run `37685717405` at `348adbd`, Intel job `113012878963`, failed only
+`performance_geometry` among 32 CTest suites. Its exact projected curves passed:
+140 left-thread curves / 9,100 samples and 258 right-thread curves / 16,770 samples,
+maximum right-thread deviation 3.77814e-9 mm. The failure was the newly reported
+`view_budgets[1].points`: **633 vs 634**, reflecting the already documented Intel
+adaptive polyline resampling (22 vs 23 vertices) after B-rep restoration.
+
+Reproduced the exact failure locally by downloading and replaying that job’s
+`right-1.25.json`. The final front-view entities contain 607 vs 608 points; each
+budget also charges the same 26 points removed by hidden-line clipping. Geometry
+is equivalent under the existing checks; requiring equal accounting totals was
+inconsistent with permitting geometrically equivalent adaptive sampling.
+
+Only `tests/performance_geometry_tests.cpp` changes behavior. Its drawing
+comparison checks one budget per view, nonnegative integer counters, existing
+per-view/aggregate resource limits and coverage of emitted geometry. It compares
+point-budget overhead after subtracting actual emitted points, requiring the
+reported delta to match the verified sampling delta exactly. Entity/edge budgets,
+other metadata, endpoint checks, exact curve trims/types/visibility and the
+0.02 mm continuous polyline bound remain unchanged. Negative controls reject
+under-counting, unexplained over-counting, malformed/missing budgets, altered
+entity/edge counts, over-limit usage and changed geometry. Legacy archived evidence
+without budgets still replays. Exact-curve checks now precede sampled comparison
+in replay mode as they already did in fresh evaluation.
+
+Validation: both actual Intel fixture replays passed; right-thread continuous
+bound **0.00451555 mm**, left-thread bound 2.45015e-13 mm, with the same exact
+curves/sample counts above. Local macOS arm64 rebuilt the regression executable;
+`ctest --test-dir build-desktop -R '^(performance_geometry|cache)$'
+--output-on-failure` passed **2/2 in 26.23 s**, including **69,402 geometry checks**,
+exact physical occlusion, streaming roots and balloon visibility. Evidence lives
+under `build-desktop/ci-intel-37685717405/`. No production geometry, tolerances,
+SDK/cache identities or tool/document contracts changed. Fresh Intel CI remains
+the acceptance gate for this correction.
+
 ## Installation and standalone Tauri viewer — 2026-10-07 (preview implementation)
 
 The user requested installation-focused documentation, easy client setup,
