@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+const calls = [];
+const self = { parent: {}, addEventListener() {}, removeEventListener() {}, __TAURI__: { core: { async invoke(name, args) {
+  calls.push({ name, args });
+  if (name === 'initialize') return { view_id: 'main', workspace: '/test/projects' };
+  if (name === 'call_tool') return { structuredContent: { documents: [] } };
+  if (name === 'export_model') throw 'Native export failed';
+} } } };
+const context = vm.createContext({ window: self, setTimeout, clearTimeout });
+vm.runInContext(readFileSync(new URL('../web/bridge.js', import.meta.url), 'utf8'), context);
+const bridge = new context.CadBridge(self);
+let opened;
+bridge.on('ui/notifications/tool-result', result => opened = result);
+await bridge.initialize();
+assert.equal(opened.structuredContent.view_id, 'main');
+assert.equal(bridge.hostContext.workspace, '/test/projects');
+assert.equal(bridge.capabilities.desktop, true);
+assert.equal(bridge.capabilities.message, undefined);
+bridge.reportSize(1000, 800); // Native windows must never post to an MCP parent.
+assert.equal((await bridge.tool('cad_list')).documents.length, 0);
+assert.equal(calls[1].name, 'call_tool');
+assert.equal(calls[1].args.name, 'cad_list');
+await assert.rejects(bridge.desktop.export({ format: 'step' }), /Native export failed/);
+bridge.dispose();
+vm.runInContext(readFileSync(new URL('../web/state.js', import.meta.url), 'utf8'), context);
+const request = context.CadLiveState.promptText({ prompt: 'Round this edge', view_id: 'main', selection: { kind: 'edge', revision: 2 } }, '/CAD projects');
+assert.match(request, /CAD workspace: "\/CAD projects"/);
+assert.match(request, /"kind": "edge"/);
+assert.match(request, /cad_resolve_selection/);
+console.log('Tauri bridge initializes the native view, routes tools, keeps Copy request and normalizes errors.');

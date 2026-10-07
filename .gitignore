@@ -8,4 +8,7 @@
 .DS_Store
 __pycache__/
 *.pyc
+/desktop/target/
+/desktop/ui/
+/desktop/gen/
 /.claude/worktrees/

@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id), bridge = new CadBridge();
   let renderer = null, rendered = null, drawnEvaluation = null, sending = false, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
-  let sizeObserver = null, resizeTimer = null, partsKey = null;
+  let sizeObserver = null, resizeTimer = null, partsKey = null, exporting = false;
   const fmt = value => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—';
   const status = text => { $('edit-status').textContent = text; };
   const fail = error => { $('view-error').hidden = false; $('view-error').textContent = error.message; };
@@ -18,7 +18,7 @@
     $('clear-selection').hidden = !s; $('reference-details').hidden = !s;
     $('selection-badge').textContent = s ? `Selected ${s.reference.kind}` : 'Whole model';
     $('selection-name').textContent = s ? `${s.reference.kind === 'edge' ? 'Edge' : 'Face'} · ${s.geometry.curve_kind || s.geometry.surface_kind || s.reference.entity_id}` : 'Model overview';
-    $('selection-help').textContent = s ? 'This selection is attached to the request you send below.' : 'Select a face or edge to inspect it and discuss a precise edit.';
+    $('selection-help').textContent = s ? 'Ask your agent to use this selection. Copy request includes its precise face or edge reference.' : 'Select a face or edge, then ask your connected agent to edit it.';
     $('reference').textContent = s ? JSON.stringify(s.reference, null, 2) : '';
     let rows = [];
     if (s) {
@@ -78,6 +78,7 @@
   }
   function update(v) {
     const ready = v.status === 'ready' && !!v.payload;
+    $('export-model').disabled = !ready || exporting;
     $('connection').textContent = ({ connecting: 'Connecting', loading: 'Updating', ready: 'Live', empty: 'Connected', error: 'Needs attention' })[v.status] || v.status;
     $('connection').className = `connection${ready ? ' ready' : ''}`;
     const displayed = v.payload || v;
@@ -148,6 +149,7 @@
       $('documents').replaceChildren();
       for (const doc of result.documents) {
         const b = document.createElement('button'), icon = document.createElement('span'), name = document.createElement('span'), revision = document.createElement('span');
+        b.hidden = !doc.document_id.toLowerCase().includes($('project-search').value.toLowerCase());
         b.dataset.document = doc.document_id; b.setAttribute('aria-current', String(doc.document_id === state.value.document_id));
         icon.className = 'doc-glyph'; icon.textContent = '◇'; name.className = 'doc-name'; name.textContent = doc.document_id; revision.className = 'doc-revision'; revision.textContent = `r${doc.revision}`;
         b.append(icon, name, revision);
@@ -166,6 +168,34 @@
     } catch (error) { status(error.message); } finally { libraryBusy = false; }
   }
   $('refresh-library').onclick = refreshLibrary;
+  $('project-search').oninput = () => { for (const button of $('documents').querySelectorAll('button')) button.hidden = !button.dataset.document.toLowerCase().includes($('project-search').value.toLowerCase()); };
+  $('open-workspace').onclick = () => bridge.desktop?.openWorkspace().catch(error => status(error.message));
+  $('export-model').onclick = async () => {
+    if (!state.value.payload || exporting) return;
+    const { document_id, revision } = state.value.payload, format = $('export-format').value;
+    exporting = true; update(state.value); status(`Preparing ${format.toUpperCase()} for revision ${revision}…`);
+    try {
+      if (bridge.desktop) {
+        const result = await bridge.desktop.export({ document_id, revision, format });
+        status(result.cancelled ? 'Save cancelled. The export remains in your workspace.' : `Saved: ${result.paths.join(', ')}`);
+      } else {
+        const drawing = ['pdf', 'svg', 'dxf'].includes(format);
+        const args = { document_id, revision, ...(drawing ? { drawing: { formats: [format] } } : { format }) };
+        let job = await bridge.tool('cad_job', { action: 'submit', request_id: `export_${crypto.randomUUID()}`, tool: drawing ? 'cad_drawing' : 'cad_export', arguments: args, budget: { timeout_ms: 300000, memory_mb: 2048 } });
+        const deadline = Date.now() + 310000;
+        while (['queued', 'running', 'cancelling'].includes(job.state) && !disposed && Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          job = await bridge.tool('cad_job', { action: 'get', job_id: job.job_id });
+        }
+        if (disposed) return;
+        if (job.state !== 'succeeded') throw Error(job.error?.message || `Export ${job.state}. Job: ${job.job_id}`);
+        const paths = drawing ? job.result.artifacts.map(item => item.path) : [job.result.path];
+        $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = paths.join('\n');
+        status('Export saved in the CAD workspace. File paths are below.');
+      }
+    } catch (error) { status(error.message); }
+    finally { exporting = false; if (!disposed) update(state.value); }
+  };
   for (const mode of ['face', 'edge']) $(`mode-${mode}`).onclick = () => {
     renderer?.setMode(mode); state.update({ selection: null }); saveSoon();
     for (const other of ['face', 'edge']) $(`mode-${other}`).setAttribute('aria-pressed', String(other === mode));
@@ -186,7 +216,8 @@
   };
   $('copy-request').onclick = async () => {
     try {
-      const snapshot = state.snapshot($('prompt').value.trim()), text = CadLiveState.promptText(snapshot);
+      const snapshot = state.snapshot($('prompt').value.trim());
+      const text = CadLiveState.promptText(snapshot, bridge.hostContext.workspace);
       await state.saveContext(snapshot);
       try { await navigator.clipboard.writeText(text); status('Request copied. Paste it into your chat.'); }
       catch { $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = text; $('copy-text').focus(); $('copy-text').select(); status('Select and copy the request below.'); }
@@ -218,6 +249,19 @@
   });
   bridge.initialize().then(async () => {
     $('capture-option').hidden = !bridge.capabilities.message?.image;
+    $('open-workspace').hidden = !bridge.desktop;
+    $('workspace-label').textContent = bridge.hostContext.workspace || 'Saved projects';
+    if (bridge.desktop) {
+      const recent = await bridge.desktop.recentWorkspaces();
+      $('recent-workspaces').hidden = recent.length < 2;
+      for (const [index, folder] of recent.entries()) {
+        const option = document.createElement('option'); option.value = index; option.textContent = folder;
+        $('recent-workspaces').append(option);
+      }
+      $('recent-workspaces').onchange = () => { if ($('recent-workspaces').value !== '') bridge.desktop.openRecent(Number($('recent-workspaces').value)).catch(error => status(error.message)); };
+      $('send').hidden = true;
+      document.querySelector('.fine-print').textContent = `Selections are shared with agents using this workspace and view “${state.value.view_id}”. Ask in chat to use the selected face or edge, or paste a copied request. Saved edits appear automatically.`;
+    }
     hostLayout();
     if (typeof ResizeObserver !== 'undefined') { sizeObserver = new ResizeObserver(hostLayout); sizeObserver.observe(document.body); }
     if (!bridge.capabilities.message) status('This host supports Copy request. Paste the request into your chat.');

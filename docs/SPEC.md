@@ -27,6 +27,15 @@ placement, mates, and exploded drawings. M6 adds one-level assembly features wit
 named source-part instances, deterministic rigid datum mates, and view-specific
 drawing explosions. See `ASSEMBLIES.md` for the current contract and limitations.
 
+Desktop/install extension (2026-10-07): the user requested simple client setup,
+versioned platform artifacts, a standalone CLI viewer, exports and old-project
+access. A Tauri shell reuses the existing renderer and communicates only with the
+bundled native service over stdio. It shares workspace/view selection context
+with connected agents; geometry stays in C++ workers. Export dialogs write
+independent STEP/STL/PDF/SVG/DXF outputs. No Electron runtime or end-user language
+installation is permitted. See `DISTRIBUTION.md` for release gates and platform
+runtime prerequisites.
+
 ## 1. Product outcome
 
 An agent can create a saved design, reopen it in another session, make a targeted

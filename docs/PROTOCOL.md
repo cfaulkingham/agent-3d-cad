@@ -613,3 +613,31 @@ only its exact URI. Tools include the same UI metadata in CLI discovery.
 and app calls. The service still accepts the tool through CLI/stdio for tests and
 other adapters. HTTP, sampling, streaming progress and MCP Tasks are not exposed.
 Use cad_job for asynchronous application work.
+
+
+## Desktop launcher and client configuration
+
+The native CLI additionally accepts:
+
+```text
+agent-3d-cad viewer --workspace PATH [--document ID] [--view ID]
+agent-3d-cad config --client claude|opencode|codex --workspace PATH
+```
+
+`viewer` validates/opens the workspace view (`main` by default) with `cad_open`,
+then starts the bundled Tauri executable and returns `{launched, workspace,
+view_id}`. `launched` confirms process creation, not a successful first render.
+It requires the desktop archive; a core-only install returns
+`viewer_not_installed`. OS launch errors return `viewer_launch_failed`.
+`config` prints JSON for Claude/OpenCode or TOML for Codex using absolute paths;
+it neither creates a workspace nor modifies client settings. `--help` is human
+readable. `serve` stdout remains exclusively newline-delimited JSON.
+
+The Tauri shell is an adapter to the same MCP stdio service. Its page can call
+only library/show/context/viewer tools for its window’s view. Native export IPC
+accepts a document, committed revision and one of `step`, `stl`, `pdf`, `svg`,
+`dxf`; the shell uses `cad_job` and OS save dialogs. Workspace dialogs and recent
+paths are local UI state. This adds no modeling tool or document schema, HTTP
+endpoint, shell execution tool, or remote chat-send API. Agents connected to the
+same workspace read the exact displayed picks with existing `cad_context` and
+`cad_resolve_selection` contracts.

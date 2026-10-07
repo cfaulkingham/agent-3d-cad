@@ -29,6 +29,13 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+      - name: Validate release identity
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ($env:REF_TYPE -eq 'tag' -and $env:REF_NAME -ne "v$version") { throw 'Tag must match VERSION' }
       - name: Select supported C++20 library on macOS
         if: runner.os == 'macOS'
         shell: bash
@@ -40,7 +47,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf libfontconfig1-dev
+          sudo apt-get install -y patchelf libfontconfig1-dev libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
           mkdir -p .deps/runtime-notices
           gcc_runtime_major=$(dpkg-query -W -f '${Version}' libstdc++6 | cut -d. -f1)
           cp "/usr/share/doc/gcc-${gcc_runtime_major}-base/copyright" .deps/runtime-notices/GCC-runtime-copyright
@@ -108,6 +115,19 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_smoke.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Installer and client configuration checks
+        run: |
+          $exe = Join-Path $PWD 'build/agent-3d-cad'
+          if ($IsWindows) {
+            $exe = Join-Path $PWD 'build/Release/agent-3d-cad.exe'
+            $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH"
+            ./tests/install_windows_test.ps1
+          } else {
+            python tests/download_installer_test.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          python tests/client_config_test.py $exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Relocated bundle without SDK environment
         run: |
           $build = Join-Path $PWD 'build'
@@ -124,15 +144,35 @@ jobs:
         run: |
           cpack --config build/CPackConfig.cmake -C Release -B build/packages
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build and test the Tauri desktop shell
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:CAD_SERVICE_EXE = Join-Path $PWD 'bundle/bin/agent-3d-cad'
+          if ($IsWindows) { $env:CAD_SERVICE_EXE += '.exe' }
+          cargo +1.95.0 test --locked --manifest-path desktop/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo +1.95.0 build --locked --release --manifest-path desktop/Cargo.toml
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $viewer = 'desktop/target/release/agent-cad-viewer'
+          if ($IsWindows) { $viewer += '.exe' }
+          python packaging/package-desktop.py bundle build/packages $viewer
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not $IsLinux) {
+            $version = (Get-Content VERSION -Raw).Trim()
+            $system = if ($IsMacOS) { 'Darwin' } else { 'Windows' }
+            python packaging/make-mcpb.py bundle "build/packages/agent-3d-cad-$version-$system-${{ matrix.architecture }}.mcpb"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: native-preview-${{ matrix.runner }}-${{ matrix.architecture }}
           path: |
             build/packages/*.tar.gz
             build/packages/*.zip
+            build/packages/*.mcpb
           if-no-files-found: error
-          # Preview bundles redistribute third-party binaries before the legal
-          # review in NOTICE is complete; keep them short-lived (default is 90 days).
+          # CI previews expire; versioned release downloads are retained separately.
           retention-days: 14
       - uses: actions/upload-artifact@v4
         if: always()
@@ -143,3 +183,27 @@ jobs:
             build/Testing/Temporary/LastTest.log
             build/geometry-evidence/**
             build-deps/**/CMakeConfigureLog.yaml
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: native
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-preview-*
+          path: release
+          merge-multiple: true
+      - name: Prepare checksums and release notes
+        run: |
+          cp install.sh install.ps1 release/
+          python3 packaging/release-manifest.py release
+      - name: Create draft release after all five platforms pass
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" release/* --verify-tag --draft --prerelease --title "Agent CAD $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md

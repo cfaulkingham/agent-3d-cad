@@ -33,7 +33,7 @@
         catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
       });
     }
-    notify(method, params = {}) { this.post({ method, params }); }
+    notify(method, params = {}) { if (!this.desktop) this.post({ method, params }); }
     reportSize(width, height) {
       if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) return;
       const size = { width: Math.min(10000, Math.ceil(width)), height: Math.min(10000, Math.ceil(height)) };
@@ -64,6 +64,28 @@
       }
     }
     async initialize() {
+      if (this.self.__TAURI__) {
+        const invoke = async (command, args) => {
+          try { return await this.self.__TAURI__.core.invoke(command, args); }
+          catch (error) { throw error instanceof Error ? error : Error(String(error)); }
+        };
+        this.self.cadDesktop = {
+          initialize: () => invoke('initialize'),
+          call: (name, args) => invoke('call_tool', { name, args }),
+          openWorkspace: () => invoke('open_workspace'),
+          recentWorkspaces: () => invoke('recent_workspaces'),
+          openRecent: index => invoke('open_recent', { index }),
+          export: request => invoke('export_model', { request })
+        };
+      }
+      if (this.self.cadDesktop) {
+        this.desktop = this.self.cadDesktop;
+        const opened = await this.desktop.initialize();
+        this.capabilities = { desktop: true }; this.hostContext = { workspace: opened.workspace };
+        this.lastResult = { structuredContent: opened };
+        this.emit('ui/notifications/tool-result', this.lastResult);
+        return {};
+      }
       if (this.peer === this.self) throw Error('Open this viewer through cad_open in an MCP Apps host. For offline review, use cad_view.');
       const result = await this.request('ui/initialize', {
         protocolVersion: '2026-01-26', appInfo: { name: 'agent-3d-cad', version: '0.1.0' },
@@ -92,7 +114,7 @@
       if (!value || typeof value !== 'object') throw Error('The CAD service returned an invalid response.');
       return value;
     }
-    async tool(name, args = {}) { return CadBridge.value(await this.request('tools/call', { name, arguments: args })); }
+    async tool(name, args = {}) { return CadBridge.value(this.desktop ? await this.desktop.call(name, args) : await this.request('tools/call', { name, arguments: args })); }
     dispose() {
       if (this.closed) return;
       this.closed = true; this.self.removeEventListener('message', this.receive);

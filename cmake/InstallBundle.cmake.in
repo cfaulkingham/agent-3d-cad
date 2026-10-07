@@ -188,7 +188,7 @@ if(NOT schema_status EQUAL 0)
   message(FATAL_ERROR "Installed executable could not publish tool schemas: ${schema_diagnostics}")
 endif()
 
-set(manifest "{\n  \"format_version\": 1,\n  \"project_version\": \"@PROJECT_VERSION@\",\n  \"system\": \"@CMAKE_SYSTEM_NAME@\",\n  \"architecture\": \"@CMAKE_SYSTEM_PROCESSOR@\",\n  \"compiler\": \"@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@\",\n  \"occt_version\": \"8.0.1\",\n  \"occt_archive_sha256\": \"0d6913eae4bcc09a3653ceced6dda1aec11c35a1513d4c06762c9b002092c68a\",\n  \"json_version\": \"3.12.0\",\n  \"json_archive_sha256\": \"4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187\",\n  \"freetype_version\": \"@FREETYPE_VERSION_STRING@\",\n  \"original_code_license\": \"owner decision pending; preview build only\",\n  \"files\": [")
+set(manifest "{\n  \"format_version\": 1,\n  \"project_version\": \"@AGENTCAD_VERSION@\",\n  \"system\": \"@CMAKE_SYSTEM_NAME@\",\n  \"architecture\": \"@CMAKE_SYSTEM_PROCESSOR@\",\n  \"compiler\": \"@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@\",\n  \"occt_version\": \"8.0.1\",\n  \"occt_archive_sha256\": \"0d6913eae4bcc09a3653ceced6dda1aec11c35a1513d4c06762c9b002092c68a\",\n  \"json_version\": \"3.12.0\",\n  \"json_archive_sha256\": \"4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187\",\n  \"freetype_version\": \"@FREETYPE_VERSION_STRING@\",\n  \"original_code_license\": \"MIT\",\n  \"files\": [")
 file(GLOB_RECURSE packaged_files RELATIVE "${root}" "${root}/bin/*" "${root}/lib/*" "${root}/share/*")
 list(REMOVE_ITEM packaged_files "share/agent-3d-cad/provenance.json")
 set(separator "")

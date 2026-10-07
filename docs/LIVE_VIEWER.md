@@ -1,7 +1,7 @@
 # Live CAD viewer preview
 
-The native service now includes an MCP App for the core create–view–select–edit
-loop. The app opens a model library, source feature tree, WebGL viewport and
+The viewer runs as an embedded MCP App or a standalone Tauri desktop window
+for the core create–view–select–edit loop. The app opens a model library, source feature tree, WebGL viewport and
 Quick Edit panel. Committed edits appear automatically, retaining the camera.
 Selections name an exact evaluated revision; updated geometry clears old picks.
 
@@ -11,7 +11,9 @@ arm64 has rendered a plate, accepted a human edge pick, and followed an agent's
 selective fillet to revision 2 in the same viewer, retaining the camera and
 clearing the old pick. Quick Edit handed the reference-qualified request to
 the host's chat composer; this host requires the user to press Send there.
-Windows and remaining architecture runs remain unverified. The offline
+The Tauri window has separately demonstrated face/edge picking, CLI context
+read-back, a selective fillet refresh and a native STEP Save dialog on macOS
+arm64. Tauri Windows/Linux and remaining architecture runs remain unverified. The offline
 `cad_view` artifact is still available.
 
 ## Connect the native service
@@ -42,6 +44,42 @@ The bundle contains `share/agent-3d-cad/skills/native-cad/SKILL.md`. Install tha
 skill using your host's normal local-skill mechanism, or point the agent to it.
 It explains document authoring, current selection handling and viewer reuse.
 The existing connected text-to-cad plugin is independent and is not modified.
+
+## Standalone window and connected chats
+
+Install the desktop archive, then run:
+
+```sh
+agent-3d-cad viewer --workspace "/absolute/path/to/cad-workspace" --view main
+```
+
+The Tauri window starts its own stdio connection to the native service. It has no
+HTTP listener and opens no browser tab. The agent’s MCP connection or CLI calls
+must use the **same workspace and view ID**. Workspace paths are shown in the
+sidebar. Use **Open workspace**, **Recent workspaces** and project search to
+reopen earlier projects; their editable documents stay outside the app install.
+Opening a workspace lists its saved models; choose one to display it.
+
+Select a face or edge, then tell the connected agent, for example:
+
+> Read `cad_context` for view `main` and round the selected edge to 1 mm.
+
+Picks are saved automatically with the document, revision, evaluation, feature
+and entity identity. A separate agent connection can read and resolve them; it
+does not need to inspect a screenshot or guess an edge number. **Copy request**
+includes the prompt, workspace path and exact reference for pasting into any
+chat. This also works without entering a prompt, to copy just the reference.
+The native window cannot automatically address a particular chat composer.
+Separate chats should use distinct view IDs and pass that ID to `cad_context`
+and `cad_show`; `main` is the default. Old picks explicitly become stale after
+geometry changes, and the refreshed view clears them.
+
+**Export** uses the displayed committed revision and an asynchronous native job.
+STEP/STL save through the OS file dialog; PDF/SVG create a default A4 drawing
+with standard views. DXF writes the four 1:1 view files into a new folder under
+the chosen directory. The agent can customize dimensions, sections and layouts
+through `cad_drawing`. Cancelling a Save dialog leaves the generated export in
+the workspace. Exports include the complete model even when parts are hidden.
 
 ## Use the live loop
 

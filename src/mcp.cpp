@@ -74,7 +74,7 @@ std::optional<Json> McpSession::handle(const Json& request) {
         {"capabilities", {{"tools", {{"listChanged", false}}},
                           {"resources", {{"subscribe", false}, {"listChanged", false}}},
                           {"extensions", {{"io.modelcontextprotocol/ui", {{"mimeTypes", Json::array({viewer_app_mime})}}}}}}},
-        {"serverInfo", {{"name", "agent-3d-cad"}, {"version", "0.1.0"}}},
+        {"serverInfo", {{"name", "agent-3d-cad"}, {"version", AGENTCAD_VERSION}}},
         {"instructions", "Use cad_open to open the integrated CAD viewer; use cad_show to update that view without opening another. Read cad_context for the active model and selected geometry. Use cad_read before edits; cad_apply requires expected_revision. Model and export units are millimeters. Use cad_job for responsive asynchronous geometry work with durable request IDs. cad_view saves an offline selectable viewer. cad_drawing exports native PDF/SVG sheets and per-view 1:1 mm DXFs from a committed revision; retain its recipe to regenerate after edits. Pick references are evaluation-scoped; use geometric selectors for saved design intent. Tools also return JSON text for hosts without MCP Apps. See docs/PROTOCOL.md for model schemas."}});
     }
     if (state_ != State::ready) return rpc_error(id, -32000, "Initialize and send notifications/initialized first");

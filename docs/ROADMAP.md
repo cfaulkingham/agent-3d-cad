@@ -165,6 +165,26 @@ reopen/revision/retarget behavior, pending context races and unchanged model/BOM
 See `ASSEMBLIES.md` for the implemented subset and `HANDOFF.md` for executed
 evidence; no additional platform acceptance is implied by source implementation.
 
+## M7 — installation and standalone Tauri viewer (2026-10-07)
+
+- Usage-first README and per-client configuration generation.
+- Versioned core/desktop archives for the five existing native platform lanes;
+  Claude Desktop `.mcpb` packages on macOS and Windows.
+- Runtime-free checksum-verifying installers and gated draft release creation.
+- Standalone Tauri window sharing renderer and native service contracts.
+- Workspace switching, recent workspaces and saved-project search.
+- Face/edge picks readable by connected agents through `cad_context`, copied
+  requests containing exact references, and automatic revision refresh.
+- Native Save dialogs for STEP/STL and PDF/SVG/DXF drawing exports.
+
+Implementation is in source. Acceptance still requires new platform CI runs,
+fresh-machine GUI/runtime checks, client installation trials, publisher signing
+and macOS notarization before claiming a frictionless public release. Local
+macOS arm64 evidence and remaining limitations are in `HANDOFF.md`. Direct chat
+composer delivery is host-dependent; the standalone app uses Copy request and
+shared context. A historical-revision browser is not yet implemented; the
+library reopens saved projects at HEAD and existing tools can read/restore history.
+
 ## Later, only when driven by actual workflows
 
 Geometry/projection caching is implemented: bounded, checksummed exact feature

@@ -2,8 +2,8 @@
 
 The install tree is a relocatable native application: `bin/agent-3d-cad`
 (`.exe` on Windows), its native runtime libraries, and
-`share/agent-3d-cad/{occt,examples,notices,provenance.json}`. The browser viewer
-is generated as a self-contained HTML artifact. Creating or editing a model
+`share/agent-3d-cad/{occt,examples,notices,provenance.json}`. The core bundle includes the embedded MCP App and offline HTML viewer. The
+desktop archive adds a Tauri application window under `desktop/`. Creating or editing a model
 requires no Python, Rust, Node, CMake, compiler, or sibling checkout.
 
 The integrated viewer is also compiled into the executable as the MCP App
@@ -13,7 +13,8 @@ JavaScript assets; no JavaScript bundler, external web server, CDN or runtime
 asset directory is needed. Resource metadata declares no external connection,
 resource or frame domains. `cad_open` associates its result with this resource;
 `cad_show` updates the existing view. Rendering the interactive app requires an
-MCP Apps host; ordinary CLI/MCP clients still receive structured JSON and text.
+MCP Apps host. CLI clients can use the standalone Tauri window; both adapters
+share the same native service, workspace, view IDs and revision-qualified picks.
 
 ## Building an archive
 
@@ -70,10 +71,68 @@ SDK, `AGENTCAD_NOTICE_DIRECTORY` must contain complete `occt/` and `freetype/`
 notice directories, including FreeType's embedded component notices, with the
 layout produced by the pinned recipe.
 
+## Tauri desktop and Claude extension builds
+
+Tauri reuses the `web/` renderer inside the operating system webview. It does not
+ship Chromium or Electron. A small Rust shell launches the bundled C++ service
+through stdio and exposes bounded viewer operations through private IPC. Geometry
+and exports stay in the existing C++ service and isolated workers. Qt Quick was
+considered: reusing this renderer on Linux with Qt WebView would require Qt
+WebEngine; a native Qt Quick 3D renderer would require separate rendering and
+picking implementations. Tauri preserves the existing tested selection path.
+See [Tauri webviews](https://v2.tauri.app/reference/webview-versions/) and
+[Qt WebView](https://doc.qt.io/qt-6/qtwebview-index.html).
+
+Developers additionally need Rust (CI pins 1.95.0), the platform GUI SDK and,
+on Linux, `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`. No npm build is needed:
+`desktop/build.rs` combines the same reviewed HTML/CSS/JS assets as CMake.
+
+```sh
+CAD_SERVICE_EXE="$PWD/bundle/bin/agent-3d-cad" cargo test --locked --manifest-path desktop/Cargo.toml
+cargo build --locked --release --manifest-path desktop/Cargo.toml
+python3 packaging/package-desktop.py bundle build/packages desktop/target/release/agent-cad-viewer
+# macOS example; Windows uses the matching .exe and Windows-x64.mcpb names.
+python3 packaging/make-mcpb.py bundle build/packages/agent-3d-cad-0.1.0-preview.1-Darwin-arm64.mcpb
+```
+
+Run packaging with Python 3.11+ from the same machine/toolchain that built the
+binaries. The desktop helper verifies native provenance, preserves the full
+resolved Rust dependency source archives and their notices, and hashes the
+complete resulting tree. Output directories must be new. Its macOS app is
+ad-hoc signed only. The Claude `.mcpb` uses a binary stdio server and persistent
+workspace setting; it includes the core service and embedded viewer. The package
+layout follows the [MCPB 0.3 manifest specification](https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md).
+
+For local GUI development, build without `--release` and launch the binary with
+`CAD_SERVICE_EXE` pointing to the native service. `CAD_VIEWER_CONFIG_DIR` can
+isolate recent-workspace settings for tests. Release binaries ignore both
+overrides and locate the service relative to themselves.
+
+## Version and release process
+
+`VERSION` is the release identity (`X.Y.Z-preview.N` for previews). CMake uses it
+for the executable, MCP server and archive names. Keep `desktop/Cargo.toml`,
+its lockfile and `tauri.conf.json` aligned; the desktop build rejects drift.
+Use tags such as `v0.1.0-preview.1`, matching `VERSION` exactly.
+
+Every push runs the five native platform lanes. Each lane tests the service,
+installer/client configuration, relocated bundle and Tauri stdio/export adapter,
+then builds a core archive and desktop archive. macOS arm64/x64 and Windows x64
+also produce Claude `.mcpb` packages. A `v*` tag creates a **draft prerelease** only
+after all lanes pass. The release job rejects a missing or extra asset before
+creating `SHA256SUMS` for the ten archives, three extensions and two installers.
+Review the draft, platform evidence and signing before publishing. Stable release
+publication is not automated by the preview workflow. No tag or release is
+created merely by editing these files or running local builds.
+
 ## Install, use and uninstall
 
-Extract the platform archive into any writable application directory. Keep
-`bin`, `lib` (where present), and `share` together. Run the binary directly or
+Use the release’s `install.sh VERSION` or `install.ps1 -Version VERSION`, or
+extract the platform archive into any writable application directory. Keep
+`bin`, `lib` (where present), `share`, and `desktop` together. The download
+installers require only OS utilities and verify archive SHA-256 before extraction.
+They never overwrite an existing version or change client settings. The desktop
+runtime needs macOS WKWebView, Windows WebView2, or Linux GTK 3/WebKitGTK 4.1. Run the binary directly or
 configure its absolute path as the MCP command with `serve --workspace PATH`.
 The workspace can be anywhere writable and is separate from the application.
 No global server registration, shell initialization, or administrator access
@@ -151,7 +210,8 @@ where appropriate. No archive is uploaded or published by local packaging.
 The original code is MIT-licensed; `LICENSE` and `NOTICE` ship in each bundle's
 notices directory.
 CI uploads preview archives and test evidence as workflow artifacts with a
-14-day retention; they are not releases. `tests/notice_consistency.cmake`
+14-day retention. Version tags additionally prepare the draft release described
+above; no public release has been published yet. `tests/notice_consistency.cmake`
 (CTest `notices`) fails if the shipped third-party notice, the OCCT patch
 description and the installer's recorded modification identifier disagree, or
 if the notice stops stating the pinned OCCT source hash and relink instructions.

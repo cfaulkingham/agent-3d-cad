@@ -149,9 +149,9 @@
       });
       this.contextQueue = action.catch(() => {}); return action;
     }
-    static promptText(snapshot) {
+    static promptText(snapshot, workspace) {
       const { prompt, ...context } = snapshot;
-      return `${prompt || 'Inspect the selected CAD geometry.'}\n\nCAD view context (millimeters):\n${JSON.stringify(context, null, 2)}\nRead this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.`;
+      return `${prompt || 'Inspect the selected CAD geometry.'}\n\n${workspace ? `CAD workspace: ${JSON.stringify(workspace)}\n` : ''}CAD view context (millimeters):\n${JSON.stringify(context, null, 2)}\nRead this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.`;
     }
     async publishContext() {
       const snapshot = this.snapshot(), version = ++this.contextVersion;

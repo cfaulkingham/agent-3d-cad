@@ -2,6 +2,7 @@
 #include "agentcad/mcp.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/runtime.hpp"
+#include "agentcad/desktop.hpp"
 #include <iostream>
 #include <string>
 #include <vector>
@@ -17,26 +18,45 @@ int run(int argc, const char* const* argv) {
     if (argc == 4 && std::string(argv[1]) == "--internal-job-worker")
       return job_worker_main(path_from_utf8(argv[2]), argv[3]);
     if (argc == 2 && std::string(argv[1]) == "--version") {
-      std::cout << Json{{"name", "agent-3d-cad"}, {"version", "0.1.0"}, {"kernel", "OpenCascade"}, {"kernel_version", kernel_version()}}.dump() << '\n';
+      std::cout << Json{{"name", "agent-3d-cad"}, {"version", AGENTCAD_VERSION}, {"kernel", "OpenCascade"}, {"kernel_version", kernel_version()}}.dump() << '\n';
       return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "tools") { std::cout << tool_definitions().dump(2) << '\n'; return 0; }
-    if (argc < 2) throw Error("usage", "Use: agent-3d-cad serve --workspace PATH | call TOOL --workspace PATH --input FILE | tools | --version");
+    if (argc == 2 && std::string(argv[1]) == "--help") {
+      std::cout << "agent-3d-cad serve --workspace PATH\n"
+        "agent-3d-cad call TOOL --workspace PATH --input FILE|-\n"
+        "agent-3d-cad viewer --workspace PATH [--document ID] [--view ID]\n"
+        "agent-3d-cad config --client claude|opencode|codex --workspace PATH\n"
+        "agent-3d-cad tools | --version\n";
+      return 0;
+    }
+    if (argc < 2) throw Error("usage", "Use agent-3d-cad --help for commands");
     const std::string command = argv[1];
-    std::string tool, workspace, input;
+    std::string tool, workspace, input, client, document, view;
     int index = 2;
     if (command == "call" && index < argc) tool = argv[index++];
-    if (command != "call" && command != "serve") throw Error("usage", "Unknown command: " + command);
+    if (command != "call" && command != "serve" && command != "viewer" && command != "config") throw Error("usage", "Unknown command: " + command);
     while (index < argc) {
       const std::string flag = argv[index++];
       if (index == argc) throw Error("usage", "Missing value for: " + flag);
       if (flag == "--workspace" && workspace.empty()) workspace = argv[index++];
       else if (flag == "--input" && input.empty() && command == "call") input = argv[index++];
+      else if (flag == "--client" && client.empty() && command == "config") client = argv[index++];
+      else if (flag == "--document" && document.empty() && command == "viewer") document = argv[index++];
+      else if (flag == "--view" && view.empty() && command == "viewer") view = argv[index++];
       else throw Error("usage", "Unknown or repeated flag: " + flag);
     }
     if (workspace.empty() || (command == "call" && (tool.empty() || input.empty())))
       throw Error("usage", "An explicit --workspace and, for call, --input are required");
+    if (command == "config") { print_client_config(client, path_from_utf8(workspace)); return 0; }
     Service service(path_from_utf8(workspace));
+    if (command == "viewer") {
+      Json args = {{"view_id", view.empty() ? "main" : view}};
+      if (!document.empty()) args["document_id"] = document;
+      const auto opened = service.call("cad_open", args);
+      std::cout << launch_desktop(path_from_utf8(workspace), opened.at("view_id").get<std::string>()).dump(2) << '\n';
+      return 0;
+    }
     if (command == "serve") serve(service, std::cin, std::cout);
     else {
       std::string content;

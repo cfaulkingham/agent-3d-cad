@@ -6,6 +6,108 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Installation and standalone Tauri viewer — 2026-10-07 (preview implementation)
+
+The user requested installation-focused documentation, easy client setup,
+versioned artifacts, a standalone viewer for CLI agents, export controls and
+access to older projects. They chose Tauri over Electron and asked whether Qt
+Quick would be simpler. Tauri reuses the existing WebGL renderer and selection
+controller; Qt Quick 3D would require another renderer/picking path, and Linux
+Qt WebView would require Qt WebEngine. No Electron dependency remains in source.
+
+**Implemented:**
+
+- README now starts with install/connect/use. Developer material moved to
+  `docs/DEVELOPMENT.md`; `GETTING_STARTED.md` covers desktop/CLI/ChatGPT web
+  differences, documented client configs and actual verification limits.
+- `VERSION` is `0.1.0-preview.1`; native version/MCP identity/provenance/archive
+  names share it. The Tauri build checks Cargo/config version alignment.
+- Native `config --client claude|codex|opencode --workspace PATH` prints settings
+  without changing host configs. `viewer --workspace PATH [--document ID]
+  [--view ID]` opens the bundled Tauri app using direct process arguments.
+- `desktop/` uses pinned Tauri 2.12.1, the OS webview and the same `web/` assets.
+  A bounded Rust stdio client talks to the native service. Page IPC exposes only
+  the required viewer tools/workspace dialogs/exports, checks the local sender
+  and view, and exposes no arbitrary process or filesystem command. Startup and
+  read-only status queries retry transient workspace locks; mutations are not
+  automatically retried. Native workers still own all geometry.
+- Standalone workspace picker, recent workspaces (12 paths), model search,
+  revision following, face/edge picking and copied reference-qualified requests.
+  Picks are shared across processes via `cad_context` in the same workspace and
+  view. Copied requests include the workspace. Direct chat-composer delivery
+  remains dependent on the host; Tauri cannot address an arbitrary chat.
+- STEP/STL/PDF/SVG/DXF export from the displayed committed revision. Bounded
+  `cad_job` work keeps the UI responsive; native Save dialogs copy validated
+  workspace export artifacts. DXF creates a new destination folder for four
+  views. Default drawings are A4 standard views; dimensions/layouts use tools.
+- Bash/PowerShell installers detect the platform, verify release SHA-256, install
+  into fresh version directories, and preserve workspaces and existing versions.
+  Python packaging helpers assemble Tauri archives, binary Claude `.mcpb`
+  extensions and complete release checksum manifests. Desktop provenance covers
+  resolved Rust source archives with their full notices. The Windows shell also
+  receives the bundled MSVC runtime beside its executable.
+- CI retains five native lanes, adds adapter/installer checks and desktop builds,
+  and prepares a **draft prerelease** only for a matching `vVERSION` tag after all
+  lanes pass and all 15 expected assets exist. Version tags and public releases
+  remain separate from pushing this implementation to main.
+
+**Executed evidence (macOS arm64 only):**
+
+- Release C++ build in `build-desktop` using `.deps/hlr-streaming-sdk` and pinned
+  local nlohmann source. `ctest --test-dir build-desktop --output-on-failure -j3`:
+  **32/32 passed**, 37.47 s, including the new Tauri JS bridge test and existing
+  real MCP select/edit/refresh and WebGL suites.
+- `cargo test --locked --offline --manifest-path desktop/Cargo.toml` with
+  `CAD_SERVICE_EXE` set: **2/2 passed**, 2.10 s. Reopens an older project, exports
+  STEP, validates all five desktop export paths (including four DXFs), checks
+  nonempty files/PDF and STEP headers, unchanged source and recent-workspace state.
+  The first combined run exposed a transient `workspace_busy` on job polling;
+  bounded read retries fixed it. Release Cargo build then passed without warnings.
+- `schema_conformance.py`: **295 checks across 19 tools**.
+  Official MCP SDK 2.3.0 smoke: **837 interoperability checks passed**.
+- `bundle_smoke.cmake` with fresh `build-desktop/bundle-check-final`: relocated
+  create/edit/reopen/query/STEP/STL/drawings/BOM/balloons/MCP/app resource passed
+  with empty PATH. Log: `build-desktop/bundle-check-final.log`.
+- POSIX installer fixtures passed verified install, spaces, existing-version
+  refusal, corrupt/duplicate checksum rejection, invalid version and cleanup.
+  All three client configs round-tripped (including Unicode workspace path).
+  `bash -n`, Python compilation and YAML parse passed. Release-manifest fixture
+  accepted the complete 15-asset matrix and rejected missing/extra assets.
+- Packaged macOS release core archive, Tauri archive and `.mcpb` under
+  `build-desktop/release-packages/`. Desktop provenance verified **515 files**;
+  `.mcpb` ZIP integrity, native executable permissions and manifest/version checked.
+  These are local unsigned/ad-hoc-signed preview artifacts, not published releases.
+- Actual Tauri WebKit window opened a saved bracket in isolated
+  `build-desktop/review-workspace`. Native face and edge picks were read back by a
+  separate CLI process. Resolving selected revision-1 `edge-24` produced one
+  geometric selector; a 1 mm fillet committed revision 2. The same window refreshed
+  to one valid solid, 11 faces/27 edges and cleared the obsolete pick. Native Save
+  dialog wrote `angle_bracket-r2.step`. Evidence: `selection-evidence.json` and the
+  isolated workspace under `build-desktop`. The packaged release app also rendered
+  revision 2 with the new shared-selection guidance. Its CLI launcher populated
+  the separate `release_review` view after macOS GUI access was allowed outside
+  the execution sandbox.
+
+- Connected-chat check: the existing Codex MCP configuration uses
+  `~/Documents/Agent3DCAD`, whereas the first window used an isolated test
+  workspace. Switched the packaged Tauri window through its native workspace
+  picker to the configured folder, opened the existing `viewer_loop_plate` at
+  revision 2, and clicked its top face. This chat’s actual connected
+  `mcp__agent_3d_cad__cad_context(view_id="main")` returned the same current
+  `face-5`, area 2,340 mm², center (30, 20.5, 12), normal +Z and `stale: false`.
+  No document edit was made in the user's workspace. The window remains on the
+  shared workspace, with the selected face available to this chat.
+
+**Limits / next work:** Run the changed five-platform CI, exercise the Windows
+installer and Linux/Windows GUI, validate actual Claude `.mcpb` installation and
+OpenCode/Grok/Muse client integration, and arrange publisher signing/macOS
+notarization. Linux needs GTK 3/WebKitGTK 4.1; Windows needs WebView2. The portable
+installer does not install those OS components or add app shortcuts. ChatGPT web
+requires an explicit remote/tunnel connection; no hosted endpoint is implemented.
+The library reopens older projects at HEAD; a historical-revision browsing UI,
+inline dimension editing and direct CLI-chat composer adapters remain future work.
+No release or platform support claim follows from workflow source alone.
+
 ## License chosen: MIT — 2026-10-07
 
 The owner chose the MIT License for the original code. Added `LICENSE` (copyright
