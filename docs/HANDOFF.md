@@ -6,6 +6,44 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Intel geometry regression validation — in progress, 2026-10-07
+
+Current source `7d898e8` passed the complete Linux x64/arm64, macOS arm64 and
+Windows x64 workflows in run `37620598616`; macOS Intel alone failed. Diagnostic
+run `37648289620` at `416b3ae` retained both actual Intel projections and snapshots.
+The only strict mismatch is the right-handed D12, pitch 1.25, length 3.75 thread's
+front hidden entity 78: 22 versus 23 adaptive polyline vertices. Source snapshots
+are byte-identical, endpoints are unchanged, and a bidirectional continuous
+polyline-distance upper bound is **0.00451554744 mm**, within the declared
+0.02 mm drawing tolerance.
+
+Follow-up run `37648841811` at `bf274c7` captures bounded exact projected B-rep
+curves, checks their visible/hidden groups, trim endpoints and paired interior
+samples, and runs the independent physical occlusion and streaming-root checks
+before reporting the original strict failure. Intel passed 398 exact projected
+curves / 25,870 paired samples with maximum sampled deviation **3.77814108e-9 mm**,
+and all independent physical occlusion, balloon visibility and streaming-root
+checks passed. This is finite numerical evidence, not a continuous-domain proof
+of the B-rep curves.
+
+The corrected regression permits differing adaptive polyline vertex counts only
+after the exact visible/hidden curve checks pass. A bidirectional continuous
+polyline-distance bound must meet the existing 0.02 mm drawing tolerance. Curve
+counts, visibility metadata, endpoints, and equal-size numeric arrays retain
+their strict comparisons. Negative controls reject changed visibility, endpoints,
+interiors, curve types and missing curves. The native test can replay an archived
+fixture JSON directly; both Intel archives pass this replay. Production geometry
+and tool/document contracts are unchanged. Exact projection capture is an optional
+bounded internal kernel diagnostic; ordinary tool calls do not request it.
+
+Final local macOS arm64 build passed **28/28 suites in 46.12 seconds**, and
+`bundle-check` passed relocation and empty-PATH create/edit/reopen, STEP/STL,
+drawings, BOM/balloons, MCP and embedded app-resource smoke. CI now retains native
+test/projection evidence on success as well as failure.
+
+Evidence is under `build/intel-perf-fix/`. Next: run the complete five-platform
+workflow for the corrected regression and independently verify its native archives.
+
 ## Intel CI follow-up — diagnostic context
 
 The reported GitHub Actions run `37609850499`, Intel job `112754188016`, tested

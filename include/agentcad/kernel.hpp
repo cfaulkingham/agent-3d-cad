@@ -30,7 +30,7 @@ public:
   Json mesh(const std::string& feature_id = "", const QueryLimits& limits = {}) const;
   // Exact B-rep hidden-line views / true planar sections. Drawing entities are
   // derived output, not persistent topology references.
-  // Optional bounded exact projection snapshots are for native regression
+  // Optional bounded exact orthographic projection snapshots are for native regression
   // diagnostics only; adapters never expose them as a tool/document contract.
   Json drawing(const Json& spec, Json* exact_projections = nullptr) const;
   void export_file(const std::filesystem::path& path, const std::string& format) const;

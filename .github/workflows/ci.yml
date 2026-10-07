@@ -132,9 +132,9 @@ jobs:
             build/packages/*.zip
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: failure-evidence-${{ matrix.runner }}-${{ matrix.architecture }}
+          name: native-test-evidence-${{ matrix.runner }}-${{ matrix.architecture }}
           path: |
             build/Testing/Temporary/LastTest.log
             build/geometry-evidence/**

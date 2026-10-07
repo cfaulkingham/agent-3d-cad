@@ -27,7 +27,6 @@
 using namespace agentcad;
 namespace {
 int checks=0;
-std::string roundtrip_failure;
 void require(bool value,const std::string& message) {
   ++checks;
   if (!value) throw std::runtime_error(message);
@@ -119,6 +118,87 @@ double segment_distance(double x,double y,const Json& a,const Json& b) {
   const double squared=dx*dx+dy*dy;
   const double t=squared==0 ? 0 : std::clamp(((x-ax)*dx+(y-ay)*dy)/squared,0.0,1.0);
   return std::hypot(x-ax-t*dx,y-ay-t*dy);
+}
+double directed_polyline_bound(const Json& source,const Json& target,double tolerance) {
+  double worst=0;
+  for (std::size_t edge=1;edge<source.size();++edge) {
+    const auto& start=source[edge-1]; const auto& end=source[edge];
+    const double dx=end[0].get<double>()-start[0].get<double>(),dy=end[1].get<double>()-start[1].get<double>();
+    const double subdivisions=std::ceil(std::hypot(dx,dy)/(tolerance/10));
+    require(std::isfinite(subdivisions) && subdivisions<=1000000,"Bounded polyline equivalence subdivisions");
+    const int steps=std::max(1,static_cast<int>(subdivisions));
+    double previous_x=start[0],previous_y=start[1];
+    for (int step=1;step<=steps;++step) {
+      const double x=start[0].get<double>()+dx*step/steps,y=start[1].get<double>()+dy*step/steps;
+      double upper=std::numeric_limits<double>::infinity();
+      for (std::size_t segment=1;segment<target.size();++segment) {
+        // Distance to a fixed segment is convex. Its maximum over this source
+        // subsegment is bounded by the two endpoint distances; taking the best
+        // target segment still bounds every point, not only sampled vertices.
+        upper=std::min(upper,std::max(segment_distance(previous_x,previous_y,target[segment-1],target[segment]),
+                                     segment_distance(x,y,target[segment-1],target[segment])));
+      }
+      worst=std::max(worst,upper);
+      previous_x=x; previous_y=y;
+    }
+  }
+  return worst;
+}
+double equivalent_projection(const Json& a,const Json& b,double tolerance,const std::string& path="$") {
+  double worst=0;
+  if (a.is_number() && b.is_number()) { equivalent(a,b,path); return worst; }
+  require(a.type()==b.type(),"Equivalent projection JSON types at "+path);
+  if (a.is_object()) {
+    require(a.size()==b.size(),"Equivalent projection object keys at "+path);
+    if (a.value("kind",std::string{})=="polyline" && b.value("kind",std::string{})=="polyline" &&
+        a.at("points").size()==b.at("points").size()) {
+      equivalent(a,b,path);
+      for (std::size_t point=0;point<a.at("points").size();++point) {
+        const auto& original=a.at("points")[point]; const auto& restored=b.at("points")[point];
+        worst=std::max(worst,std::hypot(original[0].get<double>()-restored[0].get<double>(),
+                                      original[1].get<double>()-restored[1].get<double>()));
+      }
+    } else if (a.value("kind",std::string{})=="polyline" && b.value("kind",std::string{})=="polyline" &&
+        a.at("points").size()!=b.at("points").size()) {
+      auto original_metadata=a,restored_metadata=b;
+      original_metadata.erase("points"); restored_metadata.erase("points");
+      equivalent(original_metadata,restored_metadata,path);
+      const auto& original=a.at("points"); const auto& restored=b.at("points");
+      require(original.size()>=2 && restored.size()>=2,"Polyline retains endpoints at "+path);
+      for (const auto* points:{&original,&restored}) for (const auto& point:*points)
+        require(point.is_array() && point.size()==2 && point[0].is_number() && point[1].is_number() &&
+          std::isfinite(point[0].get<double>()) && std::isfinite(point[1].get<double>()),"Finite polyline point at "+path);
+      equivalent(original.front(),restored.front(),path+".first");
+      equivalent(original.back(),restored.back(),path+".last");
+      worst=std::max(directed_polyline_bound(original,restored,tolerance),directed_polyline_bound(restored,original,tolerance));
+      require(worst<=tolerance,"Continuous polyline deviation at "+path+": "+std::to_string(worst)+" mm");
+    } else for (const auto& [key,value]:a.items())
+      worst=std::max(worst,equivalent_projection(value,b.at(key),tolerance,path+"."+key));
+  } else if (a.is_array()) {
+    require(a.size()==b.size(),"Equivalent projection array lengths at "+path);
+    for (std::size_t i=0;i<a.size();++i)
+      worst=std::max(worst,equivalent_projection(a[i],b[i],tolerance,path+"["+std::to_string(i)+"]"));
+  } else equivalent(a,b,path);
+  return worst;
+}
+void projection_comparison_controls() {
+  const Json original={{"kind","polyline"},{"hidden",false},{"points",{{0,0},{1,0},{2,0}}}};
+  const Json resampled={{"kind","polyline"},{"hidden",false},{"points",{{0,0},{0.5,0},{1.5,0},{2,0}}}};
+  near(equivalent_projection(original,resampled,0.02),0);
+  const auto rejects=[&](const Json& candidate) {
+    bool rejected=false;
+    try { equivalent_projection(original,candidate,0.02); }
+    catch (const std::runtime_error&) { rejected=true; }
+    require(rejected,"Projection comparison rejects changed geometry/visibility");
+  };
+  auto changed=resampled; changed["hidden"]=true; rejects(changed);
+  changed=resampled; changed["points"][1]={0.5,0.2}; rejects(changed);
+  changed=resampled; changed["points"].back()={2.1,0}; rejects(changed);
+  changed=resampled; changed["kind"]="line"; rejects(changed);
+  bool missing_rejected=false;
+  try { equivalent_projection(Json::array({original}),Json::array(),0.02); }
+  catch (const std::runtime_error&) { missing_rejected=true; }
+  require(missing_rejected,"Projection comparison rejects a missing curve");
 }
 double curve_distance(const Json& view,bool hidden,double x,double y) {
   double nearest=std::numeric_limits<double>::infinity();
@@ -247,6 +327,7 @@ void streaming_root_regression(const BuiltModel& built) {
   surface.Surface(BRepBuilderAPI_MakeFace(gp_Pln(gp_Pnt(0,0,1),gp_Dir(0,0,1)),-2,2,-2,2).Face());
   intersector.Load(&surface);
   verify(gp_Lin(gp_Pnt(0,0,10),gp_Dir(0,0,-1)),false);
+  std::cout<<"Streaming root inventory, early acceptance and face-grid reuse checks passed\n";
 #else
   (void)built;
   std::cerr<<"Streaming root checks require the v2 patched SDK; older SDK coverage is limited to projection regressions\n";
@@ -284,19 +365,30 @@ void verify_thread(const Json& model,double height) {
   save_evidence(fixture,{{"model",model},{"snapshot",snapshot},{"restored_snapshot",restored.snapshot()},
     {"original",result},{"restored",restored_result},{"original_exact",original_exact},{"restored_exact",restored_exact}});
   equivalent_exact_projections(original_exact,restored_exact,fixture);
-  try { equivalent(result,restored_result,"restored "+fixture); }
-  catch (const std::runtime_error& error) {
-    // Still fail the suite, but run independent physical occlusion/root checks
-    // before reporting this comparison so failure artifacts retain that evidence.
-    roundtrip_failure=error.what();
-    std::cerr<<"Deferred comparison failure: "<<roundtrip_failure<<'\n';
-  }
+  // Exact visible/hidden trims have already passed the stricter native check.
+  // Only adaptive polyline vertex cardinality may differ after B-rep roundtrip;
+  // equal-size arrays, entity counts, metadata and endpoints remain strict.
+  const double tolerance=result.at("tolerance_mm");
+  const double bound=equivalent_projection(result,restored_result,tolerance,"restored "+fixture);
+  save_evidence(fixture+"-polyline-report",{{"continuous_deviation_bound_mm",bound},{"tolerance_mm",tolerance}});
+  std::cout<<fixture<<": continuous polyline deviation bound "<<bound<<" mm\n";
 }
 }
 
-int main() {
+int main(int argc,char** argv) {
   try {
     configure_kernel_logging();
+    projection_comparison_controls();
+    if (argc>1) {
+      require(argc==2,"Replay expects one saved projection evidence file");
+      std::ifstream input(argv[1]); Json evidence; input>>evidence;
+      const double bound=equivalent_projection(evidence.at("original"),evidence.at("restored"),
+        evidence.at("original").at("tolerance_mm"),"archived projection");
+      if (evidence.contains("original_exact"))
+        equivalent_exact_projections(evidence.at("original_exact"),evidence.at("restored_exact"),"archived projection");
+      std::cout<<"Archived projection continuous deviation bound: "<<bound<<" mm\n";
+      return 0;
+    }
     // Different hand and pitch exercise the same exact helical B-spline
     // supports with different parameter ranges, without timing assertions.
     verify_thread(thread(2,2,"left"),2);
@@ -339,8 +431,7 @@ int main() {
       require(error.details.at("part_id")=="knob" && error.details.at("view_id")=="front","Occlusion error retains source context");
     }
     require(rejected,"Occluded thread-root anchor cannot appear visible");
-    std::cout<<"Independent exact occlusion, balloon visibility and streaming root checks passed\n";
-    require(roundtrip_failure.empty(),roundtrip_failure);
+    std::cout<<"Independent exact occlusion and balloon visibility checks passed\n";
     std::cout<<checks<<" performance geometry checks passed\n";
   } catch (const std::exception& error) {
     std::cerr<<error.what()<<'\n';
