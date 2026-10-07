@@ -647,8 +647,16 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         if (reader.ReadStream("embedded.step",stream) != IFSelect_RetDone)
           throw Error("kernel_failure","Embedded STEP content could not be imported");
         reader.SetSystemLengthUnit(1.0); // OCCT length-unit scale 1 is millimeters.
-        if (reader.TransferRoots() <= 0)
-          throw Error("kernel_failure","Embedded STEP content could not be imported");
+        // TransferRoots skips roots that fail and returns only the successful
+        // count. Anything short of every root is a lost part, never an import.
+        const int roots=reader.NbRootsForTransfer();
+        const int transferred=reader.TransferRoots();
+        const Json counts={{"transferred_roots",transferred},{"total_roots",roots}};
+        if (roots <= 0 || transferred <= 0)
+          throw Error("kernel_failure","Embedded STEP content could not be imported",counts);
+        if (transferred != roots)
+          throw Error("kernel_failure","Embedded STEP import transferred only "+std::to_string(transferred)+" of "+
+            std::to_string(roots)+" root entities; partial imports are rejected",counts);
         shape=reader.OneShape();
       } else if (type == "cut") {
         BRepAlgoAPI_Cut operation;

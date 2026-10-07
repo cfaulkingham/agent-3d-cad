@@ -80,6 +80,9 @@ edit source parts before assembling them. Full semantics and examples are in
 A sweep starts at its sketch origin with the first path segment perpendicular to
 the sketch plane. Invalid/self-intersecting profiles and failed sweeps fail
 explicitly. STEP readers normalize source units to document millimeters.
+Every STEP transfer root must transfer: a file where any root fails is rejected
+with `kernel_failure` and `transferred_roots`/`total_roots` details, never
+imported partially.
 
 ### External threads
 

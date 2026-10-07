@@ -42,6 +42,48 @@ Json rectangle(double width=20,double height=30) { return {{"type","rectangle"},
 Json circle(double radius=2) { return {{"type","circle"},{"radius",radius}}; }
 Json extruded(Json profile=rectangle()) { return document(Json::array({sketch("profile",profile),{{"id","part"},{"type","extrude"},{"input","profile"},{"distance",10}}}),"part"); }
 Json expression(const std::string& op,Json a,Json b,const std::string& unit="mm") { return {{"expression",{{"op",op},{"args",Json::array({a,b})},{"unit",unit}}}}; }
+Error captured(const std::function<void()>& action) {
+  try { action(); } catch(const Error& e) { return e; }
+  throw std::runtime_error("Expected a domain error");
+}
+void step_root_tests(const std::filesystem::path& directory) {
+  // Two independent products give the STEP reader two transfer roots.
+  STEPControl_Writer writer;
+  writer.SetShapeProcessFlags(ShapeProcess::OperationsFlags{});
+  require(writer.Transfer(BRepPrimAPI_MakeBox(10,10,10).Shape(),STEPControl_AsIs)==IFSelect_RetDone,"first root transfers");
+  require(writer.Transfer(BRepPrimAPI_MakeBox(gp_Pnt(20,0,0),5,5,5).Shape(),STEPControl_AsIs)==IFSelect_RetDone,"second root transfers");
+  const auto output=directory/"two-roots.step";
+  const auto bytes=output.u8string(); const std::string filename(bytes.begin(),bytes.end());
+  require(writer.Write(filename.c_str())==IFSelect_RetDone,"multi-root fixture writes");
+  std::ifstream stream(output); std::ostringstream text; text<<stream.rdbuf();
+  const auto complete=text.str();
+  const auto import=[](const std::string& content) {
+    return document(Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}}),"imported");
+  };
+  const auto roots=[](const std::string& content) {
+    STEPControl_Reader reader; std::istringstream input(content);
+    require(reader.ReadStream("fixture.step",input)==IFSelect_RetDone,"fixture parses");
+    const int total=reader.NbRootsForTransfer();
+    return std::pair<int,int>{total,reader.TransferRoots()};
+  };
+  require(roots(complete)==std::pair<int,int>{2,2},"fixture has two transferable roots");
+  const auto both=BuiltModel(import(complete)).summary();
+  near(both.at("volume_mm3"),1125,1e-6); require(both.at("solid_count")==2,"every STEP root is imported");
+  // Detach one product from its shape by renaming its PRODUCT_DEFINITION_SHAPE
+  // to an entity type no reader recognizes. The file still parses with two
+  // product roots, but OCCT's TransferRoots skips the shapeless one and
+  // reports one success; a reader trusting that count silently loses a part.
+  auto partial=complete;
+  const std::string link="PRODUCT_DEFINITION_SHAPE(";
+  const auto first=partial.find(link), second=first==std::string::npos ? first : partial.find(link,first+1);
+  require(second!=std::string::npos,"fixture links two products to shapes");
+  partial.replace(second,link.size(),"UNTRANSFERABLE_DEFINITION_SHAPE(");
+  const auto corrupted=roots(partial);
+  require(corrupted==std::pair<int,int>{2,1},"corrupted fixture transfers only one of two roots, got "+std::to_string(corrupted.first)+"/"+std::to_string(corrupted.second));
+  const auto e=captured([&]{BuiltModel invalid(import(partial));});
+  require(e.code=="kernel_failure" && e.details.at("feature_id")=="imported","partial STEP import fails as a feature-level kernel failure, got "+e.code+": "+e.what());
+  require(e.details.at("transferred_roots")==1 && e.details.at("total_roots")==2,"partial STEP import reports transferred and total roots");
+}
 void failure_message_tests() {
   require(kernel_failure_message(Standard_ConstructionError("bad axis"))=="bad axis","OCCT message is reported unchanged");
   const auto anonymous=kernel_failure_message(Standard_ConstructionError(""));
@@ -269,6 +311,7 @@ void tests() {
   error("invalid_model",[&]{validate_model(model);});
   model["features"][0]["content"]="not a STEP file"; model["features"][0]["sha256"]=sha256("not a STEP file");
   error("kernel_failure",[&]{BuiltModel invalid(model);});
+  step_root_tests(directory);
   failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");
