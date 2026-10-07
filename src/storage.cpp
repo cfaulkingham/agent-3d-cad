@@ -28,8 +28,17 @@ namespace {
 void io_error(const std::string& operation) {
   throw Error("storage_error", operation + ": " + std::strerror(errno));
 }
+// A missing entry is a status, not an error; any other inspection failure is a
+// storage_error rather than an escaping std::filesystem exception.
+fs::file_status entry_status(const fs::path& path) {
+  std::error_code error;
+  const auto status = fs::symlink_status(path, error);
+  if (status.type() == fs::file_type::none)
+    throw Error("storage_error", "Cannot inspect " + path_to_utf8(path) + ": " + error.message());
+  return status;
+}
 void reject_symlink(const fs::path& path) {
-  if (fs::is_symlink(fs::symlink_status(path))) throw Error("storage_error", "Managed paths cannot be symlinks: " + path_to_utf8(path));
+  if (fs::is_symlink(entry_status(path))) throw Error("storage_error", "Managed paths cannot be symlinks: " + path_to_utf8(path));
 }
 #ifdef _WIN32
 void win_error(const std::string& operation) {
@@ -77,13 +86,18 @@ void sync_directory(const fs::path& path) {
 }
 
 void directory(const fs::path& path) {
-  reject_symlink(path);
-  if (!fs::exists(path)) {
-    if (!fs::create_directory(path) && !fs::is_directory(path))
-      throw Error("storage_error", "Cannot create directory: " + path_to_utf8(path));
+  auto status = entry_status(path);
+  if (fs::is_symlink(status)) throw Error("storage_error", "Managed paths cannot be symlinks: " + path_to_utf8(path));
+  if (status.type() == fs::file_type::not_found) {
+    std::error_code error;
+    fs::create_directory(path, error);
+    // Another process may create it concurrently; only the final state matters.
+    status = entry_status(path);
+    if (!fs::is_directory(status))
+      throw Error("storage_error", "Cannot create directory: " + path_to_utf8(path) + (error ? ": " + error.message() : ""));
     sync_directory(path.parent_path());
   }
-  if (!fs::is_directory(path)) throw Error("storage_error", "Not a directory: " + path_to_utf8(path));
+  if (!fs::is_directory(status)) throw Error("storage_error", "Not a directory: " + path_to_utf8(path));
 }
 
 WorkspaceLock::WorkspaceLock(const fs::path& root) {
@@ -229,8 +243,10 @@ void atomic_text(const fs::path& path, const std::string& text) {
 
 Store::Store(fs::path workspace) {
   if (workspace.empty()) throw Error("invalid_argument", "An explicit workspace is required");
-  fs::create_directories(workspace);
-  root_ = fs::canonical(workspace);
+  std::error_code error;
+  fs::create_directories(workspace, error);
+  if (!error) root_ = fs::canonical(workspace, error);
+  if (error) throw Error("storage_error", "Cannot open workspace " + path_to_utf8(workspace) + ": " + error.message());
   // Directory creation is idempotent. Readers starting in another process must
   // not acquire the writer lock merely to open an already existing workspace.
   directory(root_ / "documents"); directory(root_ / "exports");
@@ -264,7 +280,7 @@ Json Store::read(const std::string& id, std::optional<std::uint64_t> revision) c
 
 Json Store::commit(const std::string& id, const Json& model, bool create, const Json& receipt) {
   const auto path = document_dir(id);
-  const bool exists = fs::exists(path / "HEAD.json");
+  const bool exists = fs::exists(entry_status(path / "HEAD.json"));
   if (create && exists) throw Error("already_exists", "Document already exists: " + id);
   if (!create && !exists) throw Error("not_found", "Document does not exist: " + id);
   const auto next = exists ? revision_number(read(id).at("revision")) + 1 : 1;

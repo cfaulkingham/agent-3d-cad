@@ -58,6 +58,83 @@ std::uint64_t head(Service& service, const std::string& id = "part") {
   return service.call("cad_read",{{"document_id",id}}).at("revision").get<std::uint64_t>();
 }
 
+std::string cli_error(const fs::path& workspace, const std::string& tool, const Json& arguments) {
+  static int counter = 0;
+  const auto input = workspace / ("cli-input-" + std::to_string(++counter) + ".json");
+  const auto output = workspace / ("cli-output-" + std::to_string(counter) + ".txt");
+  const auto errors = workspace / ("cli-error-" + std::to_string(counter) + ".txt");
+  atomic_text(input, arguments.dump());
+  const std::string exe = CAD_SERVICE_EXE;
+#ifdef _WIN32
+  const auto quote = [](const std::string& text) { return "\"" + text + "\""; };
+  const auto command = "\"" + quote(exe) + " call " + tool + " --workspace " + quote(path_to_utf8(workspace)) + " --input " +
+    quote(path_to_utf8(input)) + " >" + quote(path_to_utf8(output)) + " 2>" + quote(path_to_utf8(errors)) + "\"";
+#else
+  const auto quote = [](const std::string& text) { return "'" + text + "'"; };
+  const auto command = quote(exe) + " call " + tool + " --workspace " + quote(path_to_utf8(workspace)) + " --input " +
+    quote(path_to_utf8(input)) + " >" + quote(path_to_utf8(output)) + " 2>" + quote(path_to_utf8(errors));
+#endif
+  require(std::system(command.c_str()) != 0, "CLI reports failure for " + tool);
+  return parse_json(read_text(errors)).at("error").at("code").get<std::string>();
+}
+
+void error_mapping_tests() {
+  auto captured = [](const std::function<void()>& action) {
+    try { action(); } catch (...) { return std::current_exception(); }
+    throw std::runtime_error("Expected an exception");
+  };
+  require(service_error(captured([]{ (void)Json(5).at("id"); })).code == "invalid_argument", "JSON access errors are argument errors");
+  require(service_error(captured([]{ throw fs::filesystem_error("probe", std::make_error_code(std::errc::permission_denied)); })).code == "storage_error",
+    "Filesystem errors are storage errors");
+  require(service_error(captured([]{ throw std::runtime_error("probe"); })).code == "internal_error", "Unknown failures are internal");
+  const auto passthrough = service_error(captured([]{ throw Error("revision_conflict", "probe", {{"a",1}}); }));
+  require(passthrough.code == "revision_conflict" && passthrough.details.at("a") == 1, "Domain errors pass through unchanged");
+  Temp temp;
+  fails("storage_error", [&]{ Service unusable(temp.path / std::string(300, 'x') / std::string(300, 'y')); });
+  Service service(temp.path);
+  service.call("cad_create",{{"document_id","part"},{"model",box()}});
+  // The feature pushed by an earlier operation in the same batch is shape
+  // checked when added, rather than crashing a later lookup.
+  const Json missing_id = {{"document_id","part"},{"expected_revision",1},{"operations",Json::array({
+    {{"op","add_feature"},{"feature",{{"type","box"},{"size",{1,1,1}}}}},{{"op","remove_feature"},{"id","base"}}})}};
+  auto error = fails("invalid_model", [&]{ service.call("cad_apply", missing_id); });
+  require(error.details.at("operation_index") == 0, "Malformed feature names its operation");
+  auto scalar = missing_id; scalar["operations"][0]["feature"] = 5;
+  error = fails("invalid_model", [&]{ service.call("cad_apply", scalar); });
+  require(error.details.at("operation_index") == 0, "Non-object feature names its operation");
+  service.call("cad_create",{{"document_id","asm"},{"model",assembly()}});
+  auto malformed_parts = assembly().at("features")[1]; malformed_parts["parts"] = Json::array({5});
+  const Json assembly_batch = {{"document_id","asm"},{"expected_revision",1},{"operations",Json::array({
+    {{"op","replace_feature"},{"id","fixture"},{"feature",malformed_parts}},
+    {{"op","set_part_placement"},{"assembly_id","fixture"},{"part_id","p1"},{"placement",Json::object()}}})}};
+  error = fails("invalid_argument", [&]{ service.call("cad_apply", assembly_batch); });
+  require(error.details.at("operation_index") == 1, "Malformed assembly parts fail at the dependent operation");
+  require(head(service) == 1, "Rejected batches preserve HEAD");
+
+  // Every adapter receives the code Service::call produces.
+  const auto step = temp.path / "latin1.step";
+  atomic_text(step, std::string("ISO-10303-21;\n/* caf\xE9 */\nEND-ISO-10303-21;\n"));
+  const std::vector<std::tuple<std::string, Json, std::string>> cases = {
+    {"cad_apply", missing_id, "invalid_model"},
+    {"cad_apply", scalar, "invalid_model"},
+    {"cad_create", {{"document_id","CON"},{"model",box()}}, "invalid_argument"},
+    {"cad_import", {{"document_id","imported"},{"path",path_to_utf8(step)}}, "invalid_argument"}};
+  McpSession session(service);
+  session.handle({{"jsonrpc","2.0"},{"id",1},{"method","initialize"},{"params",{{"protocolVersion","2025-11-25"},
+    {"capabilities",Json::object()},{"clientInfo",{{"name","service-test"},{"version","1"}}}}}});
+  session.handle({{"jsonrpc","2.0"},{"method","notifications/initialized"}});
+  int id = 2;
+  for (const auto& [tool, arguments, code] : cases) {
+    const auto direct = fails(code, [&]{ service.call(tool, arguments); });
+    const auto reply = session.handle({{"jsonrpc","2.0"},{"id",id++},{"method","tools/call"},{"params",{{"name",tool},{"arguments",arguments}}}});
+    require(reply && reply->at("result").at("isError") == true, "MCP reports a tool error for " + tool);
+    const auto mcp = reply->at("result").at("structuredContent").at("error").at("code").get<std::string>();
+    const auto cli = cli_error(temp.path, tool, arguments);
+    require(mcp == direct.code && cli == direct.code, tool + " codes agree: service " + direct.code + ", MCP " + mcp + ", CLI " + cli);
+  }
+  require(head(service) == 1, "Adapter failures preserve HEAD");
+}
+
 void utf8_tests() {
   require(!invalid_utf8_offset("ISO-10303-21;"), "ASCII is UTF-8");
   require(!invalid_utf8_offset("caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x98\x80 \xF4\x8F\xBF\xBF"), "Multibyte UTF-8 accepted");
@@ -110,7 +187,7 @@ int main(int argc, char** argv) {
     // Optional section name for focused debugging; ctest runs every section.
     const std::string only = argc > 1 ? argv[1] : "";
     const std::vector<std::pair<std::string, void(*)()>> sections = {
-      {"identifiers", identifier_tests}, {"utf8", utf8_tests}};
+      {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"errors", error_mapping_tests}};
     for (const auto& [name, run] : sections) if (only.empty() || only == name) run();
     std::cout << "service: " << checks << " checks passed\n";
     return 0;

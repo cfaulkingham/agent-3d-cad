@@ -180,7 +180,27 @@ Json tool_definitions() {
   return tools;
 }
 
+Error service_error(std::exception_ptr error) {
+  try { std::rethrow_exception(error); }
+  catch (const Error& e) { return e; }
+  // Unvalidated JSON shapes surface as nlohmann access/type errors.
+  catch (const Json::exception& e) { return Error("invalid_argument", std::string("Malformed JSON value: ") + e.what()); }
+  catch (const fs::filesystem_error& e) {
+    Json details = Json::object();
+    if (!e.path1().empty()) details["path"] = path_to_utf8(e.path1());
+    return Error("storage_error", e.what(), details);
+  }
+  catch (const std::exception& e) { return Error("internal_error", e.what()); }
+  catch (...) { return Error("internal_error", "Unknown failure"); }
+}
+
 Json Service::call(const std::string& tool,const Json& args) {
+  try { return execute(tool,args); }
+  catch (const Error&) { throw; }
+  catch (...) { throw service_error(std::current_exception()); }
+}
+
+Json Service::execute(const std::string& tool,const Json& args) {
   if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
     return live_call(*this,store_,tool,args);
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
@@ -367,10 +387,13 @@ Json Service::call(const std::string& tool,const Json& args) {
   if(format!="step"&&format!="stl")throw Error("invalid_argument","Export format must be step or stl");
   const auto exports=store_.root()/"exports";directory(exports);
   const auto target=exports/(id+"-r"+std::to_string(revision)+"."+format),temporary=temporary_file(exports);
+  std::uintmax_t bytes=0;
   try {
     evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"path",path_to_utf8(temporary)}});
+    std::error_code size_error;bytes=fs::file_size(temporary,size_error);
+    if(size_error)throw Error("storage_error","Cannot measure export: "+size_error.message());
     DocumentLock lock(store_.root(),id);check_job_cancelled();publish_file(temporary,target);
   }catch(...){std::error_code ignored;fs::remove(temporary,ignored);throw;}
-  return {{"document_id",id},{"revision",revision},{"format",format},{"path",path_to_utf8(target)},{"bytes",fs::file_size(target)},{"units","mm"}};
+  return {{"document_id",id},{"revision",revision},{"format",format},{"path",path_to_utf8(target)},{"bytes",bytes},{"units","mm"}};
 }
 }

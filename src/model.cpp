@@ -481,11 +481,35 @@ void validate_model(const Json& model) {
   if (types.at(text_field(model,"output")) == "sketch") throw Error("invalid_model", "The model output must be solid geometry, not an intermediate sketch");
 }
 
+namespace {
+// A batch may reference what an earlier operation in it added, before the
+// final validate_model. Lookups therefore tolerate malformed entries, and an
+// added feature must carry its string id when it enters the candidate.
+bool named(const Json& item, const char* key, const std::string& value) {
+  return item.is_object() && item.contains(key) && item.at(key).is_string() && item.at(key).get_ref<const std::string&>() == value;
+}
+void added_feature(const Json& feature) {
+  if (!feature.is_object() || !feature.contains("id") || !feature.at("id").is_string())
+    throw Error("invalid_model", "An added feature must be an object with a string id");
+}
+Json& member_array(Json& feature, const char* key, const std::string& assembly_id, bool create) {
+  if (!feature.contains(key)) {
+    if (!create) throw Error("invalid_model", std::string("Assembly has no ") + key, {{"feature_id", assembly_id}});
+    feature[key] = Json::array();
+  }
+  auto& result = feature.at(key);
+  if (!result.is_array()) throw Error("invalid_model", std::string("Assembly ") + key + " must be an array", {{"feature_id", assembly_id}});
+  return result;
+}
+}
+
 Json apply_operations(const Json& model, const Json& operations) {
   if (!operations.is_array() || operations.empty() || operations.size() > 256)
     throw Error("invalid_argument", "operations must contain 1–256 edits");
   auto candidate = model;
-  for (const auto& operation : operations) {
+  for (std::size_t index = 0; index < operations.size(); ++index) {
+   const auto& operation = operations[index];
+   try {
     const auto op = text_field(operation, "op");
     auto& features = candidate.at("features");
     if (op == "set_parameter") {
@@ -495,6 +519,7 @@ Json apply_operations(const Json& model, const Json& operations) {
       candidate["parameters"][name] = operation.at("value");
     } else if (op == "add_feature") {
       fields(operation, {"op", "feature"});
+      added_feature(operation.at("feature"));
       features.push_back(operation.at("feature"));
     } else if (op == "replace_feature" || op == "remove_feature") {
       if (op == "replace_feature") fields(operation, {"op", "id", "feature"});
@@ -502,7 +527,7 @@ Json apply_operations(const Json& model, const Json& operations) {
       const auto id = text_field(operation, "id");
       auto found = features.end();
       for (auto it = features.begin(); it != features.end(); ++it)
-        if (it->at("id") == id) { found = it; break; }
+        if (named(*it, "id", id)) { found = it; break; }
       if (found == features.end()) throw Error("invalid_argument", "Unknown feature: " + id);
       if (op == "remove_feature") features.erase(found);
       else {
@@ -522,35 +547,33 @@ Json apply_operations(const Json& model, const Json& operations) {
       const auto assembly_id=text_field(operation,"assembly_id");
       auto found=features.end();
       for (auto it=features.begin(); it!=features.end(); ++it)
-        if (it->at("id") == assembly_id) { found=it; break; }
-      if (found == features.end() || text_field(*found,"type") != "assembly")
+        if (named(*it, "id", assembly_id)) { found=it; break; }
+      if (found == features.end() || !named(*found,"type","assembly"))
         throw Error("invalid_argument", "assembly_id must name an assembly feature", {{"feature_id",assembly_id}});
       if (op == "set_part_placement") {
         const auto part_id=text_field(operation,"part_id");
-        auto& parts=found->at("parts");
+        auto& parts=member_array(*found,"parts",assembly_id,false);
         auto part=parts.end();
         for (auto it=parts.begin(); it!=parts.end(); ++it)
-          if (it->at("id") == part_id) { part=it; break; }
+          if (named(*it, "id", part_id)) { part=it; break; }
         if (part == parts.end()) throw Error("invalid_argument", "Unknown assembly part: " + part_id, {{"feature_id",assembly_id},{"part_id",part_id}});
         (*part)["placement"]=operation.at("placement");
       } else if (op == "set_bom_item" || op == "remove_bom_item") {
-        if (!found->contains("bom")) (*found)["bom"]=Json::array();
-        auto& bom=found->at("bom");
+        auto& bom=member_array(*found,"bom",assembly_id,true);
         const auto input=op == "set_bom_item" ? text_field(operation.at("item"),"input") : text_field(operation,"input");
         auto item=bom.end();
-        for (auto it=bom.begin();it!=bom.end();++it) if (it->at("input")==input) {item=it;break;}
+        for (auto it=bom.begin();it!=bom.end();++it) if (named(*it,"input",input)) {item=it;break;}
         if (op == "remove_bom_item") {
           if (item==bom.end()) throw Error("invalid_argument","Unknown assembly BOM input: "+input,{{"feature_id",assembly_id},{"source_feature_id",input}});
           bom.erase(item);
         } else if (item==bom.end()) bom.push_back(operation.at("item"));
         else *item=operation.at("item");
       } else {
-        if (!found->contains("mates")) (*found)["mates"]=Json::array();
-        auto& mates=found->at("mates");
+        auto& mates=member_array(*found,"mates",assembly_id,true);
         const auto mate_id=op == "set_mate" ? text_field(operation.at("mate"),"id") : text_field(operation,"mate_id");
         auto mate=mates.end();
         for (auto it=mates.begin(); it!=mates.end(); ++it)
-          if (it->at("id") == mate_id) { mate=it; break; }
+          if (named(*it, "id", mate_id)) { mate=it; break; }
         if (op == "remove_mate") {
           if (mate == mates.end()) throw Error("invalid_argument", "Unknown assembly mate: " + mate_id, {{"feature_id",assembly_id},{"mate_id",mate_id}});
           mates.erase(mate);
@@ -558,6 +581,12 @@ Json apply_operations(const Json& model, const Json& operations) {
         else *mate=operation.at("mate");
       }
     } else throw Error("invalid_argument", "Unknown edit operation: " + op);
+   } catch (const Error& e) {
+    auto details = e.details; details["operation_index"] = index;
+    throw Error(e.code, e.what(), details);
+   } catch (const Json::exception& e) {
+    throw Error("invalid_model", std::string("Malformed operation: ") + e.what(), {{"operation_index", index}});
+   }
   }
   validate_model(candidate);
   return candidate;
