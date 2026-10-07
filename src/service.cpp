@@ -262,7 +262,9 @@ Json Service::execute(const std::string& tool,const Json& args) {
       }
       return std::nullopt;
     };
-    { DocumentLock lock(store_.root(),id);if(auto replay=precondition())return *replay;
+    // Mutation admission and publication wait (boundedly) for transient holders
+    // such as viewer sync; expected_revision is rechecked once the lock is held.
+    { DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
       if(tool=="cad_create") model=args.at("model");
       else if(tool=="cad_restore") model=store_.read(id,revision_number(args.at("source_revision"))).at("model");
       else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"));
@@ -280,7 +282,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     }
     validate_model(model);
     const auto evaluated=evaluate_model(store_.root(),model,{{"kind","summary"}});
-    DocumentLock lock(store_.root(),id);if(auto replay=precondition())return *replay;
+    DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
     check_job_cancelled();
     Json receipt=Json::object();
     if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",{{"summary",evaluated.at("summary")}}}};
@@ -325,7 +327,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
         check_job_cancelled();write_artifact(target,content);
         result["artifacts"].push_back({{"format",format},{"path",path_to_utf8(target)},{"bytes",content.size()}});
       }
-      DocumentLock lock(store_.root(),id);check_job_cancelled();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
       write_artifact(destination/"manifest.json",result.dump(2)+"\n");
       return result;
     } catch(...) {std::error_code ignored;fs::remove_all(destination,ignored);throw;}
@@ -369,7 +371,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
       auto saved=identity;saved["schema_version"]=1;saved["drawing"]=recipe;saved["resolved_drawing"]=spec;
       saved["model_sha256"]=sha256(record.at("model").dump());
       write_artifact(destination/"drawing.json",saved.dump(2)+"\n");
-      DocumentLock lock(store_.root(),id);check_job_cancelled();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
       write_artifact(destination/"manifest.json",result.dump(2)+"\n");
       return result;
     } catch(...) {std::error_code ignored;fs::remove_all(destination,ignored);throw;}
@@ -392,7 +394,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"path",path_to_utf8(temporary)}});
     std::error_code size_error;bytes=fs::file_size(temporary,size_error);
     if(size_error)throw Error("storage_error","Cannot measure export: "+size_error.message());
-    DocumentLock lock(store_.root(),id);check_job_cancelled();publish_file(temporary,target);
+    DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();publish_file(temporary,target);
   }catch(...){std::error_code ignored;fs::remove(temporary,ignored);throw;}
   return {{"document_id",id},{"revision",revision},{"format",format},{"path",path_to_utf8(target)},{"bytes",bytes},{"units","mm"}};
 }

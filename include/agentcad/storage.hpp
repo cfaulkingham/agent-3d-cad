@@ -1,5 +1,6 @@
 #pragma once
 #include "agentcad/json.hpp"
+#include <chrono>
 #include <filesystem>
 #include <optional>
 
@@ -24,10 +25,17 @@ private:
 #endif
 };
 
+// Lock policy. LockWait::none fails immediately with workspace_busy (viewer,
+// job admission and other callers with their own retry). LockWait::publication
+// is used by Service mutations and artifact publication after expensive work:
+// it retries with 2-50 ms backoff, holding neither lock between attempts, and
+// throws workspace_busy (details.waited_ms) once publication_lock_wait elapses.
+inline constexpr std::chrono::milliseconds publication_lock_wait{5000};
+enum class LockWait { none, publication };
 // Independent document writers; cooperates with the legacy workspace lock.
 class DocumentLock {
 public:
-  DocumentLock(const fs::path& root, const std::string& id);
+  DocumentLock(const fs::path& root, const std::string& id, LockWait wait = LockWait::none);
   ~DocumentLock();
   DocumentLock(const DocumentLock&) = delete;
   DocumentLock& operator=(const DocumentLock&) = delete;

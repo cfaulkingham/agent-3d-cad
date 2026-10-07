@@ -58,6 +58,135 @@ std::uint64_t head(Service& service, const std::string& id = "part") {
   return service.call("cad_read",{{"document_id",id}}).at("revision").get<std::uint64_t>();
 }
 
+// Another owner of the same document lock, through the public storage API and a
+// separate file descriptor/handle, that releases after `hold`.
+class Holder {
+public:
+  Holder(const fs::path& root, const std::string& id, std::chrono::milliseconds hold) {
+    std::promise<void> ready; auto acquired = ready.get_future();
+    thread_ = std::thread([root, id, hold, ready = std::move(ready)]() mutable {
+      try { DocumentLock lock(root, id); ready.set_value(); std::this_thread::sleep_for(hold); }
+      catch (...) { ready.set_exception(std::current_exception()); }
+    });
+    try { acquired.get(); } catch (...) { thread_.join(); throw; }
+  }
+  ~Holder() { thread_.join(); }
+  Holder(const Holder&) = delete;
+  Holder& operator=(const Holder&) = delete;
+private:
+  std::thread thread_;
+};
+
+void lock_wait_tests() {
+  Temp temp; const auto& root = temp.path;
+  {
+    Holder holder(root, "part", 300ms);
+    auto start = Clock::now();
+    fails("workspace_busy", [&]{ DocumentLock immediate(root, "part"); });
+    require(since(start) < 250ms, "Default document lock stays non-blocking");
+    start = Clock::now();
+    DocumentLock independent(root, "other", LockWait::publication);
+    require(since(start) < 250ms, "Publication wait applies only to the contended document");
+    start = Clock::now();
+    DocumentLock waited(root, "part", LockWait::publication);
+    const auto elapsed = since(start);
+    require(elapsed >= 150ms && elapsed < publication_lock_wait, "Publication lock waits for a transient holder (" + std::to_string(elapsed.count()) + " ms)");
+  }
+  {
+    Holder holder(root, "part", publication_lock_wait + 1500ms);
+    const auto start = Clock::now();
+    const auto error = fails("workspace_busy", [&]{ DocumentLock expired(root, "part", LockWait::publication); });
+    const auto elapsed = since(start);
+    require(elapsed >= publication_lock_wait - 20ms && elapsed < publication_lock_wait + 1000ms,
+      "Publication wait is bounded (" + std::to_string(elapsed.count()) + " ms)");
+    require(error.details.at("waited_ms") == publication_lock_wait.count(), "Expired wait reports its bound");
+  }
+#ifndef _WIN32
+  // A second process holding the lock is waited for in the same way.
+  int ready[2];
+  require(::pipe(ready) == 0, "pipe");
+  const auto child = ::fork();
+  require(child >= 0, "fork");
+  if (child == 0) {
+    ::close(ready[0]);
+    try { DocumentLock lock(root, "part"); (void)::write(ready[1], "x", 1); std::this_thread::sleep_for(300ms); }
+    catch (...) { ::_exit(2); }
+    ::_exit(0);
+  }
+  ::close(ready[1]);
+  char signal = 0; require(::read(ready[0], &signal, 1) == 1, "child owns document lock");
+  ::close(ready[0]);
+  const auto start = Clock::now();
+  { DocumentLock waited(root, "part", LockWait::publication); }
+  require(since(start) >= 150ms, "Publication lock waits for another process");
+  int status = 0; ::waitpid(child, &status, 0);
+  require(WIFEXITED(status) && WEXITSTATUS(status) == 0, "lock child exits cleanly");
+#endif
+}
+
+void publication_wait_tests() {
+  Temp temp; Service service(temp.path);
+  service.call("cad_create",{{"document_id","part"},{"model",box()}});
+  {
+    // A transient holder (viewer sync, mesh chunk, another server) delays but
+    // never fails a mutation.
+    Holder holder(temp.path, "part", 300ms);
+    require(service.call("cad_apply",edit(1,8)).at("revision") == 2, "Mutation waits for a transient document holder");
+  }
+  // Export holds no document lock until publication: keep the lock from the
+  // moment the build starts until its STEP bytes exist, so the finished build
+  // must wait at publication rather than discard its work.
+  {
+    const auto exports = temp.path / "exports";
+    auto holder = std::async(std::launch::async, [&] {
+      const auto deadline = Clock::now() + 60s;
+      fs::path pending;
+      while (pending.empty()) {
+        std::error_code ignored;
+        for (const auto& entry : fs::directory_iterator(exports, ignored))
+          if (path_to_utf8(entry.path().filename()).starts_with(".pending-")) pending = entry.path();
+        require(Clock::now() < deadline, "export started");
+        std::this_thread::sleep_for(1ms);
+      }
+      std::unique_ptr<DocumentLock> lock;
+      while (!lock) {
+        try { lock = std::make_unique<DocumentLock>(temp.path, "part"); }
+        catch (const Error& e) { if (e.code != "workspace_busy" || Clock::now() >= deadline) throw; std::this_thread::sleep_for(1ms); }
+      }
+      for (std::error_code error; fs::exists(pending, error) && fs::file_size(pending, error) == 0;) {
+        require(Clock::now() < deadline, "export produced STEP bytes");
+        std::this_thread::sleep_for(2ms);
+      }
+      std::this_thread::sleep_for(400ms);
+    });
+    const auto exported = service.call("cad_export",{{"document_id","part"},{"revision",2},{"format","step"}});
+    holder.get();
+    require(fs::exists(path_from_utf8(exported.at("path").get<std::string>())) && exported.at("bytes") > 0, "Export publishes after waiting");
+  }
+  // cad_bom publication is the only lock in that tool.
+  service.call("cad_create",{{"document_id","asm"},{"model",assembly()}});
+  {
+    Holder holder(temp.path, "asm", 300ms);
+    const auto bom = service.call("cad_bom",{{"document_id","asm"},{"revision",1}});
+    require(fs::exists(path_from_utf8(bom.at("path").get<std::string>())), "BOM manifest publishes after waiting");
+  }
+  // Concurrent writers with the same expected revision: exactly one commits
+  // and the other observes revision_conflict, never workspace_busy.
+  for (int round = 0; round < 3; ++round) {
+    const auto base = head(service);
+    auto run = [&](double height) {
+      Service writer(temp.path);
+      try { writer.call("cad_apply", edit(base, height)); return std::string("ok"); }
+      catch (const Error& e) { return e.code; }
+    };
+    auto first = std::async(std::launch::async, run, 10.0 + round), second = std::async(std::launch::async, run, 20.0 + round);
+    std::vector<std::string> outcomes = {first.get(), second.get()};
+    std::sort(outcomes.begin(), outcomes.end());
+    require(outcomes == std::vector<std::string>{"ok","revision_conflict"}, "Concurrent edits: one commit and one revision_conflict (got " + outcomes[0] + ", " + outcomes[1] + ")");
+    require(head(service) == base + 1, "Exactly one concurrent edit published");
+  }
+}
+
 std::string cli_error(const fs::path& workspace, const std::string& tool, const Json& arguments) {
   static int counter = 0;
   const auto input = workspace / ("cli-input-" + std::to_string(++counter) + ".json");
@@ -187,7 +316,8 @@ int main(int argc, char** argv) {
     // Optional section name for focused debugging; ctest runs every section.
     const std::string only = argc > 1 ? argv[1] : "";
     const std::vector<std::pair<std::string, void(*)()>> sections = {
-      {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"errors", error_mapping_tests}};
+      {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"locks", lock_wait_tests},
+      {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
     for (const auto& [name, run] : sections) if (only.empty() || only == name) run();
     std::cout << "service: " << checks << " checks passed\n";
     return 0;

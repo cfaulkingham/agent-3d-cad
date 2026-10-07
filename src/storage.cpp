@@ -1,10 +1,12 @@
 #include "agentcad/storage.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fstream>
 #include <random>
+#include <thread>
 #ifdef _WIN32
 #define NOMINMAX
 #include <windows.h>
@@ -62,7 +64,17 @@ void sync_directory(const fs::path&) {
   // Windows publication uses MoveFileExW(MOVEFILE_WRITE_THROUGH). Directory
   // handles do not support FlushFileBuffers on ordinary Windows filesystems.
 }
+void close_lock(HANDLE& handle) { if (handle) CloseHandle(handle); handle = nullptr; }
 #else
+// Darwin's fsync() can leave data in the drive's volatile cache; F_FULLFSYNC
+// asks the device to flush it. Filesystems without support fall back to fsync.
+int durable_sync(int fd) {
+#ifdef __APPLE__
+  if (::fcntl(fd, F_FULLFSYNC) == 0) return 0;
+#endif
+  return ::fsync(fd);
+}
+void close_lock(int& fd) { if (fd >= 0) ::close(fd); fd = -1; }
 int open_lock(const fs::path& path, bool exclusive) {
   const int fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
   if (fd < 0) io_error("Open lock");
@@ -77,7 +89,7 @@ int open_lock(const fs::path& path, bool exclusive) {
 void sync_directory(const fs::path& path) {
   const int fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0) io_error("Open directory for sync");
-  const int result = ::fsync(fd);
+  const int result = durable_sync(fd);
   const int saved = errno;
   ::close(fd);
   if (result != 0) { errno = saved; io_error("Sync directory"); }
@@ -114,17 +126,30 @@ WorkspaceLock::~WorkspaceLock() {
   if (fd_ >= 0) ::close(fd_);
 #endif
 }
-DocumentLock::DocumentLock(const fs::path& root, const std::string& id) {
+DocumentLock::DocumentLock(const fs::path& root, const std::string& id, LockWait wait) {
   identifier(id); directory(root / ".locks");
-  workspace_ = open_lock(root / ".lock", false);
-  try { document_ = open_lock(root / ".locks" / (id + ".lock"), true); }
-  catch (...) {
-#ifdef _WIN32
-    CloseHandle(workspace_);
-#else
-    ::close(workspace_);
-#endif
-    throw;
+  const auto bound = wait == LockWait::publication ? publication_lock_wait : std::chrono::milliseconds::zero();
+  const auto deadline = std::chrono::steady_clock::now() + bound;
+  std::chrono::steady_clock::duration pause = std::chrono::milliseconds(2);
+  for (;;) {
+    try {
+      // Each attempt takes both locks in order (workspace shared, then document
+      // exclusive) or neither, so a waiter holds nothing while it sleeps and
+      // cannot deadlock against WorkspaceLock owners or other documents.
+      workspace_ = open_lock(root / ".lock", false);
+      try { document_ = open_lock(root / ".locks" / (id + ".lock"), true); return; }
+      catch (...) { close_lock(workspace_); throw; }
+    } catch (const Error& e) {
+      if (e.code != "workspace_busy") throw;
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        if (bound.count() == 0) throw;
+        throw Error("workspace_busy", "Another operation held this document for over " + std::to_string(bound.count()) +
+          " ms; retry after it completes", {{"waited_ms", bound.count()}});
+      }
+      std::this_thread::sleep_for(std::min(pause, deadline - now));
+      pause = std::min<std::chrono::steady_clock::duration>(pause * 2, std::chrono::milliseconds(50));
+    }
   }
 }
 DocumentLock::~DocumentLock() {
@@ -219,7 +244,7 @@ void publish_file(const fs::path& temporary, const fs::path& target) {
 #else
   const int fd = ::open(temporary.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
   if (fd < 0) io_error("Open temporary file for sync");
-  const int result = ::fsync(fd);
+  const int result = durable_sync(fd);
   const int saved = errno; ::close(fd);
   if (result != 0) { errno = saved; io_error("Sync file"); }
   if (::rename(temporary.c_str(), target.c_str()) != 0) io_error("Publish file");
