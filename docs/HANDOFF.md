@@ -6,6 +6,35 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## Intel CI follow-up — diagnostic context
+
+The reported GitHub Actions run `37609850499`, Intel job `112754188016`, tested
+commit `81495027f501563d53e8d91f48f0993b52277d9f` (v1), before the v2 increment below.
+Its `performance_geometry` test failed after 60.43 seconds with only
+`Equivalent array lengths`; the other four native lanes passed. The existing log
+does not identify which array differs, so neither a visibility defect nor harmless
+sampling differences have been established. Do not relax that assertion on this
+evidence alone.
+
+The JSON regression helper now reports the full comparison path and mismatched
+array lengths/numeric values; restored-drawing diagnostics also identify thread
+handedness and pitch. All comparison rules and tolerances remain unchanged.
+`cmake --build build-app-protocol --target cad_performance_geometry_tests
+--parallel 4` and `ctest --test-dir build-app-protocol -R '^performance_geometry$'
+--output-on-failure` passed on macOS arm64 in **13.90 seconds**.
+
+This local host has no usable x64 execution environment. A prepared diagnostic CI
+branch would use the known v1 source/Intel SDK cache and run only the Intel lane.
+Automatic approval review rejected uploading its test/workflow files and creating
+remote GitHub objects without explicit user authorization. Approval was requested;
+no diagnostic branch or remote source objects were created. Separately, v2 run
+`37619754246` was already building native SDKs when inspected. Its Intel result is
+still unverified here.
+
+Next: obtain the exact failing comparison and source/result evidence on Intel,
+then fix the underlying behavior or prove geometric equivalence with the existing
+visibility/occlusion checks before changing any comparison contract.
+
 ## Current increment — exact HLR root streaming and face-grid reuse
 
 Implemented `agentcad-hlr-midpoint-v2` in the pinned OCCT 8.0.1 recipe:

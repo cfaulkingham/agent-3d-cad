@@ -32,19 +32,21 @@ void require(bool value,const std::string& message) {
 void near(double actual,double expected,double tolerance=1e-7) {
   require(std::abs(actual-expected)<=tolerance,"Expected "+std::to_string(expected)+", got "+std::to_string(actual));
 }
-void equivalent(const Json& a,const Json& b) {
+void equivalent(const Json& a,const Json& b,const std::string& path="$") {
   if (a.is_number() && b.is_number()) {
-    near(a.get<double>(),b.get<double>(),1e-7*std::max(1.0,std::abs(a.get<double>())));
+    const double tolerance=1e-7*std::max(1.0,std::abs(a.get<double>()));
+    require(std::abs(a.get<double>()-b.get<double>())<=tolerance,
+      "Equivalent numbers at "+path+": "+a.dump()+" vs "+b.dump());
     return;
   }
-  require(a.type()==b.type(),"Equivalent JSON types");
+  require(a.type()==b.type(),"Equivalent JSON types at "+path);
   if (a.is_object()) {
-    require(a.size()==b.size(),"Equivalent object keys");
-    for (const auto& [key,value]:a.items()) equivalent(value,b.at(key));
+    require(a.size()==b.size(),"Equivalent object keys at "+path);
+    for (const auto& [key,value]:a.items()) equivalent(value,b.at(key),path+"."+key);
   } else if (a.is_array()) {
-    require(a.size()==b.size(),"Equivalent array lengths");
-    for (std::size_t i=0;i<a.size();++i) equivalent(a[i],b[i]);
-  } else require(a==b,"Equivalent JSON values");
+    require(a.size()==b.size(),"Equivalent array lengths at "+path+": "+std::to_string(a.size())+" vs "+std::to_string(b.size()));
+    for (std::size_t i=0;i<a.size();++i) equivalent(a[i],b[i],path+"["+std::to_string(i)+"]");
+  } else require(a==b,"Equivalent JSON values at "+path);
 }
 Json drawing(std::initializer_list<const char*> orientations) {
   Json views=Json::array();
@@ -219,7 +221,7 @@ void verify_thread(const Json& model,double height) {
   equivalent(summary,built.summary()); equivalent(topology,built.topology());
   BuiltModel restored(model,built.snapshot());
   equivalent(summary,restored.summary());
-  equivalent(result,restored.drawing(request));
+  equivalent(result,restored.drawing(request),"restored "+model.at("features")[0].at("handedness").get<std::string>()+" pitch "+model.at("features")[0].at("pitch").dump());
 }
 }
 
