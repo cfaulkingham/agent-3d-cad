@@ -329,7 +329,10 @@ until replaced; never interpret it as a reference to the new revision.
 
 The UI verifies the full transfer identity and rechecks sync before displaying
 it. Same-document changes preserve the camera and clear old picks; switching
-documents clears the old mesh while loading. Reopening restores a saved camera
+documents clears the old mesh while loading. A sync `error` state is a successful
+tool result (only `isError` marks a failed call): for a different document it
+clears the old mesh, model, camera and hidden parts; for the same document it
+keeps the last solid with picks disabled. Reopening restores a saved camera
 and selection only when context still matches the current evaluation. Assembly
 part controls hide individual instances, isolate one instance, or show all.
 Isolating uses the same hidden-ID array for the other displayed parts.
