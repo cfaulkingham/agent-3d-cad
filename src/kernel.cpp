@@ -130,6 +130,15 @@ struct BuiltModel::Impl {
   }
 };
 std::string kernel_version() { return OCC_VERSION_COMPLETE; }
+std::string kernel_failure_message(const std::exception& failure) {
+  const char* message=failure.what();
+  if (message && *message) return message;
+  // OCCT 8 failures are std::exceptions without RTTI handles; ExceptionType()
+  // names the concrete class, which is the only evidence an empty one carries.
+  if (const auto* occt=dynamic_cast<const Standard_Failure*>(&failure))
+    return std::string(occt->ExceptionType())+" raised by OpenCascade without a message";
+  return "Kernel failure without a message";
+}
 void configure_kernel_logging() {
   auto printer = new Message_PrinterOStream("cerr", true);
   printer->SetToColorize(false);
@@ -138,6 +147,10 @@ void configure_kernel_logging() {
 }
 
 namespace {
+// The single conversion of an OCCT failure into a domain error.
+Error occt_error(const Standard_Failure& failure, Json details = Json::object(), const std::string& code = "kernel_failure") {
+  return Error(code, kernel_failure_message(failure), std::move(details));
+}
 int count(const TopoDS_Shape& shape, TopAbs_ShapeEnum kind) {
   NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> map;
   TopExp::MapShapes(shape, kind, map);
@@ -358,7 +371,7 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
           transforms.emplace(id,parent->second*local_frame(mate.at("parent_frame"),parameters)*offset*rotation*
             local_frame(mate.at("child_frame"),parameters).Inverted());
         } catch (const Standard_Failure& e) {
-          throw Error("kernel_failure",e.what(),{{"part_id",id},{"mate_id",mate.at("id")}});
+          throw occt_error(e,{{"part_id",id},{"mate_id",mate.at("id")}});
         }
       }
       progress=true;
@@ -381,7 +394,7 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
       operations.push_back(std::move(operation));
     } catch (const Error& e) {
       auto details=e.details; details["part_id"]=id; throw Error(e.code,e.what(),details);
-    } catch (const Standard_Failure& e) { throw Error("kernel_failure",e.what(),{{"part_id",id}}); }
+    } catch (const Standard_Failure& e) { throw occt_error(e,{{"part_id",id}}); }
   }
   check_shape(compound);
   FeatureGeometry result(compound); result.parts=std::move(resolved);
@@ -699,7 +712,7 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       auto details = e.details; details["feature_id"] = id;
       throw Error(e.code, e.what(), details);
     } catch (const Standard_Failure& e) {
-      throw Error("kernel_failure", e.what(), {{"feature_id", id}});
+      throw occt_error(e, {{"feature_id", id}});
     }
   }
   impl_->output = text_field(model, "output");
@@ -738,7 +751,7 @@ BuiltModel::BuiltModel(const Json& model, const Json& snapshot) : impl_(std::mak
     }
     impl_->output=text_field(model,"output");
     impl_->shape=impl_->features.at(impl_->output).shape;
-  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
 }
 Json BuiltModel::snapshot() const {
   try {
@@ -757,37 +770,39 @@ Json BuiltModel::snapshot() const {
         {"edges",geometry.edges.Extent()},{"provenance",geometry.provenance}};
     }
     return {{"features",std::move(features)}};
-  } catch(const Standard_Failure& e) { throw Error("cache_miss",e.what()); }
+  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
 }
 BuiltModel::~BuiltModel() = default;
 BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
 BuiltModel& BuiltModel::operator=(BuiltModel&&) noexcept = default;
 
 Json BuiltModel::summary(const std::string& feature_id) const {
-  const auto& geometry = impl_->feature(feature_id);
-  const auto& shape = geometry.shape;
-  const auto solids = count(shape, TopAbs_SOLID);
-  GProp_GProps volume, area;
-  if (solids) BRepGProp::VolumeProperties(shape, volume);
-  BRepGProp::SurfaceProperties(shape, area);
-  Bnd_Box box;
-  BRepBndLib::AddOptimal(shape, box, false, false);
-  const auto limits = box.Get();
-  const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
-  Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
-    {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
-    {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
-    {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
-    {"edge_count", count(shape, TopAbs_EDGE)}};
-  if (!geometry.parts.empty()) {
-    result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
-    for (const auto& part:geometry.parts) {
-      GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
-      result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
-        {"bounds_mm",bounds(part.shape)},{"volume_mm3",mass.Mass()}});
+  try {
+    const auto& geometry = impl_->feature(feature_id);
+    const auto& shape = geometry.shape;
+    const auto solids = count(shape, TopAbs_SOLID);
+    GProp_GProps volume, area;
+    if (solids) BRepGProp::VolumeProperties(shape, volume);
+    BRepGProp::SurfaceProperties(shape, area);
+    Bnd_Box box;
+    BRepBndLib::AddOptimal(shape, box, false, false);
+    const auto limits = box.Get();
+    const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
+    Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
+      {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
+      {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
+      {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
+      {"edge_count", count(shape, TopAbs_EDGE)}};
+    if (!geometry.parts.empty()) {
+      result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
+      for (const auto& part:geometry.parts) {
+        GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
+        result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
+          {"bounds_mm",bounds(part.shape)},{"volume_mm3",mass.Mass()}});
+      }
     }
-  }
-  return result;
+    return result;
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limits) const {
@@ -836,7 +851,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       if (matching == 1) edge["selector"] = selector;
     }
     return result;
-  } catch (const Standard_Failure& e) { throw Error("kernel_failure", e.what(), {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) const {
@@ -888,7 +903,7 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
       result["edges"].push_back(std::move(item));
     }
     return result;
-  } catch (const Standard_Failure& e) { throw Error("kernel_failure", e.what(), {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+  } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
 namespace {
@@ -970,7 +985,7 @@ Json balloon_anchors(const Json& requested,const std::vector<AssemblyPart>& part
       if (!part_id.empty()) details["part_id"]=part_id;
       throw Error(e.code,e.what(),details);
     } catch (const Standard_Failure& e) {
-      throw Error("kernel_failure",e.what(),{{"feature_id",feature_id},{"part_id",part_id}});
+      throw occt_error(e,{{"feature_id",feature_id},{"part_id",part_id}});
     }
   }
   return result;
@@ -1331,7 +1346,7 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
     } catch (const Error& e) {
       auto details = e.details; details["view_id"] = id;
       throw Error(e.code,e.what(),details);
-    } catch (const Standard_Failure& e) { throw Error("kernel_failure",e.what(),{{"view_id",id}}); }
+    } catch (const Standard_Failure& e) { throw occt_error(e,{{"view_id",id}}); }
   }
   return result;
 }
@@ -1366,7 +1381,7 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       if (output.fail()) throw Error("export_failed", "STL stream close failed");
     } else throw Error("invalid_argument", "Export format must be step or stl");
   } catch (const Standard_Failure& e) {
-    throw Error("export_failed", e.what());
+    throw occt_error(e, Json::object(), "export_failed");
   }
 }
 }

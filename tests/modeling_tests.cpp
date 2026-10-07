@@ -8,6 +8,7 @@
 #include <STEPControl_Writer.hxx>
 #include <RWStl.hxx>
 #include <STEPControl_Reader.hxx>
+#include <Standard_ConstructionError.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
 #include <BRepGProp.hxx>
@@ -41,6 +42,12 @@ Json rectangle(double width=20,double height=30) { return {{"type","rectangle"},
 Json circle(double radius=2) { return {{"type","circle"},{"radius",radius}}; }
 Json extruded(Json profile=rectangle()) { return document(Json::array({sketch("profile",profile),{{"id","part"},{"type","extrude"},{"input","profile"},{"distance",10}}}),"part"); }
 Json expression(const std::string& op,Json a,Json b,const std::string& unit="mm") { return {{"expression",{{"op",op},{"args",Json::array({a,b})},{"unit",unit}}}}; }
+void failure_message_tests() {
+  require(kernel_failure_message(Standard_ConstructionError("bad axis"))=="bad axis","OCCT message is reported unchanged");
+  const auto anonymous=kernel_failure_message(Standard_ConstructionError(""));
+  require(anonymous.find("Standard_ConstructionError")!=std::string::npos,"empty OCCT message names the exception type: "+anonymous);
+  require(!kernel_failure_message(std::runtime_error("")).empty(),"non-OCCT failures never produce an empty message");
+}
 void thread_tests() {
   const auto directory=std::filesystem::temp_directory_path()/("agentcad-thread-"+std::to_string(std::random_device{}()));
   require(std::filesystem::create_directory(directory),"isolated thread STEP workspace");
@@ -262,6 +269,7 @@ void tests() {
   error("invalid_model",[&]{validate_model(model);});
   model["features"][0]["content"]="not a STEP file"; model["features"][0]["sha256"]=sha256("not a STEP file");
   error("kernel_failure",[&]{BuiltModel invalid(model);});
+  failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");
   require(defs.at("feature").at("oneOf").size()==15,"modeling and assembly schemas discoverable");
