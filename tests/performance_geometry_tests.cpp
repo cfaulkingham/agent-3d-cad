@@ -1,5 +1,6 @@
 #include "agentcad/kernel.hpp"
 #include <BRepTools.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -26,6 +27,7 @@
 using namespace agentcad;
 namespace {
 int checks=0;
+std::string roundtrip_failure;
 void require(bool value,const std::string& message) {
   ++checks;
   if (!value) throw std::runtime_error(message);
@@ -66,6 +68,51 @@ void save_evidence(const std::string& name,const Json& value) {
   std::ofstream output(std::filesystem::path(directory)/(name+".json"));
   output<<value.dump(2)<<'\n';
   require(static_cast<bool>(output),"Write geometry regression evidence "+name);
+}
+void equivalent_exact_projections(const Json& original,const Json& restored,const std::string& fixture) {
+  require(original.size()==restored.size(),"Exact projection view count "+fixture);
+  double worst=0;
+  std::size_t samples=0,edges=0;
+  for (std::size_t v=0;v<original.size();++v) {
+    const auto& a=original[v]; const auto& b=restored[v];
+    require(a.at("id")==b.at("id"),"Exact projection view identity "+fixture);
+    require(a.at("curves").size()==b.at("curves").size(),"Exact projection groups "+fixture);
+    for (std::size_t group=0;group<a.at("curves").size();++group) {
+      const auto& left=a.at("curves")[group]; const auto& right=b.at("curves")[group];
+      require(left.at("hidden")==right.at("hidden"),"Exact projection visibility group "+fixture);
+      const auto left_text=left.at("brep").get<std::string>(),right_text=right.at("brep").get<std::string>();
+      require(left_text.empty()==right_text.empty(),"Exact projection empty group "+fixture);
+      if (left_text.empty()) continue;
+      std::istringstream left_input(left_text),right_input(right_text);
+      TopoDS_Shape left_shape,right_shape;
+      BRepTools::Read(left_shape,left_input,BRep_Builder{});
+      BRepTools::Read(right_shape,right_input,BRep_Builder{});
+      require(!left_shape.IsNull() && !right_shape.IsNull(),"Read exact projection groups "+fixture);
+      TopExp_Explorer first(left_shape,TopAbs_EDGE),second(right_shape,TopAbs_EDGE);
+      // These inventories belong to paired evaluations only, never saved design
+      // references. Preserve each exact visible/hidden trimmed curve, including
+      // parameter endpoints; adaptive polyline vertices do not define geometry.
+      for (;first.More() && second.More();first.Next(),second.Next()) {
+        ++edges;
+        BRepAdaptor_Curve original_curve(TopoDS::Edge(first.Current())),restored_curve(TopoDS::Edge(second.Current()));
+        require(original_curve.GetType()==restored_curve.GetType(),"Exact projection curve type "+fixture);
+        near(original_curve.FirstParameter(),restored_curve.FirstParameter());
+        near(original_curve.LastParameter(),restored_curve.LastParameter());
+        for (int p=0;p<=64;++p) {
+          const double fraction=p/64.;
+          const auto original_point=original_curve.Value(original_curve.FirstParameter()+fraction*(original_curve.LastParameter()-original_curve.FirstParameter()));
+          const auto restored_point=restored_curve.Value(restored_curve.FirstParameter()+fraction*(restored_curve.LastParameter()-restored_curve.FirstParameter()));
+          const double distance=original_point.Distance(restored_point);
+          worst=std::max(worst,distance); ++samples;
+          require(distance<=1e-7,"Exact projected curve changed in "+fixture+" view "+a.at("id").get<std::string>()+
+            " group "+std::to_string(group)+" edge "+std::to_string(edges)+": "+std::to_string(distance)+" mm");
+        }
+      }
+      require(!first.More() && !second.More(),"Exact projection edge count "+fixture);
+    }
+  }
+  save_evidence(fixture+"-exact-report",{{"edges",edges},{"samples",samples},{"max_deviation_mm",worst},{"tolerance_mm",1e-7}});
+  std::cout<<fixture<<": "<<edges<<" exact projected curves, "<<samples<<" paired samples, max deviation "<<worst<<" mm\n";
 }
 double segment_distance(double x,double y,const Json& a,const Json& b) {
   const double ax=a[0],ay=a[1],dx=b[0].get<double>()-ax,dy=b[1].get<double>()-ay;
@@ -209,7 +256,8 @@ void verify_thread(const Json& model,double height) {
   BuiltModel built(model);
   const auto summary=built.summary(),topology=built.topology();
   const auto request=drawing({"top","front","isometric"});
-  const auto result=built.drawing(request);
+  Json original_exact,restored_exact;
+  const auto result=built.drawing(request,&original_exact);
   near(result.at("tolerance_mm"),0.02);
   const auto& top=result.at("views")[0];
   // Complete turns retain the actual major diameter in their axial projection.
@@ -231,11 +279,18 @@ void verify_thread(const Json& model,double height) {
   const auto snapshot=built.snapshot();
   BuiltModel restored(model,snapshot);
   equivalent(summary,restored.summary());
-  const auto restored_result=restored.drawing(request);
+  const auto restored_result=restored.drawing(request,&restored_exact);
   const auto fixture=model.at("features")[0].at("handedness").get<std::string>()+"-"+model.at("features")[0].at("pitch").dump();
   save_evidence(fixture,{{"model",model},{"snapshot",snapshot},{"restored_snapshot",restored.snapshot()},
-    {"original",result},{"restored",restored_result}});
-  equivalent(result,restored_result,"restored "+fixture);
+    {"original",result},{"restored",restored_result},{"original_exact",original_exact},{"restored_exact",restored_exact}});
+  equivalent_exact_projections(original_exact,restored_exact,fixture);
+  try { equivalent(result,restored_result,"restored "+fixture); }
+  catch (const std::runtime_error& error) {
+    // Still fail the suite, but run independent physical occlusion/root checks
+    // before reporting this comparison so failure artifacts retain that evidence.
+    roundtrip_failure=error.what();
+    std::cerr<<"Deferred comparison failure: "<<roundtrip_failure<<'\n';
+  }
 }
 }
 
@@ -284,6 +339,8 @@ int main() {
       require(error.details.at("part_id")=="knob" && error.details.at("view_id")=="front","Occlusion error retains source context");
     }
     require(rejected,"Occluded thread-root anchor cannot appear visible");
+    std::cout<<"Independent exact occlusion, balloon visibility and streaming root checks passed\n";
+    require(roundtrip_failure.empty(),roundtrip_failure);
     std::cout<<checks<<" performance geometry checks passed\n";
   } catch (const std::exception& error) {
     std::cerr<<error.what()<<'\n';
