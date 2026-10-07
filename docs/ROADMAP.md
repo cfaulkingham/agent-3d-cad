@@ -18,6 +18,15 @@ independent evidence. The live Codex MCP App now has actual
 macOS arm64 rendering/selection/refresh evidence, and current M4/M5 sources
 passed the Linux arm64 builder and clean runtime container. See HANDOFF.md.
 
+Current-build validation (2026-10-07): source `541e3bf` and the OCCT 8.0.1 v2
+HLR SDK passed all 28 native suites, schema/MCP checks, relocated bundles and
+preview packaging on macOS arm64/Intel x64, Linux x64/arm64 and Windows x64.
+Both Linux runtime-only container checks passed; all five downloaded archives
+passed independent file/hash, architecture and dependency-provenance verification.
+The Intel regression was an adaptive polyline-count assertion; exact visibility
+and bounded geometric comparisons now establish roundtrip equivalence. Exact
+results and remaining independent browser/GPU/release gates are in HANDOFF.md.
+
 ## M0 — editable native backend (implemented, local validation)
 
 - C++20 build with exact OCCT 8.0.1 and checksum-pinned JSON dependency.
