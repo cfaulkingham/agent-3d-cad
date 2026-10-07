@@ -1,6 +1,6 @@
 #include "agentcad/mcp.hpp"
 #include "agentcad/app.hpp"
-#include <algorithm>
+#include <set>
 
 namespace agentcad {
 namespace {
@@ -21,6 +21,19 @@ Json app_resource() {
   return {{"uri", viewer_app_uri}, {"name", "CAD Viewer"},
           {"description", "Interactive CAD workspace with durable model state and selections"},
           {"mimeType", viewer_app_mime}, {"_meta", app_metadata()}};
+}
+// The catalog is constant for the process: build it once, not per tools/call.
+const Json& published_tools() {
+  static const Json tools = tool_definitions();
+  return tools;
+}
+const std::set<std::string>& published_tool_names() {
+  static const auto names = [] {
+    std::set<std::string> result;
+    for (const auto& tool : published_tools()) result.insert(tool.at("name").get<std::string>());
+    return result;
+  }();
+  return names;
 }
 }
 
@@ -80,13 +93,12 @@ std::optional<Json> McpSession::handle(const Json& request) {
     if (method == "tools/list") {
       fields(params, {}, {"cursor", "_meta"});
       if (params.contains("cursor")) return rpc_error(id, -32602, "This server has no pagination cursor");
-      return response({{"tools", tool_definitions()}});
+      return response({{"tools", published_tools()}});
     }
     if (method == "tools/call") {
       fields(params, {"name"}, {"arguments", "_meta"});
       const auto name = text_field(params, "name");
-      const auto definitions = tool_definitions();
-      if (std::none_of(definitions.begin(), definitions.end(), [&](const Json& t) { return t.at("name") == name; }))
+      if (!published_tool_names().contains(name))
         return rpc_error(id, -32602, "Unknown tool: " + name);
       try {
         return response(tool_result(service_.call(name, params.value("arguments", Json::object()))));

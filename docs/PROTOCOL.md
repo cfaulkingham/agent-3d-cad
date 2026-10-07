@@ -2,7 +2,10 @@
 
 Implemented contracts for the native preview. Runtime discovery (`tools` or MCP
 `tools/list`) publishes input and output JSON Schemas. Model definitions live in
-`model_definitions()`; service contracts live in `tool_definitions()`.
+`model_definitions()`; service contracts live in `tool_definitions()`. Each
+published schema is standalone: its `$defs` contains exactly the model
+definitions its `#/$defs/<name>` references reach, transitively, and is omitted
+when it has none. The MCP server builds this catalog once per process.
 
 ## Document and scalar values
 

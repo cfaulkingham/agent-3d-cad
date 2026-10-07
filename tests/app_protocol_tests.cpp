@@ -2,6 +2,7 @@
 #include "agentcad/mcp.hpp"
 #include <chrono>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <vector>
 
@@ -113,6 +114,55 @@ void session_contract(Service& service, bool apps) {
   require(!session.handle({{"jsonrpc", "2.0"}, {"id", nullptr}, {"error", {{"code", -32600}, {"message", "x"}}}}), "A client error response is never answered");
   error(session, {{"jsonrpc", "2.0"}, {"id", 42}}, -32600);
 }
+// Collects "#/$defs/<name>" targets, ignoring the schema's own $defs map.
+void references(const Json& value, std::set<std::string>& names) {
+  if (value.is_array()) for (const auto& item : value) references(item, names);
+  if (!value.is_object()) return;
+  for (const auto& [key, item] : value.items()) {
+    if (key == "$ref") {
+      const auto target = item.get<std::string>();
+      require(target.rfind("#/$defs/", 0) == 0, "Schema references stay inside the standalone schema: " + target);
+      names.insert(target.substr(8));
+    } else if (key != "$defs") references(item, names);
+  }
+}
+void discovery_contract(Service& service) {
+  McpSession session(service);
+  result(session, initialize(true));
+  session.handle({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}});
+  const auto listed = result(session, rpc("list", "tools/list"));
+  const auto bytes = listed.dump().size();
+  // 1,058,723 compact bytes when every schema carried all model $defs.
+  require(bytes < 420 * 1024, "tools/list stays compact (" + std::to_string(bytes) + " bytes)");
+  for (const auto& tool : listed.at("tools")) for (const auto* key : {"inputSchema", "outputSchema"}) {
+    const auto& schema = tool.at(key);
+    const auto name = tool.at("name").get<std::string>() + "." + key;
+    std::set<std::string> reachable, pending;
+    references(schema, pending);
+    while (!pending.empty()) {
+      const auto next = *pending.begin(); pending.erase(pending.begin());
+      if (!reachable.insert(next).second) continue;
+      require(schema.contains("$defs") && schema.at("$defs").contains(next), name + " resolves #/$defs/" + next);
+      references(schema.at("$defs").at(next), pending);
+    }
+    std::set<std::string> attached;
+    const auto definitions = schema.value("$defs", Json::object());
+    for (const auto& [definition, unused] : definitions.items()) { (void)unused; attached.insert(definition); }
+    require(attached == reachable, name + " carries only the definitions it references");
+  }
+  Json tools;
+  for (const auto& tool : listed.at("tools")) tools[tool.at("name").get<std::string>()] = tool;
+  require(!tools.at("cad_list").at("inputSchema").contains("$defs") && !tools.at("cad_list").at("outputSchema").contains("$defs"),
+          "Reference-free schemas carry no definitions");
+  require(tools.at("cad_create").at("inputSchema").at("$defs").contains("model") &&
+          tools.at("cad_job").at("inputSchema").at("$defs").contains("operation"), "Nested references keep their definitions");
+  require(listed.at("tools") == tool_definitions(), "MCP and CLI discovery publish the same definitions");
+  // Dispatch checks a cached name set; it never rebuilds the tool catalog per call.
+  const auto start = std::chrono::steady_clock::now();
+  for (int i = 0; i < 2000; ++i) error(session, rpc(i, "tools/call", {{"name", "cad_absent"}}), -32602);
+  const auto elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  require(elapsed < 2.0, "2000 tools/call dispatches complete without rebuilding definitions (" + std::to_string(elapsed) + " s)");
+}
 std::vector<Json> frames(Service& service, const std::string& input) {
   std::istringstream stream(input);
   std::ostringstream output;
@@ -154,6 +204,7 @@ int main() {
     source_integrity();
     session_contract(service, true);
     session_contract(service, false);
+    discovery_contract(service);
     framing_contract(service);
     std::istringstream input(initialize(true).dump() + "\n" + Json{{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}}.dump() + "\n" +
         rpc(12, "resources/read", {{"uri", viewer_app_uri}}).dump() + "\n");
