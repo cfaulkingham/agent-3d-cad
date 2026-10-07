@@ -126,8 +126,11 @@ memory-limit job's wall deadline (10 s → 30 s) and its poll bound.
 `close_lock(HANDLE&)` and `fs::rename` replacing `receipts/coverage.json`
 (`storage.cpp`), whether `fs::rename` can move job directories during retention on
 Windows, the cmd.exe quoting in the service test's CLI helper, and the `jobs`,
-`service`, `live` and `renamed_worker` suites on Windows and Linux. The Linux
-" (deleted)" executable case is covered only by a unit test of the path logic.
+`service`, `live` and `renamed_worker` suites on Windows and Linux. Parallel view
+projection is also unverified on both: one Job Object per worker on Windows, up to
+four RLIMIT_AS-bounded workers on Linux, and the new drawing test's "no worker
+process left" check uses `ps` and is POSIX-only. The Linux " (deleted)" executable
+case is covered only by a unit test of the path logic.
 
 **Not done / owner decisions.**
 - Cold complex thread drawings still take minutes (the slowest single view bounds
