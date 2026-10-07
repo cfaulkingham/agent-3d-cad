@@ -368,7 +368,12 @@ int run_tests(int argc, const char* const* argv) {
       const auto job=blocked.path/"jobs"/"saveBlocked";
       wait_until([&]{ return stored_state(job).at("state")=="running"; },20,"coordinator enters running");
       {
-        WorkspaceLock admission(blocked.path/"jobs");
+        // The live coordinator also takes admission briefly to save progress.
+        std::unique_ptr<WorkspaceLock> admission;
+        for (int attempt=0;!admission;++attempt) {
+          try { admission=std::make_unique<WorkspaceLock>(blocked.path/"jobs"); }
+          catch (const Error& e) { if (e.code!="workspace_busy" || attempt>2000) throw; std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+        }
         slots.clear();
         wait_until([&]{ return fs::exists(job/"result.json"); },30,"result published before state");
         wait_until([&]{ return lock_free(job); },30,"coordinator gives up on its blocked state save");

@@ -126,7 +126,7 @@ int main() {
     stage_cache(root/(key+".json"),key,stored);
     equivalent(first.at("topology"),evaluate_model(temp.path,model,{{"kind","topology"}},&warm).at("topology"));
     require(!warm.at("geometry_hit"),"Invalid B-rep rebuilds without publishing wrong geometry");
-    const auto pkey=cold.at("projection_key").get<std::string>();
+    const auto pkey=cold.at("projection_keys").at(0).get<std::string>();
     atomic_text(root/(pkey+".json"),"broken");
     recipe["views"][0]["hatch"]=true; recipe["views"][0]["section"]["offset"]=3;
     require(evaluate_model(temp.path,model,drawing_request(model,recipe),&warm)==section,"Damaged projection rebuild is equivalent");
@@ -214,6 +214,65 @@ int main() {
         evaluate_model(links.path,model,{{"kind","summary"}},&warm);
         require(!warm.at("geometry_hit") && fs::is_empty(outside.path),"Symlink cache ignored without external writes");
       }
+    }
+    {
+      // Projections are cached per view: adding, removing, reordering or editing
+      // one view projects only that view, and views never repeat hidden-line work.
+      Temp views; Json diagnostics; const auto root=views.path/".cache";
+      const Json front={{"id","front"},{"orientation","front"}},top={{"id","top"},{"orientation","top"}},
+        right={{"id","right"},{"orientation","right"}};
+      const auto request=[&](const Json& list,bool hidden=true) {
+        return drawing_request(model,{{"views",list},{"hidden_lines",hidden}});
+      };
+      const auto hits=[&]{return diagnostics.at("projection_hits");};
+      evaluate_model(views.path,model,request(Json::array({front,top})),&diagnostics);
+      require(hits()==Json::array({false,false}) && !diagnostics.at("projection_hit"),"Cold views are both projected");
+      const auto keys=diagnostics.at("projection_keys");
+      require(keys.size()==2 && keys[0]!=keys[1],"Each view has its own projection key");
+      require(entries(root)==3,"One geometry entry and one projection entry per view");
+      const auto front_entry=read_cache(root,keys[0].get<std::string>());
+      require(front_entry && front_entry->at("views").size()==1,"A projection entry holds exactly one view");
+      evaluate_model(views.path,model,request(Json::array({front,top,right})),&diagnostics);
+      require(hits()==Json::array({true,true,false}) && !diagnostics.at("projection_hit"),"Adding a view projects only that view");
+      require(diagnostics.at("projection_keys")[0]==keys[0] && diagnostics.at("projection_keys")[1]==keys[1],"Existing views keep their keys");
+      require(entries(root)==4 && read_cache(root,keys[0].get<std::string>())==front_entry,"Existing entries are reused unchanged");
+      evaluate_model(views.path,model,request(Json::array({top,front})),&diagnostics);
+      require(hits()==Json::array({true,true}) && diagnostics.at("projection_hit"),"Reordering views reuses their projections");
+      evaluate_model(views.path,model,request(Json::array({front,right})),&diagnostics);
+      require(diagnostics.at("projection_hit"),"Removing a view reuses the remaining projections");
+      const Json cut={{"id","right"},{"orientation","section"},{"section",{{"axis","z"},{"offset",3}}}};
+      evaluate_model(views.path,model,request(Json::array({front,top,cut})),&diagnostics);
+      require(hits()==Json::array({true,true,false}),"Editing one view invalidates only that view");
+      evaluate_model(views.path,model,request(Json::array({front,top,cut}),false),&diagnostics);
+      require(hits()==Json::array({false,false,false}),"Hidden-line choice invalidates every view");
+      // A drawing assembled from independently cached views equals a cold one.
+      Temp cold_workspace;
+      const auto request_three=request(Json::array({front,top,right}));
+      const auto cold_three=evaluate_model(cold_workspace.path,model,request_three,&diagnostics);
+      require(hits()==Json::array({false,false,false}),"A fresh workspace projects every view");
+      const auto assembled=evaluate_model(views.path,model,request_three,&diagnostics);
+      require(diagnostics.at("projection_hit") && assembled==cold_three,"Per-view cache entries reproduce a cold drawing exactly");
+    }
+    {
+      // Aggregate drawing limits hold however each view was obtained.
+      const auto line=Json{{"kind","line"},{"hidden",false},{"points",{{0,0},{1,1}}}};
+      const auto view_with=[&](std::size_t count) {
+        Json entities=Json::array(); for(std::size_t i=0;i<count;++i) entities.push_back(line);
+        return Json{{"id","v"},{"entities",entities}};
+      };
+      const Json requested=Json::array({Json{{"id","a"}},Json{{"id","b"}}});
+      check_drawing_totals(requested,Json::array({view_with(5000),view_with(4999)}),"out");
+      const auto exceeded=[&](const Json& projected,const Json& asked) {
+        try { check_drawing_totals(asked,projected,"out"); } catch(const Error& e) { return e.code=="limit_exceeded"; }
+        return false;
+      };
+      require(exceeded(Json::array({view_with(5000),view_with(5001)}),requested),"Views that individually fit cannot exceed the entity limit together");
+      Json polyline_entities=Json::array();
+      for(int i=0;i<3;++i) polyline_entities.push_back({{"kind","polyline"},{"hidden",false},{"points",Json(std::vector<Json>(70000,Json::array({0,0})))}});
+      require(exceeded(Json::array({Json{{"id","p"},{"entities",polyline_entities}}}),Json::array({Json{{"id","p"}}})),"Total polyline points are bounded");
+      const auto anchors=[&](int count) { Json list=Json::array(); for(int i=0;i<count;++i) list.push_back({{"part_id","p"},{"point",{0,0,0}}}); return list; };
+      check_drawing_totals(Json::array({Json{{"id","a"},{"balloon_anchors",anchors(32)}},Json{{"id","b"},{"balloon_anchors",anchors(32)}}}),Json::array(),"out");
+      require(exceeded(Json::array(),Json::array({Json{{"id","a"},{"balloon_anchors",anchors(32)}},Json{{"id","b"},{"balloon_anchors",anchors(33)}}})),"Balloon anchors stay bounded across views");
     }
     std::cout<<checks<<" geometry/projection cache checks passed\n"; return 0;
   } catch(const std::exception& e) { std::cerr<<"FAILED: "<<e.what()<<'\n'; return 1; }

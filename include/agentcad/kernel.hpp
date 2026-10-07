@@ -39,6 +39,9 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 std::string kernel_version();
+// Drawing-wide limits (entities, points, balloon anchors) for views obtained
+// separately, e.g. from per-view projection caches. Throws limit_exceeded.
+void check_drawing_totals(const Json& requested_views, const Json& projected_views, const std::string& feature_id);
 void configure_kernel_logging();
 // Message for a caught kernel failure. OCCT may throw with an empty message;
 // the OCCT exception type is reported then, so the result is never empty.

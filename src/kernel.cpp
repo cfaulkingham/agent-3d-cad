@@ -1392,6 +1392,19 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
   return result;
 }
 
+void check_drawing_totals(const Json& requested_views, const Json& projected_views, const std::string& feature_id) {
+  std::size_t anchors=0, entities=0, points=0;
+  for (const auto& view : requested_views)
+    if (view.contains("balloon_anchors")) anchors+=view.at("balloon_anchors").size();
+  if (anchors>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",feature_id}});
+  for (const auto& view : projected_views)
+    for (const auto& entity : view.at("entities")) {
+      ++entities; points+=entity.contains("points") ? entity.at("points").size() : 1;
+    }
+  if (entities>drawing_entity_limit || points>drawing_point_limit)
+    throw Error("limit_exceeded","Drawing exceeds its entity or point limit",{{"entity_limit",drawing_entity_limit},{"point_limit",drawing_point_limit}});
+}
+
 void BuiltModel::export_file(const std::filesystem::path& path, const std::string& format) const {
   try {
     // STEP accepts UTF-8 paths. STL's filename overload opens a narrow standard

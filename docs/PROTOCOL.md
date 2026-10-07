@@ -454,8 +454,9 @@ worker; no OCCT object is shared between workers.
 
 Repeated operations automatically reuse a disposable `.cache` inside the
 workspace. Exact geometry is keyed by complete model contents, native build/SDK
-fingerprints, kernel and cache-format versions. Drawing projections additionally
-key the ordered views, hidden lines, section planes and hatch extraction. Changing
+fingerprints, kernel and cache-format versions. Drawing projections are cached per
+view and additionally key that view's definition (orientation, section plane, hatch
+extraction, explode offsets, balloon anchors) and the hidden-line choice. Changing
 labels, dimensions, tolerances, layout or export formats rerenders from those
 projections. Changing model contents invalidates both. Evaluation identities and
 revision checks are always fresh; cached data never serves as an editable source.
@@ -514,7 +515,7 @@ workspace/
   views/<view_id>/evaluations/      # frozen mesh JSON of the displayed evaluation only
   evaluations/.retention            # last superseded-metadata sweep (LIVE_VIEWER.md)
   .workers/                         # bounded worker slots and temporary files
-  .cache/<content-key>.json          # disposable exact geometry / view-set projections
+  .cache/<content-key>.json          # disposable exact geometry / per-view projections
 ```
 
 HEAD defines visibility; snapshots beyond it are uncommitted candidates. Document

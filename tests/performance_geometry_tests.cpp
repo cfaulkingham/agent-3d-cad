@@ -16,6 +16,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -403,7 +404,13 @@ int main(int argc,char** argv) {
     auto model=create.at("model"); model["parameters"]["stud_length"]=1.5;
     BuiltModel knob(model);
     const auto summary=knob.summary(),topology=knob.topology();
+    // Cold hidden-line time is the documented hotspot. Record it as evidence
+    // without asserting on it: wall time varies too much between CI machines.
+    const auto started=std::chrono::steady_clock::now();
     const auto front=knob.drawing(drawing({"front"})).at("views")[0];
+    const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
+    save_evidence("m20-front-drawing-timing",{{"fixture","examples/m20-knob.create.json"},{"views",1},{"cold_drawing_seconds",elapsed}});
+    std::cout<<"Cold single-view M20 drawing: "<<elapsed<<" s (recorded, not asserted)\n";
 
     // This exact thread-root point is behind another flank. The original
     // 10x10 HLR bracketing exposed it; the denser B-spline brackets must keep

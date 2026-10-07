@@ -236,17 +236,19 @@ and algorithms. Exact B-rep snapshots preserve every feature and its provenance;
 restoration validates shapes and topology counts inside a bounded worker. Meshes
 and evaluation identities remain fresh, with evaluation-local selection IDs.
 
-Projection keys additionally include the complete ordered view set, hidden-line
-choice, section plane/hatch settings, exploded offsets and balloon source anchors.
-View names, revision/document identity,
+Projection keys are per view: each includes that view's orientation, section
+plane/hatch settings, exploded offsets and balloon source anchors, plus the
+hidden-line choice, so editing one view never repeats the others' hidden-line
+work. View names, revision/document identity,
 sheet layout, dimensions, explicit tolerances, notes and output formats are
 rendered afresh, as are BOM tables and balloon label positions. Projections
-retain their original aggregate geometry budgets.
+retain their original aggregate geometry budgets (entities, points and balloon
+anchors are totalled over the assembled drawing).
 Only successful workers stage reusable results; coordinators check cancellation
 before atomically publishing cache entries. Cache writes never publish HEAD or
 artifacts. Checksummed entries are optional, bounded and evicted oldest-first;
 missing, damaged or unavailable entries rebuild. Losing the cache must not lose
-editable documents. This is whole-model/view-set caching, not incremental feature
+editable documents. This is whole-model and per-view caching, not incremental feature
 rebuilding or a source of persistent topology naming.
 
 ## 8. Distribution and viewer direction

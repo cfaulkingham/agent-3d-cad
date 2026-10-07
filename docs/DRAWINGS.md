@@ -5,11 +5,15 @@ It does not edit the model or advance HEAD. CLI and MCP use the same service;
 projection and rendering run in a bounded native geometry worker. The installed
 runtime needs no Python, Node, browser print engine, or PDF conversion program.
 
-Repeated drawings reuse exact geometry and complete projected view sets from a
-bounded, disposable workspace cache. Changing sheet layout, dimensions, explicit
+Repeated drawings reuse exact geometry and projected views from a bounded,
+disposable workspace cache. Each view is cached on its own: adding, removing,
+reordering or editing one view projects only that view, and two views with the
+same definition share one projection. Changing sheet layout, dimensions, explicit
 tolerances, notes, view names or formats rerenders without repeating projection.
-Model/build changes invalidate geometry and projections; changing the ordered
-views, hidden lines or section/hatch settings invalidates the view-set projection.
+Model/build changes invalidate geometry and projections; changing the hidden-line
+choice invalidates every view, and changing a view's orientation or section/hatch
+settings invalidates that view. The drawing-wide entity, point and balloon-anchor
+limits are checked on the assembled drawing however its views were obtained.
 Per-view exploded part IDs and resolved translations also participate in the
 projection key, so assembled and exploded views never reuse one another's
 geometry.

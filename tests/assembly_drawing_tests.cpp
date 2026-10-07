@@ -110,6 +110,7 @@ void cache_tests() {
   Temp temp;const auto source=model();auto drawing=recipe();Json cold,warm;
   const auto first=evaluate_model(temp.path,source,worker_request(source,drawing),&cold);
   require(!cold.at("geometry_hit") && !cold.at("projection_hit"),"Cold assembly drawing builds and projects");
+  require(cold.at("projection_keys")[0]!=cold.at("projection_keys")[1],"Assembled and exploded views have different projection keys");
   const auto again=evaluate_model(temp.path,source,worker_request(source,drawing),&warm);
   require(warm.at("geometry_hit") && warm.at("projection_hit"),"Warm assembly drawing restores both caches");
   require(first==again,"Warm assembly artifacts and dimensions match cold bytes");
@@ -118,7 +119,10 @@ void cache_tests() {
   require(warm.at("geometry_hit") && !warm.at("projection_hit"),"Changed explode offset invalidates projections only");
   drawing["views"][1].erase("explode");
   dimensions(evaluate_model(temp.path,source,worker_request(source,drawing),&warm).at("drawing"),8,8);
-  require(!warm.at("projection_hit"),"Assembled and exploded projection cache keys differ");
+  // Projections are cached per view, so a view without its explode offset is the
+  // same projection as the assembled view and is reused rather than repeated.
+  require(warm.at("projection_hit") && warm.at("projection_keys")[0]==warm.at("projection_keys")[1],
+    "A view without an explode offset reuses the assembled view's projection");
   auto changed=source;changed["parameters"]["thickness"]=4;
   dimensions(evaluate_model(temp.path,changed,worker_request(changed,recipe()),&warm).at("drawing"),10,22);
   require(!warm.at("geometry_hit") && !warm.at("projection_hit"),"Part and mate edits invalidate assembly caches");

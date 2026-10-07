@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <thread>
@@ -659,13 +660,16 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
     // from failed, timed-out or cancelled workers. Cache entries carry no HEAD,
     // document identity, output path, or evaluation identity.
     check_job_cancelled();
-    for(const auto* type:{"geometry","projection"}) {
-      if(response.at("cache").contains(std::string(type)+"_key")) {
-        check_job_cancelled();
-        publish_cache(workspace/".cache",files.path/(std::string(type)+".cache"),
-          response.at("cache").at(std::string(type)+"_key"));
-      }
+    const auto& produced=response.at("cache");
+    if(produced.contains("geometry_key")) {
+      check_job_cancelled();
+      publish_cache(workspace/".cache",files.path/"geometry.cache",produced.at("geometry_key"));
     }
+    if(produced.contains("projection_keys") && produced.at("projection_keys").size()<=6)
+      for(std::size_t i=0;i<produced.at("projection_keys").size();++i) {
+        check_job_cancelled();
+        publish_cache(workspace/".cache",files.path/("projection-"+std::to_string(i)+".cache"),produced.at("projection_keys").at(i));
+      }
     check_job_cancelled();
     if(cache_diagnostics) *cache_diagnostics=response.at("cache");
     return response.at("result");
@@ -713,22 +717,41 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     if (kind == "view") result["mesh"] = geometry().mesh(feature);
     if (kind == "drawing") {
       const auto& drawing=request.at("drawing");
-      const Json spec={{"views",drawing.at("views")},{"hidden_lines",drawing.at("hidden_lines")}};
-      auto key_spec=spec;
-      for(auto& view:key_spec["views"]) view.erase("id");
-      const auto projection_key=projection_cache_key(geometry_key,key_spec);
-      diagnostics["projection_key"]=projection_key;
-      auto projected=read_cache(cache_root,projection_key);
-      if(projected && (!projected->contains("views") || projected->at("views").size()!=drawing.at("views").size())) projected.reset();
-      diagnostics["projection_hit"]=projected.has_value();
-      if(!projected) {
-        projected=geometry().drawing(spec);
-        stage_cache(output.parent_path()/"projection.cache",projection_key,*projected);
+      const auto& requested=drawing.at("views");
+      const auto& hidden_lines=drawing.at("hidden_lines");
+      // Each view is cached on its own: its key covers the geometry, the view's
+      // definition (not its presentation name) and the hidden-line choice, so a
+      // new, removed, reordered or edited view projects only itself.
+      Json keys=Json::array(), hits=Json::array(), missing=Json::array();
+      std::vector<Json> projected(requested.size());
+      std::vector<std::size_t> missing_index;
+      std::optional<Json> tolerance;
+      for (std::size_t i=0;i<requested.size();++i) {
+        auto definition=requested.at(i); definition.erase("id");
+        keys.push_back(projection_cache_key(geometry_key,{{"views",Json::array({definition})},{"hidden_lines",hidden_lines}}));
+        auto entry=read_cache(cache_root,keys.at(i).get<std::string>());
+        if (entry && entry->contains("views") && entry->at("views").size()==1 && entry->contains("tolerance_mm")) {
+          projected[i]=entry->at("views").at(0); tolerance=entry->at("tolerance_mm"); hits.push_back(true);
+        } else { hits.push_back(false); missing.push_back(requested.at(i)); missing_index.push_back(i); }
       }
+      diagnostics["projection_keys"]=keys; diagnostics["projection_hits"]=hits; diagnostics["projection_hit"]=missing.empty();
+      if (!missing.empty()) {
+        const auto fresh=geometry().drawing({{"views",missing},{"hidden_lines",hidden_lines}});
+        tolerance=fresh.at("tolerance_mm");
+        for (std::size_t j=0;j<missing_index.size();++j) {
+          const auto i=missing_index[j];
+          projected[i]=fresh.at("views").at(j);
+          stage_cache(output.parent_path()/("projection-"+std::to_string(i)+".cache"),keys.at(i).get<std::string>(),
+            {{"views",Json::array({projected[i]})},{"tolerance_mm",*tolerance}});
+        }
+      }
+      Json assembled={{"views",Json::array()},{"tolerance_mm",*tolerance}};
       // Recipe names are presentation, and can change without projecting again.
-      for(std::size_t i=0;i<drawing.at("views").size();++i)
-        projected->at("views").at(i)["id"]=drawing.at("views").at(i).at("id");
-      result["drawing"]=render_drawing(*projected,drawing,request.at("identity"));
+      for (std::size_t i=0;i<projected.size();++i) {
+        projected[i]["id"]=requested.at(i).at("id"); assembled["views"].push_back(std::move(projected[i]));
+      }
+      check_drawing_totals(requested,assembled.at("views"),text_field(payload.at("model"),"output"));
+      result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
     if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
     else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing") throw Error("invalid_argument", "Unknown geometry worker request");
