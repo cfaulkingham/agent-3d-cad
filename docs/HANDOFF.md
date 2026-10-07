@@ -2,7 +2,259 @@
 
 Updated: 2026-10-06. **M0–M3, M4 live viewing, and M5 drawings are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
-arm64. Full cross-platform release is not yet demonstrated.
+arm64. Native previews passed all five macOS/Linux/Windows CI lanes and independent
+Arch Linux x86_64 validation. Public release preparation remains separate.
+
+## Latest increment — GitHub CI and independent Arch Linux validation
+
+The user created and checked in the public repository
+`https://github.com/cfaulkingham/agent-3d-cad` and authorized an independent Arch
+Linux test host. The initial source commit is
+`04e73a43b2199027c37e114907c253e96f2e560e` (`init`). Its initial five-platform
+push run is `https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37536892312`.
+Both macOS and both Ubuntu lanes completed successfully. The first Windows
+lane built its SDK and service but failed two native suites. The corrected run
+passed all native and MCP checks, then exposed a bundle dependency-filter issue;
+the final packaging follow-up passed all five native lanes, as recorded below.
+This supersedes
+earlier statements that there was no remote repository or runner execution.
+
+The successful `macos-15` arm64 runner passed **17/17 CTests** in **49.03
+seconds**, **171 schema checks**, **298 official MCP SDK checks**, relocation
+with empty PATH, and native packaging. Its downloaded archive independently
+verified **244 files**, has SHA-256
+`051776b1adb379ac424c218f2b4156a7008eea834edb3354cbfed2f847c0acb8`, and records
+**minimum macOS 15.0** rather than the local SDK's 27.0 baseline. Its provenance
+SHA-256 is `2dee873fa3099d5ef4c02b79da801346be885569beca0c7b03a579aaea7ef621`.
+That exact archive was also installed into an isolated local directory and
+passed the full runtime workflow on this Mac with SDK environment removed and
+developer tools hidden from PATH. No global service registration changed.
+Logs, archive verification and installation evidence are in `build/platform-ci/`.
+
+The `macos-15-intel` x64 runner passed **17/17 CTests** in **89.03 seconds**,
+**173 schema checks**, **343 official MCP SDK checks**, empty-PATH relocation
+and packaging. Its independently verified archive contains **244 files**, has
+SHA-256 `8b052a4f0effeaf813c234a21ed94697b43d2de13b9b9b7dcb0fbd8e55f5cc51`,
+and records **minimum macOS 15.0**. Provenance SHA-256 is
+`a73532891a21b93f7ccd5871e5faa9ba133e61b3befaf08f9c48d391f70a605b`.
+This is native Intel runner evidence, without installing Rosetta on this Mac.
+
+Both Ubuntu 24.04 CI lanes passed all native, schema, official MCP SDK,
+relocation, packaging and **fresh runtime-only container** checks. The container
+asserted the absence of developer tools while generating PDF/SVG/four DXFs and
+preserving the model record. Recorded CI test results:
+
+| Runner / architecture | CTests | CTest seconds | Schema checks | MCP SDK checks |
+|---|---:|---:|---:|---:|
+| macOS 15 / arm64 | 17/17 | 49.03 | 171 | 298 |
+| macOS 15 / x64 | 17/17 | 89.03 | 173 | 343 |
+| Ubuntu 24.04 / arm64 | 17/17 | 27.63 | 169 | 243 |
+| Ubuntu 24.04 / x64 | 17/17 | 30.66 | 169 | 243 |
+
+The first Windows run passed **15/17 suites**, including persistence, locks,
+jobs, topology, drawings and the native MCP/viewer loop. It failed `modeling`
+because OCCT's STL filename overload opens a narrow standard stream and creates
+the wrong name for `prism-é.stl`, and failed the exact embedded-source check in
+`app_protocol`. It is not reported as a successful Windows acceptance run.
+The portability patch on `codex/native-platform-validation`:
+
+- Uses OCCT 8.0.1's existing STL stream overload with `std::ofstream(path)`;
+  native wide paths work on Windows, and flush/close failures remain explicit.
+- Builds the app byte initializer from normalized UTF-8 data, forces the
+  generated review HTML to LF, and preserves its exact final newline. The
+  generated HTML and native resource retain app hash
+  `affa14fe5b7576007408288b25074192df2b8ba79a56b8b4b9fb3867c2a9a3a7`.
+- Keeps both failing assertions and adds binary STL read-back plus an isolated
+  LF/CRLF checkout regression. The latter checks physical bytes and exact output,
+  avoiding CMake text reads that can hide newline differences. Source-integrity
+  failures now report actual/expected lengths and the first differing position.
+
+Before pushing the patch, macOS passed all **18/18 suites** in **18.60 seconds**;
+the final embedding checks passed **4/4 relevant suites** in **1.18 seconds**.
+The final Arch patch passed **18/18 suites** in **17.97 seconds**. Both final
+relocated bundles passed the native workflow and embedded-resource hash check
+with empty PATH. A temporary embedding implementation added a final newline;
+the exact Arch assertion detected it and the final patch corrected it rather
+than changing expectations. `build/arch-validation/windows-fixes*` and its
+`logs/windows-fixes*` retain the executed evidence. The corrected Windows run
+subsequently verified both fixes, as recorded below.
+
+The corrected source commit `555737b23c4e66dbbf21436b532f5999c16c0460` completed at
+`https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37544102649`.
+Its four macOS/Ubuntu lanes have completed successfully, including the added
+physical-byte embedding regression:
+
+| Runner / architecture | CTests | CTest seconds | Schema checks | MCP SDK checks |
+|---|---:|---:|---:|---:|
+| macOS 15 / arm64 | 18/18 | 40.39 | 175 | 328 |
+| macOS 15 / x64 | 18/18 | 149.49 | 171 | 333 |
+| Ubuntu 24.04 / arm64 | 18/18 | 26.71 | 169 | 248 |
+| Ubuntu 24.04 / x64 | 18/18 | 19.78 | 171 | 248 |
+
+All four corrected archives passed independent file-set, link and SHA-256
+verification, with 244 manifested files per macOS archive and 256 per Ubuntu
+archive. Every bundle passed verified relocation and the empty-PATH native
+workflow; both Ubuntu lanes also passed the fresh runtime-only container.
+`build/platform-ci/fixed-evidence.json`, `fixed-*.log` and
+`fixed-*-verification.json` retain the consolidated evidence. Corrected archive
+SHA-256 values:
+
+- macOS arm64: `8c12a815f8248698a303011890bd80735eb31fb3ea1156f25d9efcdc3c14f12e`.
+- macOS x64: `d1b46c072c451e03261ac01c7c9fb21ca49a6102200b1128545ec9feb86e0205`.
+- Ubuntu arm64: `e5a2b495b740020d29ef65d0a652950b85fe0f4e096d6a21c564afdc660c5050`.
+- Ubuntu x64: `ca1bca3308d2d0ca1c93074ea9f454b024f9f28373cc108a4ca782a3dc0a42b9`.
+
+The corrected Ubuntu x64 archive was separately hash-checked, installed and
+relocated on Arch. Its full PATH-isolated native runtime workflow and **171
+schema checks across 18 tools** passed. Logs and the installation record are
+in `build/arch-validation/logs/ubuntu-fixed/`. This tests the patched CI binary,
+in addition to the independent patched Arch compiler build.
+
+The corrected Windows x64 run passed **18/18 CTests in 57.03 seconds**, **167
+schema checks** and **243 official MCP SDK checks**. This verifies Unicode STL
+export/read-back and exact viewer embedding on native Windows, alongside real
+geometry, persistence, workers and drawings. It then failed bundle relocation:
+`wtdccm.dll` was unresolved. CMake's policy warnings show paths such as
+`C:\Windows\system32/advapi32.dll`; the old forward-slash-only filter missed these
+system paths and traversed the OS dependency graph. This is a packaging failure,
+not successful bundle acceptance; the failed run and full log are retained.
+
+The packaging follow-up matches both separator styles at every System32 boundary
+and selects normalized paths when CMake supports
+[CMP0207](https://cmake.org/cmake/help/latest/policy/CMP0207.html). It retains hard
+failure for unresolved application libraries and conflicting dependencies. The
+new `runtime_filters` CTest checks **16 cases**, including the actual mixed paths,
+normalization/case variants, SDK/MSVC DLLs, unresolved names and lookalike
+folders. Local macOS passed **19/19 suites in 18.57 seconds** and the relocated
+bundle workflow with empty PATH. Evidence is in
+`build/platform-ci/packaging-fix-local-{build,ctest,bundle}.log`.
+
+CI now uses separate cache restore/save actions, saving a completed SDK before
+service tests or packaging. Previous Windows failures discarded each successful
+42-minute SDK build because the old cache action saved only on job success. SDK
+keys now hash the exact recipe plus an explicit compiler/deployment/configuration
+ABI tag; service or packaging edits do not invalidate them. The four existing
+verified macOS/Ubuntu caches migrate only under the unchanged recipe hash and
+ABI tag, using their exact original key; there is no broad restore fallback.
+The workflow passed actionlint 1.7.12. The final native Windows relocation and
+archive run subsequently passed, as recorded below.
+The final portability/packaging source commit
+`2e96291e8114bdbe362eb935f37fe228ac3f0f2a` passed **all five native CI lanes**:
+`https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37548998613`.
+All lanes passed native geometry/persistence/workers, schema conformance, the
+official MCP SDK, verified relocation with empty PATH, and native packaging.
+Both Linux lanes additionally passed the fresh runtime-only container.
+
+| Runner / architecture | CTests | CTest seconds | Schema checks | MCP SDK checks |
+|---|---:|---:|---:|---:|
+| macOS 15 / arm64 | 19/19 | 38.71 | 171 | 293 |
+| macOS 15 / x64 | 19/19 | 95.14 | 171 | 333 |
+| Ubuntu 24.04 / arm64 | 19/19 | 26.26 | 171 | 248 |
+| Ubuntu 24.04 / x64 | 19/19 | 30.48 | 171 | 248 |
+| Windows 2025 / x64 | 19/19 | 47.25 | 167 | 248 |
+
+All five downloaded archives independently passed complete file-set, per-file
+SHA-256 and link verification. macOS archives contain 244 manifested files,
+Ubuntu archives 256, and the Windows ZIP **270**. Windows records MSVC
+19.51.36260.0, exact OCCT 8.0.1 and the same canonical viewer app hash as all four
+other platforms. Its ZIP also passed case-insensitive filename uniqueness and
+checks that kernel32/user32/advapi32/wtdccm OS DLLs were not copied. It contains
+the required OCCT/FreeType DLLs and the MSVC/UCRT redistributable runtime.
+Final archive SHA-256 values:
+
+- macOS 15 / arm64: `1ec9ee4815e7fbf39ac4749ac02bef0441df4c710a7c4677ffaf6856ed22f64b`.
+- macOS 15 / x64: `79b748997eeb9a80937da5aad56c836d6920913b4812c5fa646a8a6fcbed04dc`.
+- Ubuntu 24.04 / arm64: `880c8eae74424d7e65ec59ff850e8d745a609d9e895d59a482efdb2557363148`.
+- Ubuntu 24.04 / x64: `030fd69ea991b04ee08dc686fc437744ec32902d93432342c79590f1882ed48e`.
+- Windows 2025 / x64: `b102604ad9042ea5dd1076b03becbc03239934a28818426ac16cb99dfc34702e`.
+
+Windows bundle relocation generated PDF/SVG/four DXFs and exercised the native
+CLI/MCP/worker workflow with empty PATH and SDK variables removed. This is
+native runner relocation evidence, not a fresh Windows desktop or GPU-host
+claim. Actual GPU selection/edit/refresh remains demonstrated on the Codex Mac.
+The Windows SDK build took **41 minutes 49 seconds** and was successfully cached
+before service testing; the service/tests/contracts/package portion took about
+four minutes. The new cache saved under the Windows recipe's CRLF hash
+`41d6d2e21ae2be0cfd597d63d52d59286c7a291edccf3aaa07941070083bb496`.
+The four previously verified SDKs also migrated to the new keys without rebuilds.
+`build/platform-ci/packaging-evidence.json`, `packaging-*.log` and
+`packaging-*-verification.json` retain the complete final evidence. Initial and
+intermediate Windows failures remain recorded above and were not weakened into
+passing assertions. Native platform validation is complete; next authorized
+product work is better drawing layouts, hatching, angular dimensions and
+explicit tolerances, followed by caching/performance and assemblies.
+
+
+Both downloaded Linux archives independently verified all **256 manifested
+files**, including link destinations and the exact file set. The x64 archive
+SHA-256 is `904176122410cfdbf6713fd716d9b50205af81204315edbf3fab6ad8572db2fa`
+and the arm64 archive SHA-256 is
+`a41a04bb1c1c5ac5dda64b9fe970f0d4c6163184dc40368e3b46559c9ee8da64`.
+That exact **Ubuntu x64 archive was transferred to Arch**, rechecked against its
+archive hash, verified/relocated with the installer, and passed the full runtime
+workflow and **171 schema checks across 18 tools** there. This demonstrates the
+Ubuntu-built native bundle on a newer Arch distribution, in addition to the
+independent Arch compiler build below. SDK environment and developer PATH were
+removed during that runtime check; the Arch host itself still has developer
+tools installed. Logs and installation records are in
+`build/arch-validation/logs/ubuntu-*`.
+
+That exact commit was archived and transferred to a fresh, isolated directory
+on the user-supplied Omarchy 4.0.4 / Arch x86_64 host. Its compiler was GCC
+16.2.1 and its glibc was 2.44. All three upstream archives were verified against
+the recorded SHA-256 pins. OCCT 8.0.1 and FreeType 2.14.3 were built from those
+archives, without a system OCCT or sibling checkout. CMake 3.31.10, patchelf
+0.19.1 and the independent Python MCP client were installed only in a test-local
+virtual environment; system packages and user service configuration were not
+changed.
+
+Executed Arch evidence, retained locally in `build/arch-validation/`:
+
+- The complete native build and **17/17 CTests** passed in **18.01 seconds**.
+- The verified, relocated shared-library bundle passed model creation, editing,
+  reopen/rollback, STEP/STL/drawings/MCP and embedded app-resource checks with
+  empty PATH and SDK loader/resource overrides removed.
+- The independently installed bundle passed **173 schema checks across 18
+  tools** and **248 official MCP SDK 2.3.0 interoperability checks** (counts
+  vary with job polling).
+- The runtime workflow passed with only required OS utilities on PATH and SDK
+  environment removed, including native PDF/SVG/four-DXF generation and
+  byte-identical model readback after drawing. This host has developer tools
+  installed: this is a PATH-isolation test, not a fresh tool-free OS/container.
+  The reused smoke script's container wording does not change that limitation.
+- A native Arch preview archive was produced, SHA-256
+  `004bcd91a1ce4f17fdef5f4c9e9ee65cf8c45dd4c20e7cb3e77777c15b823a63`.
+  Its **256 manifested files** were independently verified after retrieval,
+  with no extra entries or escaping links. Provenance SHA-256 is
+  `5cf896613d18d25357ce8f62d6f068d44754b0920c79ea943480da16ca1f7f17`.
+  It inherits the Arch glibc baseline and is not evidence of compatibility with
+  older distributions. The Ubuntu CI bundle remains the intended portable
+  Linux baseline.
+- The original knob and duplex sprocket examples were replayed in a separate
+  Arch workspace, with **23 model/geometry/export/drawing/source-preservation
+  checks**. The sprocket retained 409 faces, 1,210 edges and volume
+  64,181.2664969257 mm³, and generated PDF/SVG/five DXFs. Both saved records
+  remained unchanged after STEP/STL export and drawing generation.
+
+The extra knob comparison exposed the limitation of the existing non-adaptive
+volume quadrature: the identical example gives 32,476.00416788722 mm³ on macOS
+and 32,476.001346121142 mm³ on Arch, a 0.00282 mm³ difference. An initial extra
+0.001 mm³ comparison failed and is retained in `representative.log`; it is not
+reported as passing. Independent native readers then loaded both platforms'
+STEP files on both platforms with healing disabled: all four retained one valid
+solid and passed **15 helix/flank/root/crest/lead probes each**. Adaptive volume
+integration at requested relative errors 1e-7/1e-9/1e-11 gave final values within
+**0.000000433 mm³** of each other (reported relative error about 1.44e-10).
+The continuation compares that independent geometry at the original 0.001 mm³
+threshold, rather than broadening it or changing product tests. The default
+summary should not imply precision beyond its integration method. Numerical
+read-backs, probe source, original failure and final replay logs are retained.
+
+The first temporary SSH driver stopped after the successful native suites and
+relocation because its schema-test filename was mistyped. The actual unchanged
+`tests/schema_conformance.py` and remaining checks were then executed directly
+and passed; no product test was weakened. Original and corrected driver logs
+are retained. The final corrected Windows x64 runner results are recorded above.
 
 ## Latest increment — actual viewer acceptance and current Linux validation
 
@@ -73,10 +325,9 @@ Executed evidence:
 
 This does not establish offline artifact/browser acceptance or other-host
 behavior. Native Windows x64, Linux x64 and macOS x64 still need execution.
-The existing five-platform CI definition is ready but has no remote repository
-or runner execution. No source was uploaded and no repository/release created.
-Read-only GitHub checks confirmed the signed-in account `cfaulkingham`; the
-proposed `cfaulkingham/agent-3d-cad` repository still does not resolve.
+At the end of that earlier increment, the five-platform CI definition had no
+remote repository or runner execution. The user subsequently created and
+checked in the GitHub repository; see the newer platform-validation record above.
 Local packaging/installation records for this increment live in
 `build/viewer-acceptance/`; refresh the running MCP connection before expecting
 new app text/race handling in an already mounted viewer.
@@ -357,7 +608,8 @@ kernel/model, jobs/storage, viewer/service integration, and packaging/CI.
 - Per-document writer lock checks revision both before work and before publication.
 - Immutable revisions include optional durable request receipts; HEAD is atomic.
 - No Python/Rust/Node/compiler required in the end-user modeling path.
-- No HTTP endpoint, remote repository or public release. This Mac now has a
+- No HTTP endpoint or public release. The user-created GitHub repository is
+  recorded above. This Mac now has a
   local global MCP registration for the native preview.
 
 ## Implemented behavior
@@ -379,7 +631,7 @@ kernel/model, jobs/storage, viewer/service integration, and packaging/CI.
 The original acceptance requirements remain in `ROADMAP.md`. Implementation
 status does not waive their unexecuted platform and human-interaction checks.
 
-Final requirement audit:
+Historical M0–M4 requirement audit (newer acceptance evidence is recorded above):
 
 | Gate | Demonstrated | Outstanding |
 |---|---|---|
@@ -529,20 +781,11 @@ runtime lookup evidence and packaged hashes. No archive has been published.
 
 ## Remaining acceptance gates and limits
 
-1. Execute native Windows, Linux x64 and macOS x64 CI. Definitions exist,
-   but this project has no remote repository or configured runner execution.
-   GitHub CLI authentication was verified outside the filesystem/network sandbox;
-   the active account is `cfaulkingham`, and `cfaulkingham/agent-3d-cad` does not
-   currently resolve. A pending user approval asks to create that **private**
-   repository, upload this reviewed implementation, and run the existing CI
-   matrix, or to use another destination the user specifies. No repository has
-   been created, no source uploaded, and no global authentication state changed.
-   Windows locking/spawning/publication code has been implemented and reviewed;
-   it has not been compiled/executed on a native Windows host here. A read-only
-   `arch -x86_64 /usr/bin/uname -m` probe failed with `Bad CPU type in executable`,
-   so this Mac also cannot validate an Intel binary through existing Rosetta.
-   No OS component was installed to change that result.
-2. In a normal browser, open a generated HTML artifact, pick a face/edge, copy or
+Native platform validation passed all five CI lanes, including Windows x64
+relocation and preview packaging. See the latest increment for exact results and
+archive hashes. Remaining independent gates:
+
+1. In a normal browser, open a generated HTML artifact, pick a face/edge, copy or
    save its reference, resolve it through the service, make a selective edit,
    and load the new `.view.json`. The UI includes these controls; real interaction
    still needs evidence because of the browser tool's local-file policy.
@@ -551,7 +794,7 @@ runtime lookup evidence and packaged hashes. No archive has been published.
    `build/manual-review/exports/pick_demo-eval_55b5a63bd8cd6fba5d77016be1dea535.html`.
    The pending user request is to select an edge and paste its copied reference;
    then resolve it, add a selective fillet, and verify the updated view manually.
-3. Before a public release, the owner must choose the original-code license and
+2. Before a public release, the owner must choose the original-code license and
    arrange signing/notarization and applicable source/relinking distribution.
    The preview archive records the pending license decision; it is not a release.
 
@@ -577,7 +820,8 @@ Other deliberate limits:
   Abrupt exits can leave ignored temporary worker/staging files. Request receipts
   reconcile commits; no filesystem durability rollback is promised.
 
-Next work is native Windows x64 and remaining architecture execution using the
-existing CI matrix. The live Codex viewer loop now has real rendering/selection/
-refresh evidence; other-host and offline artifact interactions retain their own
-gates. Resolve concrete failures before expanding modeling or viewer scope.
+Next authorized product work is drawing layouts/hatching/angular dimensions/
+explicit tolerances, then performance/caching and assemblies. Native platform
+validation has passed. The live Codex viewer loop has real rendering/selection/
+refresh evidence on macOS; other GPU hosts and offline artifact interactions
+retain their own independent gates.

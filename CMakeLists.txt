@@ -60,6 +60,14 @@ if(BUILD_TESTING)
     "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/installer-smoke"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/installer_smoke.cmake")
   set_tests_properties(installer PROPERTIES TIMEOUT 30)
+  add_test(NAME embedded_assets COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}" "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/embedded-assets-smoke"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/embed_viewer_smoke.cmake")
+  set_tests_properties(embedded_assets PROPERTIES TIMEOUT 30)
+  add_test(NAME runtime_filters COMMAND "${CMAKE_COMMAND}"
+    "-DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_filters_smoke.cmake")
+  set_tests_properties(runtime_filters PROPERTIES TIMEOUT 30)
   add_executable(cad_tests tests/test_main.cpp)
   target_link_libraries(cad_tests PRIVATE cad_core)
   target_include_directories(cad_tests SYSTEM PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
