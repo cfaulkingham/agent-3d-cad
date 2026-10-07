@@ -16,6 +16,7 @@
 #include <gp_Pln.hxx>
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -57,6 +58,14 @@ Json thread(double pitch,double length,const std::string& hand="right") {
   return {{"schema_version",1},{"units","mm"},{"parameters",Json::object()},
     {"features",Json::array({{{"id","thread"},{"type","external_thread"},
       {"major_diameter",12},{"pitch",pitch},{"length",length},{"handedness",hand}}})},{"output","thread"}};
+}
+void save_evidence(const std::string& name,const Json& value) {
+  const auto* directory=std::getenv("AGENTCAD_GEOMETRY_EVIDENCE_DIR");
+  if (!directory || !*directory) return;
+  std::filesystem::create_directories(directory);
+  std::ofstream output(std::filesystem::path(directory)/(name+".json"));
+  output<<value.dump(2)<<'\n';
+  require(static_cast<bool>(output),"Write geometry regression evidence "+name);
 }
 double segment_distance(double x,double y,const Json& a,const Json& b) {
   const double ax=a[0],ay=a[1],dx=b[0].get<double>()-ax,dy=b[1].get<double>()-ay;
@@ -219,9 +228,14 @@ void verify_thread(const Json& model,double height) {
     require(visible && hidden,"Thread views retain both visible and hidden curves");
   }
   equivalent(summary,built.summary()); equivalent(topology,built.topology());
-  BuiltModel restored(model,built.snapshot());
+  const auto snapshot=built.snapshot();
+  BuiltModel restored(model,snapshot);
   equivalent(summary,restored.summary());
-  equivalent(result,restored.drawing(request),"restored "+model.at("features")[0].at("handedness").get<std::string>()+" pitch "+model.at("features")[0].at("pitch").dump());
+  const auto restored_result=restored.drawing(request);
+  const auto fixture=model.at("features")[0].at("handedness").get<std::string>()+"-"+model.at("features")[0].at("pitch").dump();
+  save_evidence(fixture,{{"model",model},{"snapshot",snapshot},{"restored_snapshot",restored.snapshot()},
+    {"original",result},{"restored",restored_result}});
+  equivalent(result,restored_result,"restored "+fixture);
 }
 }
 

@@ -89,6 +89,7 @@ jobs:
           cmake --build build --config Release --parallel 3
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ($IsWindows) { $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH" }
+          $env:AGENTCAD_GEOMETRY_EVIDENCE_DIR = Join-Path $PWD 'build/geometry-evidence'
           ctest --test-dir build -C Release --output-on-failure
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/setup-python@v5
@@ -136,4 +137,5 @@ jobs:
           name: failure-evidence-${{ matrix.runner }}-${{ matrix.architecture }}
           path: |
             build/Testing/Temporary/LastTest.log
+            build/geometry-evidence/**
             build-deps/**/CMakeConfigureLog.yaml
