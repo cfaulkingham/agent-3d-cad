@@ -193,7 +193,9 @@ Errors identify the output feature, view and part for repair.
 PDF/SVG sheets include the BOM table. `bom.json` and `bom.csv` are independent
 table sidecars regardless of the selected geometry formats. JSON includes the
 source document/revision identity; CSV quotes every field, uses CRLF records and
-joins each row's part IDs with semicolons. DXFs retain the part balloons and leaders
+joins each row's part IDs with semicolons. Like standalone `cad_bom` CSV, text
+cells beginning with `=`, `+`, `-`, `@`, tab or carriage return get a leading
+`'` against formula injection (see [ASSEMBLIES.md](ASSEMBLIES.md)). DXFs retain the part balloons and leaders
 on a `BALLOONS` layer at 1:1 mm. The response includes `bom` and resolved
 `balloons` with `view`, `part_id`, `item_number`, `anchor_mm` and `label_mm`.
 The anchor and label coordinates in the response are projected 2D mm. A saved

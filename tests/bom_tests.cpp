@@ -48,6 +48,21 @@ void model_tests() {
   const auto csv=bom_csv(numbered);
   require(csv.find("\"Z-\"\"1\"\",rev A\"")!=std::string::npos&&csv.find("\"Block, \"\"small\"\"\"")!=std::string::npos,"CSV doubles embedded quotes and encloses commas");
   require(csv.find("\"z1;z2\"\r\n")!=std::string::npos&&csv.ends_with("\r\n"),"CSV identifiers and records are deterministic");
+  // Text cells a spreadsheet would evaluate as formulas are neutralized with a
+  // leading apostrophe inside the quoted field; JSON and numeric cells are exact.
+  auto formulas=source;
+  formulas["features"][3]["bom"]=Json::array({
+    {{"input","zeta"},{"item_number",7},{"part_number","=HYPERLINK(\"http://x\",\"y\")"},{"description","+1+2"},{"material","@SUM(A1)"}},
+    {{"input","alpha"},{"part_number","-3"},{"description","Plate = 3 mm"},{"material","Steel"}}});
+  validate_model(formulas);
+  const auto formula_bom=build_bom(formulas);
+  require(formula_bom.at("items").back().at("part_number")=="=HYPERLINK(\"http://x\",\"y\")"&&formula_bom.at("items")[0].at("part_number")=="-3","BOM JSON keeps formula-like metadata exactly");
+  const auto formula_csv=bom_csv(formula_bom);
+  require(formula_csv.find("\"7\",\"zeta\",\"2\",\"'=HYPERLINK(\"\"http://x\"\",\"\"y\"\")\",\"'+1+2\",\"'@SUM(A1)\",\"z1;z2\"\r\n")!=std::string::npos,"CSV neutralizes =, + and @ text cells without changing numeric cells");
+  require(formula_csv.find("\"1\",\"alpha\",\"1\",\"'-3\",\"Plate = 3 mm\",\"Steel\",\"a1\"\r\n")!=std::string::npos,"CSV neutralizes - and leaves ordinary text unchanged");
+  const Json raw={{"items",Json::array({{{"item_number",1},{"input","x"},{"quantity",3},{"part_ids",Json::array({"x1"})},
+    {"part_number","\tcmd"},{"description","\rcmd"},{"material","-"}}})}};
+  require(bom_csv(raw).ends_with("\"1\",\"x\",\"3\",\"'\tcmd\",\"'\rcmd\",\"'-\",\"x1\"\r\n"),"CSV neutralizes leading tab and carriage return");
   model["features"][3]["bom"][1]["item_number"]=999;
   require(build_bom(model).at("items").back().at("item_number")==999,"Explicit maximum item number preserved");
   auto invalid=model;invalid["features"][3]["bom"][1]["item_number"]=1;

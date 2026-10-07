@@ -184,7 +184,11 @@ the output), and exports that committed assembly as independent JSON and CSV,
 with a manifest written after all artifacts succeed. Its `bom` object contains
 `assembly_id`, `items` and `total_quantity`; each item contains `item_number`,
 `input`, `quantity`, `part_ids`, and any supplied metadata. Generation leaves
-HEAD and historical exports unchanged. Drawing `bom: true` uses the same rows;
+HEAD and historical exports unchanged. The CSV guards against spreadsheet
+formula injection: a text cell (`input`, `part_number`, `description`,
+`material`, `part_ids`) that begins with `=`, `+`, `-`, `@`, tab or carriage
+return gets a leading `'` inside its quoted field. Numeric `item_number` and
+`quantity` cells are never altered, and JSON keeps the exact saved metadata. Drawing `bom: true` uses the same rows;
 geometry-checked balloons identify their item numbers in assembled or exploded
 views. See [DRAWINGS.md](DRAWINGS.md) for anchors, labels and table exports.
 Standalone BOM export and BOM drawings also support `cad_job`; wait for terminal

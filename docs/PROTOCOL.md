@@ -208,7 +208,8 @@ are derived from instances. Automatic numbers follow lexical input order while
 skipping reserved explicit numbers; results sort by item number. `cad_bom` returns
 revision identity, `bom: {assembly_id,items,total_quantity}`, `artifacts` and a
 manifest `path`. Items contain `item_number`, `input`, `quantity`, `part_ids` and
-supplied metadata. JSON/CSV exports preserve these rows and do not change HEAD.
+supplied metadata. JSON/CSV exports preserve these rows and do not change HEAD;
+CSV text cells that a spreadsheet would read as formulas get a leading `'`.
 See [ASSEMBLIES.md](ASSEMBLIES.md).
 
 Drawing `bom: true` adds a sheet table and JSON/CSV sidecars. Optional `balloons`
