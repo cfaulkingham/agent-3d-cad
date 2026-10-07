@@ -1,3 +1,5 @@
+![agent-3d-cad — Native, editable CAD for AI agents. Create, inspect, refine, export.](docs/assets/readme-banner.png)
+
 # agent-3d-cad
 
 A native editable CAD service for agents, written in C++20 on OpenCascade 8.0.1.
