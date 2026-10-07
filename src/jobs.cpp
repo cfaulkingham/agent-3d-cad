@@ -12,7 +12,6 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
 #include <memory>
 #include <sstream>
 #include <thread>
@@ -98,11 +97,12 @@ fs::path executable_path() {
   return image;
 }
 Json read_result(const fs::path& path) {
-  if (!fs::is_regular_file(path) || fs::is_symlink(path) || fs::file_size(path) > max_result_bytes)
+  std::string text;
+  try { text = read_text(path, max_result_bytes); }
+  catch (const Error& e) {
+    if (e.code == "limit_exceeded") throw Error("limit_exceeded", "Worker output exceeds 64 MiB");
     throw Error("worker_failed", "Worker output missing or exceeds 64 MiB");
-  std::ifstream stream(path, std::ios::binary);
-  std::string text((std::istreambuf_iterator<char>(stream)), {});
-  if (text.size() > max_result_bytes) throw Error("limit_exceeded", "Worker output exceeds 64 MiB");
+  }
   try { return Json::parse(text); }
   catch (const Json::exception&) { throw Error("worker_failed", "Worker returned malformed JSON"); }
 }
@@ -117,8 +117,7 @@ struct TemporaryDirectory {
   fs::path path;
   explicit TemporaryDirectory(const fs::path& root) {
     directory(root / ".workers");
-    path = temporary_file(root / ".workers");
-    fs::remove(path); directory(path);
+    path = temporary_directory(root / ".workers");
   }
   ~TemporaryDirectory() { std::error_code ignored; fs::remove_all(path, ignored); }
 };
@@ -166,13 +165,31 @@ Child launch(const std::vector<fs::path>& args, bool bounded, int memory_mb) {
   HANDLE null_handle = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
     &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (null_handle == INVALID_HANDLE_VALUE) throw Error("worker_failed", "Cannot open worker standard streams");
-  STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = null_handle; startup.hStdOutput = null_handle; startup.hStdError = null_handle;
+  // Inherit only the NUL standard streams, never a caller's pipes or lock
+  // handles; a durable coordinator must not hold a captured caller pipe open
+  // (POSIX likewise detaches the coordinator's stderr).
+  SIZE_T attribute_bytes = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_bytes);
+  std::vector<unsigned char> attribute_storage(attribute_bytes);
+  auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
+  if (attribute_bytes == 0 || !InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_bytes)) {
+    CloseHandle(null_handle); throw Error("worker_failed", "Cannot prepare worker handle inheritance");
+  }
+  HANDLE inherited[] = {null_handle};
+  if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr)) {
+    DeleteProcThreadAttributeList(attributes); CloseHandle(null_handle);
+    throw Error("worker_failed", "Cannot restrict worker handle inheritance");
+  }
+  STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = null_handle; startup.StartupInfo.hStdOutput = null_handle; startup.StartupInfo.hStdError = null_handle;
+  startup.lpAttributeList = attributes;
   PROCESS_INFORMATION process{};
   const bool created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
-    CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &startup, &process);
+    CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &process);
+  const auto launch_error = GetLastError();
+  DeleteProcThreadAttributeList(attributes);
   CloseHandle(null_handle);
-  if (!created) throw Error("worker_failed", "Cannot launch native worker: " + std::to_string(GetLastError()));
+  if (!created) throw Error("worker_failed", "Cannot launch native worker: " + std::to_string(launch_error));
   child.process = process.hProcess;
   if (bounded && !AssignProcessToJobObject(child.group, child.process)) {
     TerminateProcess(child.process, 1); CloseHandle(process.hThread);
