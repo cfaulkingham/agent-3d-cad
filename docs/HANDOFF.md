@@ -2,8 +2,8 @@
 
 Updated: 2026-10-06. **M0–M3, M4 live viewing, and M5 drawings are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
-arm64. Native Arch Linux x86_64 validation has also passed. Full cross-platform
-release is not yet demonstrated.
+arm64. Native previews passed all five macOS/Linux/Windows CI lanes and independent
+Arch Linux x86_64 validation. Public release preparation remains separate.
 
 ## Latest increment — GitHub CI and independent Arch Linux validation
 
@@ -15,7 +15,7 @@ push run is `https://github.com/cfaulkingham/agent-3d-cad/actions/runs/375368923
 Both macOS and both Ubuntu lanes completed successfully. The first Windows
 lane built its SDK and service but failed two native suites. The corrected run
 passed all native and MCP checks, then exposed a bundle dependency-filter issue;
-the packaging fix is ready for a fresh native run.
+the final packaging follow-up passed all five native lanes, as recorded below.
 This supersedes
 earlier statements that there was no remote repository or runner execution.
 
@@ -136,8 +136,54 @@ keys now hash the exact recipe plus an explicit compiler/deployment/configuratio
 ABI tag; service or packaging edits do not invalidate them. The four existing
 verified macOS/Ubuntu caches migrate only under the unchanged recipe hash and
 ABI tag, using their exact original key; there is no broad restore fallback.
-The workflow passed actionlint 1.7.12. A fresh native Windows relocation and
-archive run is still required before counting the platform as accepted.
+The workflow passed actionlint 1.7.12. The final native Windows relocation and
+archive run subsequently passed, as recorded below.
+The final portability/packaging source commit
+`2e96291e8114bdbe362eb935f37fe228ac3f0f2a` passed **all five native CI lanes**:
+`https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37548998613`.
+All lanes passed native geometry/persistence/workers, schema conformance, the
+official MCP SDK, verified relocation with empty PATH, and native packaging.
+Both Linux lanes additionally passed the fresh runtime-only container.
+
+| Runner / architecture | CTests | CTest seconds | Schema checks | MCP SDK checks |
+|---|---:|---:|---:|---:|
+| macOS 15 / arm64 | 19/19 | 38.71 | 171 | 293 |
+| macOS 15 / x64 | 19/19 | 95.14 | 171 | 333 |
+| Ubuntu 24.04 / arm64 | 19/19 | 26.26 | 171 | 248 |
+| Ubuntu 24.04 / x64 | 19/19 | 30.48 | 171 | 248 |
+| Windows 2025 / x64 | 19/19 | 47.25 | 167 | 248 |
+
+All five downloaded archives independently passed complete file-set, per-file
+SHA-256 and link verification. macOS archives contain 244 manifested files,
+Ubuntu archives 256, and the Windows ZIP **270**. Windows records MSVC
+19.51.36260.0, exact OCCT 8.0.1 and the same canonical viewer app hash as all four
+other platforms. Its ZIP also passed case-insensitive filename uniqueness and
+checks that kernel32/user32/advapi32/wtdccm OS DLLs were not copied. It contains
+the required OCCT/FreeType DLLs and the MSVC/UCRT redistributable runtime.
+Final archive SHA-256 values:
+
+- macOS 15 / arm64: `1ec9ee4815e7fbf39ac4749ac02bef0441df4c710a7c4677ffaf6856ed22f64b`.
+- macOS 15 / x64: `79b748997eeb9a80937da5aad56c836d6920913b4812c5fa646a8a6fcbed04dc`.
+- Ubuntu 24.04 / arm64: `880c8eae74424d7e65ec59ff850e8d745a609d9e895d59a482efdb2557363148`.
+- Ubuntu 24.04 / x64: `030fd69ea991b04ee08dc686fc437744ec32902d93432342c79590f1882ed48e`.
+- Windows 2025 / x64: `b102604ad9042ea5dd1076b03becbc03239934a28818426ac16cb99dfc34702e`.
+
+Windows bundle relocation generated PDF/SVG/four DXFs and exercised the native
+CLI/MCP/worker workflow with empty PATH and SDK variables removed. This is
+native runner relocation evidence, not a fresh Windows desktop or GPU-host
+claim. Actual GPU selection/edit/refresh remains demonstrated on the Codex Mac.
+The Windows SDK build took **41 minutes 49 seconds** and was successfully cached
+before service testing; the service/tests/contracts/package portion took about
+four minutes. The new cache saved under the Windows recipe's CRLF hash
+`41d6d2e21ae2be0cfd597d63d52d59286c7a291edccf3aaa07941070083bb496`.
+The four previously verified SDKs also migrated to the new keys without rebuilds.
+`build/platform-ci/packaging-evidence.json`, `packaging-*.log` and
+`packaging-*-verification.json` retain the complete final evidence. Initial and
+intermediate Windows failures remain recorded above and were not weakened into
+passing assertions. Native platform validation is complete; next authorized
+product work is better drawing layouts, hatching, angular dimensions and
+explicit tolerances, followed by caching/performance and assemblies.
+
 
 Both downloaded Linux archives independently verified all **256 manifested
 files**, including link destinations and the exact file set. The x64 archive
@@ -208,7 +254,7 @@ The first temporary SSH driver stopped after the successful native suites and
 relocation because its schema-test filename was mistyped. The actual unchanged
 `tests/schema_conformance.py` and remaining checks were then executed directly
 and passed; no product test was weakened. Original and corrected driver logs
-are retained. Corrected Windows x64 runner results remain to be collected.
+are retained. The final corrected Windows x64 runner results are recorded above.
 
 ## Latest increment — actual viewer acceptance and current Linux validation
 
@@ -735,13 +781,11 @@ runtime lookup evidence and packaged hashes. No archive has been published.
 
 ## Remaining acceptance gates and limits
 
-1. Execute the Windows x64 packaging follow-up. Both native macOS architectures
-   and both Ubuntu architectures passed the corrected GitHub run. Windows passed
-   18/18 native suites, schema and official MCP SDK checks, then failed bundle
-   relocation on mixed-separator system dependency paths. Its packaging fix and
-   16-case regression passed local macOS; the failed lane remains evidence rather
-   than acceptance. See the latest increment for exact runs and archive hashes.
-2. In a normal browser, open a generated HTML artifact, pick a face/edge, copy or
+Native platform validation passed all five CI lanes, including Windows x64
+relocation and preview packaging. See the latest increment for exact results and
+archive hashes. Remaining independent gates:
+
+1. In a normal browser, open a generated HTML artifact, pick a face/edge, copy or
    save its reference, resolve it through the service, make a selective edit,
    and load the new `.view.json`. The UI includes these controls; real interaction
    still needs evidence because of the browser tool's local-file policy.
@@ -750,7 +794,7 @@ runtime lookup evidence and packaged hashes. No archive has been published.
    `build/manual-review/exports/pick_demo-eval_55b5a63bd8cd6fba5d77016be1dea535.html`.
    The pending user request is to select an edge and paste its copied reference;
    then resolve it, add a selective fillet, and verify the updated view manually.
-3. Before a public release, the owner must choose the original-code license and
+2. Before a public release, the owner must choose the original-code license and
    arrange signing/notarization and applicable source/relinking distribution.
    The preview archive records the pending license decision; it is not a release.
 
@@ -776,7 +820,8 @@ Other deliberate limits:
   Abrupt exits can leave ignored temporary worker/staging files. Request receipts
   reconcile commits; no filesystem durability rollback is promised.
 
-Next work is native Windows x64 relocation/archive validation of the packaging
-follow-up using the existing CI matrix. The live Codex viewer loop now has real rendering/selection/
-refresh evidence; other-host and offline artifact interactions retain their own
-gates. Resolve concrete failures before expanding modeling or viewer scope.
+Next authorized product work is drawing layouts/hatching/angular dimensions/
+explicit tolerances, then performance/caching and assemblies. Native platform
+validation has passed. The live Codex viewer loop has real rendering/selection/
+refresh evidence on macOS; other GPU hosts and offline artifact interactions
+retain their own independent gates.

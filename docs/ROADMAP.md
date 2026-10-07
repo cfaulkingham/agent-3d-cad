@@ -9,12 +9,12 @@ and Linux arm64 suites, relocated shared-library bundles, and a fresh Linux
 runtime-only container have passed. An independent Arch Linux x86_64 build also
 passed all 17 suites, relocation, schemas, official MCP SDK and drawings; the
 user-created GitHub repository's initial CI passed both macOS and both Ubuntu
-architectures. The corrected Windows run passed all 18 native suites, schemas
-and official MCP SDK checks, then exposed a mixed-separator bundle dependency
-filter failure. Its packaging follow-up passed 19 local macOS suites and awaits
-fresh native relocation/archive evidence.
-The original acceptance gates below are retained: offline artifact/browser
-verification and corrected native Windows CI still need evidence. The live Codex MCP App now has actual
+architectures. The final packaging follow-up passed all 19 suites, schemas,
+official MCP SDK checks, empty-PATH relocation and preview archive generation on
+all five native CI lanes, including Windows x64. Every downloaded archive passed
+independent manifest/hash verification. The original acceptance gates below are
+retained: offline artifact/browser and other GPU-host interactions still need
+independent evidence. The live Codex MCP App now has actual
 macOS arm64 rendering/selection/refresh evidence, and current M4/M5 sources
 passed the Linux arm64 builder and clean runtime container. See HANDOFF.md.
 
