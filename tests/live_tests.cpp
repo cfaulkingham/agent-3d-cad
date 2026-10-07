@@ -58,6 +58,26 @@ Json edit(Service& service,int revision,int height) {
   return call(service,"cad_apply",{{"document_id","part"},{"expected_revision",revision},
     {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",height}}})}});
 }
+// Reserved Windows device names are rejected as document/view/request IDs, but
+// they stay valid model-internal names (parts, features), and a legacy document
+// directory that now fails identifier() must not break listing the others.
+void device_name_tests() {
+  Temporary temporary;Service service(temporary.path);auto model=box();
+  model["features"].push_back({{"id","assembly"},{"type","assembly"},{"parts",Json::array({
+    {{"id","aux"},{"input","base"}},{{"id","nul"},{"input","base"},{"placement",{{"translation",{30,0,0}}}}}})}});
+  model["output"]="assembly";
+  call(service,"cad_create",{{"document_id","assembly"},{"model",model}});
+  call(service,"cad_open",{{"document_id","assembly"},{"view_id","devices"}});
+  const auto shown=ready(service,"devices");
+  const auto saved=call(service,"cad_viewer",{{"action","context"},{"view_id","devices"},{"evaluation_id",shown.at("evaluation_id")},
+    {"selection",nullptr},{"hidden_part_ids",Json::array({"aux"})}});
+  require(saved.at("hidden_part_ids")==Json::array({"aux"}),"A part named like a device can be hidden");
+  fails("invalid_argument",[&]{call(service,"cad_open",{{"document_id","assembly"},{"view_id","con"}});});
+  const auto legacy=temporary.path/"documents"/"con";directory(legacy);
+  atomic_text(legacy/"HEAD.json",Json{{"revision",1}}.dump());
+  require(call(service,"cad_list",Json::object()).at("documents")==Json::array({Json{{"document_id","assembly"},{"revision",1}}}),
+    "Listing skips a legacy document whose directory name is no longer a valid identifier");
+}
 void visibility_tests() {
   Temporary temporary;Service service(temporary.path);auto model=box();
   const Json assembly={{"id","assembly"},{"type","assembly"},{"parts",Json::array({
@@ -280,6 +300,7 @@ int main() {try {
     if(tool.at("name")=="cad_viewer")require(tool.at("_meta").at("ui").at("visibility")==Json::array({"app"}),"viewer plumbing advertises app-only visibility");
   }
   visibility_tests();
+  device_name_tests();
   retention_tests();
   std::cout<<"live: "<<checks<<" checks passed\n";return 0;
 }catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

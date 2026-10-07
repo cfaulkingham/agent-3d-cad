@@ -63,7 +63,7 @@ Json validate_hidden_parts(const Json& hidden,const Json& state) {
   const auto available=display_part_ids(state);std::set<std::string> seen;
   for (const auto& part:hidden) {
     if (!part.is_string()) throw Error("invalid_argument","hidden_part_ids entries must be assembly part IDs");
-    const auto id=part.get<std::string>();identifier(id);
+    const auto id=part.get<std::string>();model_identifier(id);
     if (!available.contains(id)) throw Error("invalid_argument","Hidden part is absent from the displayed assembly",{{"part_id",id}});
     if (!seen.insert(id).second) throw Error("invalid_argument","hidden_part_ids must be unique",{{"part_id",id}});
   }
@@ -409,7 +409,11 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
       if (++inspected > 10000 || documents.size() == document_limit) { truncated=true; break; }
       if (entry.is_symlink()) throw Error("storage_error","Managed document directories cannot be symlinks");
       if (!entry.is_directory() || !fs::exists(entry.path()/"HEAD.json")) continue;
-      const auto id = path_to_utf8(entry.path().filename()); identifier(id);
+      // A directory whose name is no longer a valid identifier (for example a
+      // POSIX document named after a Windows device) cannot be addressed by any
+      // tool; it must not make the whole listing fail.
+      const auto id = path_to_utf8(entry.path().filename());
+      try { identifier(id); } catch (const Error&) { continue; }
       const auto head = parse_json(read_text(entry.path()/"HEAD.json")); fields(head,{"revision"});
       documents.push_back({{"document_id",id},{"revision",revision_number(head.at("revision"))}});
     }

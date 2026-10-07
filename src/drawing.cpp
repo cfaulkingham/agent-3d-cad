@@ -870,7 +870,7 @@ Json normalize_drawing(const Json& spec,const Json& model) {
       for(const auto& part:assembly->at("parts")) part_ids.insert(text_field(part,"id"));
       normalized["explode"]=Json::array();
       for(const auto& move:moves) {
-        fields(move,{"part_id","translation"});const auto part_id=text_field(move,"part_id");identifier(part_id);
+        fields(move,{"part_id","translation"});const auto part_id=text_field(move,"part_id");model_identifier(part_id);
         if(!part_ids.contains(part_id)) invalid("Exploded view references an unknown assembly part",{{"view",id},{"part_id",part_id}});
         if(!moved.insert(part_id).second) invalid("Exploded view repeats an assembly part",{{"view",id},{"part_id",part_id}});
         normalized["explode"].push_back({{"part_id",part_id},{"translation",vector3(move.at("translation"),parameters)}});

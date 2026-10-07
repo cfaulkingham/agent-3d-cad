@@ -2,7 +2,7 @@
 const fs=require('fs'), vm=require('vm'), assert=require('assert'), path=require('path');
 const source=fs.readFileSync(path.join(__dirname,'../src/viewer.cpp'),'utf8');
 const pure=source.split('// BEGIN PURE RENDERER')[1].split('// END PURE RENDERER')[0];
-const {rasterize,edgePick,renderEdges,valid,clipSegment}=vm.runInNewContext(pure+';({rasterize,edgePick,renderEdges,valid,clipSegment})');
+const {rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance}=vm.runInNewContext(pure+';({rasterize,edgePick,renderEdges,valid,clipSegment,pickDepthTolerance})');
 let checks=0;
 function test(ok,message){assert.ok(ok,message);checks++;}
 function mesh(points,triangles,faces){return {positions:points,triangles,triangle_faces:faces};}
@@ -37,4 +37,14 @@ const clipped=clipSegment([-1e6,4,0],[1e6,4,0],24,24);
 test(clipped&&clipped[0][0]>=0&&clipped[1][0]<=23.00001,'edge samples are clipped to viewport');
 renderEdges([{id:'huge',points:[[-1e6,4,0],[1e6,4,0]]}],frame,null,true,1e-7);checks++;
 assert.throws(()=>rasterize(m,points,100000,100000,null));checks++;
+// Edge polylines and face triangulations are sampled independently (each within
+// the mesh's linear deflection), so a visible edge sample can sit slightly behind
+// its own face. The pick tolerance must absorb that, but only that.
+const curved={min:[0,0,0],max:[20,20,20]};
+frame=rasterize(mesh(flat,[[0,1,2]],['face']),flat,24,24,null);
+const behind=[{id:'curved-edge',points:[[2,4,5.15],[10,4,5.15]]}];
+test(edgePick([5,4],behind,frame,pickDepthTolerance(curved,undefined)).id===null,'without a deflection the fixed tolerance rejects an edge 0.15 behind its face');
+test(edgePick([5,4],behind,frame,pickDepthTolerance(curved,0.1)).id==='curved-edge','a visible edge within twice the mesh deflection of its face stays pickable');
+test(edgePick([5,4],[{id:'far',points:[[2,4,6],[10,4,6]]}],frame,pickDepthTolerance(curved,0.1)).id===null,'an edge well behind the face remains occluded');
+for(const bad of [NaN,-1,0,Infinity,1e9,'0.1',null])test(pickDepthTolerance(curved,bad)===pickDepthTolerance(curved,undefined),'invalid deflection falls back to the fixed tolerance');
 console.log(`viewer renderer: ${checks} checks passed`);

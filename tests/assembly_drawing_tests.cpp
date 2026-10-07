@@ -58,6 +58,10 @@ void validation_tests() {
   const auto normalized=normalize_drawing(drawing,source);
   require(normalized.at("views")[1].at("explode")[0].at("translation")==Json::array({0,0,12}),"Explode mm parameters resolve");
   require(drawing==recipe() && source==model(),"Normalization preserves source and parameterized recipe");
+  // Part names are model-internal identifiers: a Windows device name is valid.
+  auto device=source;device["features"][2]["parts"][1]["id"]="aux";device["features"][2]["mates"][0]["child"]="aux";
+  auto device_drawing=drawing;device_drawing["views"][1]["explode"][0]["part_id"]="aux";
+  require(normalize_drawing(device_drawing,device).at("views")[1].at("explode")[0].at("part_id")=="aux","Explode accepts a part named like a device");
   auto invalid=drawing;invalid["views"][1]["explode"]=Json::array();
   fails("invalid_drawing",[&]{normalize_drawing(invalid,source);});
   invalid=drawing;invalid["views"][1]["explode"]=Json::object();
