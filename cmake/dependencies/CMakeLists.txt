@@ -96,13 +96,24 @@ ExternalProject_Add(occt
   URL_HASH SHA256=0d6913eae4bcc09a3653ceced6dda1aec11c35a1513d4c06762c9b002092c68a
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
   LIST_SEPARATOR "|"
+  PATCH_COMMAND "${CMAKE_COMMAND}" "-DOCCT_SOURCE_DIR=<SOURCE_DIR>"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/PatchOcctHlr.cmake"
   CMAKE_ARGS ${options}
   BUILD_COMMAND "${CMAKE_COMMAND}" --build <BINARY_DIR> --config Release --parallel ${AGENTCAD_JOBS}
   INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR> --config Release)
+# A command's script path alone does not invalidate an ExternalProject stamp
+# when that script changes. This input step propagates changes into patching.
+ExternalProject_Add_Step(occt patch_inputs
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/PatchOcctHlr.cmake"
+  DEPENDEES update DEPENDERS patch INDEPENDENT TRUE)
 ExternalProject_Add_StepTargets(occt configure)
 ExternalProject_Get_Property(occt SOURCE_DIR)
 set(occt_source "${SOURCE_DIR}")
 configure_file(InstallNotices.cmake.in InstallNotices.cmake @ONLY)
 ExternalProject_Add_Step(occt notices
   COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_CURRENT_BINARY_DIR}/InstallNotices.cmake"
+  DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/InstallNotices.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/InstallNotices.cmake.in"
+    "${CMAKE_CURRENT_SOURCE_DIR}/PatchOcctHlr.cmake"
+    "${CMAKE_CURRENT_SOURCE_DIR}/OCCT-HLR-PATCH.md"
   DEPENDEES install)

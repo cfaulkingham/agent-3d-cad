@@ -42,12 +42,12 @@ const parent = { async postMessage(m) {
 } };
 const self = { parent, addEventListener(_, fn) { listener = fn; }, removeEventListener() { listener = null; } };
 const bridge = new CadBridge(self), state = new CadLiveState(bridge);
-async function untilReady(revision) {
+async function untilReady(revision, controller = state) {
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
-    await state.pollOnce();
-    if (state.value.status === 'ready' && state.value.payload.revision === revision) return;
-    if (state.value.status === 'error') throw Error(state.value.error);
+    await controller.pollOnce();
+    if (controller.value.status === 'ready' && controller.value.payload.revision === revision) return;
+    if (controller.value.status === 'error') throw Error(controller.value.error);
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw Error(`Viewer did not reach revision ${revision}`);
@@ -103,6 +103,54 @@ try {
   check(state.value.payload.evaluation_id === second, 'failed edit preserves visible saved revision');
   const record = await tool('cad_read', { document_id: 'plate' });
   check(record.revision === 2, 'failed edit preserves HEAD');
+  // Visibility travels through the actual controller/bridge/native context path.
+  const assembly = JSON.parse(readFileSync(`${root}/examples/assembly.create.json`, 'utf8'));
+  await tool('cad_create', assembly);
+  state.invalidate();
+  await tool('cad_show', { view_id: 'test_view', document_id: assembly.document_id });
+  await untilReady(1);
+  const beforeVisibility = await tool('cad_read', { document_id: assembly.document_id });
+  const assemblyEvaluation = state.value.payload.evaluation_id;
+  await state.setHiddenParts(['cover']); await state.publishContext();
+  check((await tool('cad_context', { view_id: 'test_view' })).hidden_part_ids.join() === 'cover', 'Hide persists through native context');
+  check(state.value.payload.evaluation_id === assemblyEvaluation, 'Hide does not rebuild or change evaluation identity');
+  const cover = state.value.payload.topology.faces.find(f => f.part_id === 'cover');
+  const coverReference = { document_id: assembly.document_id, revision: 1, evaluation_id: assemblyEvaluation,
+    feature_id: state.value.payload.feature_id, kind: 'face', entity_id: cover.id };
+  await assert.rejects(tool('cad_viewer', { action: 'context', view_id: 'test_view', evaluation_id: assemblyEvaluation,
+    selection: coverReference })); checks++;
+  await state.isolatePart('spacer_a'); await state.publishContext();
+  assert.deepEqual([...state.value.hidden_part_ids].sort(), ['base', 'cover', 'spacer_b']); checks++;
+  check(CadLiveState.promptText(state.snapshot()).includes('"hidden_part_ids"'), 'Agent context includes visibility state');
+  const reopened = new CadLiveState(bridge); reopened.attach('test_view');
+  try {
+    await untilReady(1, reopened);
+    assert.deepEqual([...reopened.value.hidden_part_ids].sort(), ['base', 'cover', 'spacer_b']); checks++;
+  } finally { reopened.dispose(); }
+  await state.showAll(); await state.publishContext();
+  state.update({ selection: { reference: coverReference, geometry: cover } });
+  await state.setPartVisible('cover', false); await state.publishContext();
+  check(state.value.selection === null, 'Hiding the selected part clears the selection');
+  check((await tool('cad_context', { view_id: 'test_view' })).selection === null, 'Hidden selection is cleared in agent context');
+  assert.deepEqual(await tool('cad_read', { document_id: assembly.document_id }), beforeVisibility); checks++;
+  await state.isolatePart('spacer_a'); await state.publishContext();
+  await tool('cad_apply', { document_id: assembly.document_id, expected_revision: 1,
+    operations: [{ op: 'set_parameter', name: 'plate_width', value: 64 }] });
+  await untilReady(2); await state.publishContext();
+  assert.deepEqual([...state.value.hidden_part_ids].sort(), ['base', 'cover', 'spacer_b']); checks++;
+  const reduced = structuredClone(assembly.model.features.find(f => f.type === 'assembly'));
+  reduced.parts = reduced.parts.filter(p => p.id !== 'spacer_b');
+  reduced.mates = reduced.mates.filter(m => m.parent !== 'spacer_b' && m.child !== 'spacer_b');
+  await tool('cad_apply', { document_id: assembly.document_id, expected_revision: 2,
+    operations: [{ op: 'replace_feature', id: reduced.id, feature: reduced }] });
+  await untilReady(3); await state.publishContext();
+  assert.deepEqual([...state.value.hidden_part_ids].sort(), ['base', 'cover']); checks++;
+  await state.setHiddenParts(['base', 'cover', 'spacer_a']); await state.publishContext();
+  check((await tool('cad_context', { view_id: 'test_view' })).hidden_part_ids.length === 3, 'All-hidden view remains valid and recoverable');
+  await state.showAll(); await state.publishContext();
+  check((await tool('cad_context', { view_id: 'test_view' })).hidden_part_ids.length === 0, 'Show all restores every part');
+  state.invalidate(); await tool('cad_show', { view_id: 'test_view', document_id: 'plate' }); await untilReady(2);
+  check(state.value.hidden_part_ids.length === 0, 'Retargeting resets assembly visibility');
   console.log(`${checks} real MCP live-loop checks passed`);
 } finally {
   state.dispose(); bridge.dispose(); child.stdin.end();

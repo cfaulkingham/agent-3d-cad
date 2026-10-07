@@ -2,6 +2,8 @@
 Runs the actual executable; no Python is used by the product or native CTest.
 """
 import json
+import csv
+import io
 import math
 import pathlib
 import subprocess
@@ -190,6 +192,126 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     checks += 8
     for arguments in [{"action": "submit"}, {"action": "get"}, {"action": "list", "job_id": "extra"}]:
         assert not Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(arguments)
+        checks += 1
+    # Assemblies reuse the exact same tools, persisted document and live schemas.
+    assembly = json.loads((source / "examples/assembly.create.json").read_text())
+    assembled = call("cad_create", assembly)
+    aid = assembly["document_id"]
+    inventory = assembled["summary"]["assembly"]["parts"]
+    assert len(inventory) >= 2 and all(len(p["transform"]) == 16 for p in inventory)
+    bom = call("cad_bom", {"document_id": aid, "revision": 1})
+    assert bom["bom"]["total_quantity"] == 4
+    assert [(item["input"], item["quantity"], item["item_number"]) for item in bom["bom"]["items"]] == [
+        ("plate", 2, 1), ("spacer", 2, 2)]
+    assert all("material" not in item and "description" not in item for item in bom["bom"]["items"])
+    assert json.loads(pathlib.Path(bom["path"]).read_text()) == bom
+    for artifact in bom["artifacts"]:
+        content = pathlib.Path(artifact["path"]).read_bytes()
+        assert len(content) == artifact["bytes"] > 0
+        if artifact["format"] == "json":
+            saved_bom = json.loads(content)
+            assert saved_bom["bom"] == bom["bom"] and saved_bom["revision"] == 1
+        else:
+            rows = list(csv.DictReader(io.StringIO(content.decode("ascii"))))
+            assert [(r["input"], r["quantity"], r["part_ids"]) for r in rows] == [
+                ("plate", "2", "base;cover"), ("spacer", "2", "spacer_a;spacer_b")]
+        checks += 2
+    checks += 4
+    balloon_recipe = json.loads((source / "examples/assembly-bom.drawing.json").read_text())
+    bom_drawing = call("cad_drawing", balloon_recipe)
+    assert bom_drawing["bom"] == bom["bom"] and len(bom_drawing["balloons"]) == 4
+    assert {b["part_id"]: b["item_number"] for b in bom_drawing["balloons"]} == {
+        "base": 1, "cover": 1, "spacer_a": 2, "spacer_b": 2}
+    sidecars = {a["format"]: pathlib.Path(a["path"]).read_bytes() for a in bom_drawing["artifacts"]}
+    assert set(sidecars) == {"pdf", "svg", "dxf", "json", "csv"}
+    assert json.loads(sidecars["json"])["bom"] == bom["bom"]
+    assert b'BALLOONS' in sidecars["dxf"] and b'BILL OF MATERIALS' in sidecars["svg"]
+    assert call("cad_read", {"document_id": aid})["model"] == assembly["model"]
+    checks += 6
+    assembly_mesh = call("cad_query", {"document_id": aid, "revision": 1, "kind": "mesh"})
+    part_ids = {p["id"] for p in inventory}
+    assert {f["part_id"] for f in assembly_mesh["topology"]["faces"]} == part_ids
+    pick = {"document_id": aid, "revision": 1, "evaluation_id": assembly_mesh["evaluation_id"],
+            "feature_id": assembly_mesh["feature_id"], "kind": "edge",
+            "entity_id": assembly_mesh["topology"]["edges"][0]["id"]}
+    selected = call("cad_resolve_selection", pick)
+    assert selected["geometry"]["part_id"] in part_ids and "selector" not in selected
+    call("cad_drawing", json.loads((source / "examples/assembly.drawing.json").read_text()))
+    call("cad_view", {"document_id": aid, "revision": 1})
+    call("cad_open", {"document_id": aid, "view_id": "assembly_schema"})
+    for _ in range(200):
+        synced = call("cad_viewer", {"action": "sync", "view_id": "assembly_schema"})
+        if synced["state"] != "loading":
+            break
+        time.sleep(.02)
+    assert synced["state"] == "ready" and len(synced["summary"]["assembly"]["parts"]) == len(inventory)
+    assert synced["hidden_part_ids"] == []
+    visibility_args = {"action": "context", "view_id": "assembly_schema",
+                       "evaluation_id": synced["evaluation_id"], "selection": None,
+                       "hidden_part_ids": ["cover", "spacer_b"]}
+    hidden_context = call("cad_viewer", visibility_args)
+    assert hidden_context["hidden_part_ids"] == ["cover", "spacer_b"]
+    hidden_sync = call("cad_viewer", {"action": "sync", "view_id": "assembly_schema",
+                                     "known_evaluation_id": synced["evaluation_id"]})
+    assert hidden_sync["changed"] is False and hidden_sync["hidden_part_ids"] == ["cover", "spacer_b"]
+    assert call("cad_context", {"view_id": "assembly_schema"})["hidden_part_ids"] == ["cover", "spacer_b"]
+    omitted_visibility = {k: v for k, v in visibility_args.items() if k != "hidden_part_ids"}
+    assert call("cad_viewer", omitted_visibility)["hidden_part_ids"] == ["cover", "spacer_b"]
+    assert call("cad_viewer", {**visibility_args, "hidden_part_ids": []})["hidden_part_ids"] == []
+    checks += 6
+    for invalid_hidden in ["cover", [1], ["cover", "cover"], ["../part"], ["cover"] * 65]:
+        assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(
+            {**visibility_args, "hidden_part_ids": invalid_hidden})
+        checks += 1
+    feature = next(f for f in assembly["model"]["features"] if f["id"] == assembly["model"]["output"])
+    mate = feature["mates"][0]
+    changed = call("cad_apply", {"document_id": aid, "expected_revision": 1, "operations": [
+        {"op": "set_mate", "assembly_id": feature["id"], "mate": {**mate, "offset": [0, 0, 2]}}]})
+    assert changed["revision"] == 2
+    call("cad_apply", {"document_id": aid, "expected_revision": 2, "operations": [
+        {"op": "remove_mate", "assembly_id": feature["id"], "mate_id": mate["id"]},
+        {"op": "set_part_placement", "assembly_id": feature["id"], "part_id": mate["child"],
+         "placement": {"translation": [10, 20, 30]}}]})
+    checks += 5
+    for operation in [{"op": "set_mate", "assembly_id": feature["id"]},
+                      {"op": "remove_mate", "assembly_id": feature["id"], "mate_id": 42},
+                      {"op": "set_part_placement", "assembly_id": feature["id"], "part_id": "p", "placement": {"translation": [1, 2]}}]:
+        assert not Draft202012Validator(tools["cad_apply"]["inputSchema"]).is_valid(
+            {"document_id": aid, "expected_revision": 3, "operations": [operation]})
+        checks += 1
+    metadata = {"input": "plate", "item_number": 8, "part_number": "P-01",
+                "description": 'Plate, "checked"', "material": "Aluminum"}
+    metadata_edit = call("cad_apply", {"document_id": aid, "expected_revision": 3, "operations": [
+        {"op": "set_bom_item", "assembly_id": feature["id"], "item": metadata}]})
+    updated_bom = call("cad_bom", {"document_id": aid, "revision": 4, "feature_id": feature["id"]})
+    assert metadata_edit["revision"] == 4
+    assert updated_bom["bom"]["items"][-1]["description"] == metadata["description"]
+    assert updated_bom["bom"]["items"][-1]["item_number"] == 8
+    csv_path = next(a["path"] for a in updated_bom["artifacts"] if a["format"] == "csv")
+    with pathlib.Path(csv_path).open(newline="") as stream:
+        parsed_rows = list(csv.DictReader(stream))
+    assert parsed_rows[-1]["description"] == metadata["description"]
+    assert call("cad_bom", {"document_id": aid, "revision": 1})["bom"] == bom["bom"]
+    call("cad_apply", {"document_id": aid, "expected_revision": 4, "operations": [
+        {"op": "remove_bom_item", "assembly_id": feature["id"], "input": "plate"}]})
+    assert call("cad_bom", {"document_id": aid, "revision": 5})["bom"] == bom["bom"]
+    checks += 6
+    for operation in [
+        {"op": "set_bom_item", "assembly_id": feature["id"]},
+        {"op": "remove_bom_item", "assembly_id": feature["id"], "input": 42},
+        *[{"op": "set_bom_item", "assembly_id": feature["id"], "item": {"input": "plate", "item_number": n}}
+          for n in [0, 1000, 1.5]],
+        *[{"op": "set_bom_item", "assembly_id": feature["id"], "item": {"input": "plate", "description": value}}
+          for value in ["line\n", "\u00e9", "x" * 121]],
+        {"op": "set_bom_item", "assembly_id": feature["id"], "item": {"input": "plate", "quantity": 2}}]:
+        assert not Draft202012Validator(tools["cad_apply"]["inputSchema"]).is_valid(
+            {"document_id": aid, "expected_revision": 5, "operations": [operation]})
+        checks += 1
+    for bad in [{"bom": "yes"}, {"bom": True, "balloons": [{"view": "front", "part_id": "base", "anchor": [1, 2], "label": [1, 2]}]},
+                {"bom": True, "balloons": [{"view": "front", "part_id": "base", "anchor": [1, 2, 3], "label": [1, 2, 3]}]},
+                {"bom": True, "balloons": [{"view": "front", "part_id": "base", "anchor": [1, 2, 3], "label": [1, 2], "item_number": 1}]}]:
+        assert not Draft202012Validator(tools["cad_drawing"]["inputSchema"]).is_valid(
+            {"document_id": aid, "revision": 1, "drawing": bad})
         checks += 1
     frames = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "schema-conformance", "version": "1"}}},

@@ -22,6 +22,11 @@ dimensions from exact solids in isolated workers, exports PDF/SVG sheets and
 per-view DXFs, and saves parameterized drawing recipes. See `DRAWINGS.md` for
 the supported drafting subset; this extends the original exclusions below.
 
+Assembly extension (2026-10-06): the user authorized multiple editable parts,
+placement, mates, and exploded drawings. M6 adds one-level assembly features with
+named source-part instances, deterministic rigid datum mates, and view-specific
+drawing explosions. See `ASSEMBLIES.md` for the current contract and limitations.
+
 ## 1. Product outcome
 
 An agent can create a saved design, reopen it in another session, make a targeted
@@ -67,6 +72,10 @@ MCP client / native CLI / future browser client
   later HTTP asset delivery and viewer events.
 - **Viewer:** renders a specific revision, submits selections with their revision,
   and displays diagnostics. It does not parse source code or rebuild geometry.
+  Per-part hide/isolate is saved presentation state for a live view. Hidden parts
+  are excluded from rendering and picking; the document, measurements, exports
+  and BOM retain the complete assembly. Revision updates retain matching part
+  IDs and prune removed IDs; changing documents resets visibility.
 
 The initial process evaluates synchronously. The target architecture isolates
 geometry work in bounded worker processes (M2). The transport process must
@@ -83,6 +92,23 @@ IDs belong to the design and survive parameter edits. Replacing a feature
 preserves its ID; removing it requires resolving downstream references in the
 same transaction. Every feature is evaluated and checked, including features
 not reachable from the chosen output. This avoids saving hidden broken branches.
+
+An assembly feature keeps independently editable source parts as a compound of
+positioned exact solids. Part IDs and rigid mate IDs are saved design intent.
+Each mate defines one child's complete placement relative to its parent using
+explicit source-coordinate datum frames, an offset and a rotation. The graph
+is a forest: at most one incoming mate per child, no cycles, and no explicit
+placement on mated children. Roots are grounded by their placement. Ambiguous
+constraints never trigger a guessed solver result. Assembly inputs and ordinary
+solid operations consuming assemblies are rejected in this initial scope;
+geometry edits happen on the upstream source features.
+
+Assembly BOM rows group instances by source input. Quantities derive from part
+membership; saved metadata may supply explicit item numbers, part numbers,
+descriptions and materials, with no inferred manufacturing attributes. Drawing
+balloons derive numbers from that same BOM and bind to visible exact part
+surfaces using source-coordinate anchors. BOM/table export and exploded
+annotation generation preserve the committed model and historical artifacts.
 
 M0 supports numeric literals and explicit parameter references. No expression
 strings are evaluated. Initial dimensions and coordinates use millimeters;
@@ -181,9 +207,14 @@ Exact B-rep solids remain authoritative. Validate operation completion, shape
 validity, solid presence, and positive finite volume. An OCCT validity result is
 not a manufacturability certificate. Later DFM checks must be separately named.
 
-Initially, support one output shape, possibly containing multiple valid solids;
-there is no assembly semantic model. Internal primitives are axis-aligned.
-All-edge fillets are a limited starting capability, not selective filleting.
+The original baseline supports one output shape, possibly containing multiple
+valid solids. M6 adds a named assembly output containing distinct positioned
+part instances, with up to 64 parts and 63 mates per assembly and 256 assembly
+parts across a document. Interference does not fuse parts; measurements sum
+their volumes, including overlap. Exchanges preserve positioned solid geometry;
+the saved document retains editable part and mate semantics. Drawing explosion
+offsets only affect the selected projection, never the model or mate solution.
+Internal primitives remain axis-aligned in their source coordinates.
 
 M0 bounds documents to 1 MiB of JSON, nesting depth 64, 128 parameters, 256
 features, and 256 operations per edit. Input numbers are finite and within
@@ -202,9 +233,11 @@ restoration validates shapes and topology counts inside a bounded worker. Meshes
 and evaluation identities remain fresh, with evaluation-local selection IDs.
 
 Projection keys additionally include the complete ordered view set, hidden-line
-choice and section plane/hatch settings. View names, revision/document identity,
+choice, section plane/hatch settings, exploded offsets and balloon source anchors.
+View names, revision/document identity,
 sheet layout, dimensions, explicit tolerances, notes and output formats are
-rendered afresh. Projections retain their original aggregate geometry budgets.
+rendered afresh, as are BOM tables and balloon label positions. Projections
+retain their original aggregate geometry budgets.
 Only successful workers stage reusable results; coordinators check cancellation
 before atomically publishing cache entries. Cache writes never publish HEAD or
 artifacts. Checksummed entries are optional, bounded and evicted oldest-first;
@@ -234,6 +267,10 @@ No full sketch constraint solver, loft/sweep/revolve, feature patterns,
 assemblies/joints, DXF/PDF drawings, remote multi-tenant hosting, arbitrary
 scripts, Python API compatibility, or automatic conversion of old scripts.
 These may be added according to user workflows after the editable core works.
+The current protocol supersedes these historical exclusions for M3 modeling,
+M5 drawings and M6 assemblies. General sketch/assembly constraint solving,
+kinematics, nested assemblies and remote hosting remain outside the implemented
+scope.
 
 ## 10. Completion evidence
 

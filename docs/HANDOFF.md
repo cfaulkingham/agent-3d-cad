@@ -1,9 +1,279 @@
 # Implementation handoff
 
-Updated: 2026-10-06. **M0–M3, M4 live viewing, and M5 drawings are native previews.**
+Updated: 2026-10-06. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
-arm64. Native previews passed all five macOS/Linux/Windows CI lanes and independent
-Arch Linux x86_64 validation. Public release preparation remains separate.
+arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
+independent Arch Linux x86_64 validation. Each increment below records its own
+validation scope. Public release preparation remains separate.
+
+## Current increment — assembly visibility and cold drawing optimization
+
+Implemented live-view presentation controls:
+
+- Assembly parts have Hide/Show and Isolate controls in the inspector, with
+  Show all and an all-hidden recovery action. Controls remain available in narrow
+  layouts. Rendering, picking, highlights and captures exclude hidden parts;
+  Fit frames the visible geometry without changing the camera when hiding a part.
+- `hidden_part_ids` persists per `view_id`, is returned by `cad_context` and ready
+  `cad_viewer` sync responses, and is included in agent request context. The native
+  service validates part IDs and the current displayed evaluation under the final
+  view/document locks. Hiding a selected part clears its pick; attempts to select
+  hidden geometry fail explicitly.
+- Same-document revisions retain surviving part IDs and prune removed instances.
+  Changing documents resets visibility. Reloading restores the current mask even
+  when an older saved selection is stale. The controller protects local visibility
+  changes from older in-flight sync responses, surfaces save failures and allows an
+  explicit retry. Presentation does not edit the model, revision, BOM or exports.
+- The renderer retains the immutable native mesh and ownership IDs, rebuilding
+  visible buffers and its picking tree only when needed. Offline `cad_view`
+  artifacts retain their existing behavior. Separate clients sharing a `view_id`
+  use the last explicitly published mask; independent chats should use distinct IDs.
+
+Implemented cold-projection and output improvements:
+
+- CPU sampling located the M20 knob bottleneck in exact hidden-line ray
+  classification against long thread BSpline faces. The pinned OCCT 8.0.1 recipe
+  now applies `agentcad-hlr-midpoint-v1`: two midpoint checks that discard root
+  counts use bounded denser initial brackets and stop at the first exact qualified
+  occluder. An unsuccessful attempt repeats the original grid; every count-dependent
+  caller retains the original path. Source geometry, topology, tolerances and
+  existing public symbols/object layouts remain unchanged.
+- The five-file patch verifies upstream and resulting hashes, accepts CRLF source,
+  rejects unknown input and is idempotent. Dependency stamps track patch/notice
+  scripts. Installed notices retain attribution, the patch and all five complete
+  modified files. Portable packaging verifies its selected TKHLR hash against the
+  SDK modification manifest before claiming the patch in provenance. The cache
+  identity already includes SDK binaries, so disposable caches invalidate safely.
+- Drawing geometry now paints hidden curves before visible curves in PDF/SVG and
+  emits DXF entities in the same order. Coincident hidden dashes cannot overlay
+  visible outlines in the native sheet. Center marks and other annotations follow
+  geometry; cached projections stay unchanged. Curved-geometry regressions cover
+  all three formats and `hidden_lines: false`.
+- `tests/cache_benchmark.py` supports `--cold-only`, explicit `--timeout-ms`,
+  durable failure timing and executable/source hashes. Resume rejects a changed
+  executable or view scenario.
+
+Executed on macOS arm64 / OpenCascade 8.0.1 with the modified SDK:
+
+- `cmake --build build-app-protocol --parallel 4` passed, followed by
+  `ctest --test-dir build-app-protocol --output-on-failure`: **28/28 passed in
+  50.01 seconds**. The new performance geometry suite passed **39,991 checks**
+  in 15.22 seconds, covering left-handed/fine-pitch threads, finite projections,
+  source/topology nonmutation, restored snapshots, exact sub-chord-tolerance
+  visibility and independent rejection of an occluded balloon anchor.
+- Native live context **110 checks**, embedded app protocol **93**, UI state
+  **103**, real stdio MCP/controller loop **27**, WebGL renderer/native assembly
+  mesh **47**, and drawing **1,947** checks passed within that suite.
+  **291 schema checks across 19 tools** and **507 official MCP SDK 2.3.0 checks**
+  passed (poll counts vary).
+- Native relocation `bundle-check` passed with empty PATH, including visibility
+  controls, assemblies, BOMs, balloons and verified modification provenance.
+  Pairing the original unmodified TKHLR with patched notices was rejected before
+  publication. Fresh/CRLF patch application, repeat application, unexpected-source
+  rejection and dependency recipe configuration also passed.
+- A temporary loopback MCP host served the embedded app from the actual native
+  executable. Eight browser interactions verified hiding the cover, isolating and
+  fitting a spacer, selecting its visible geometry, clearing a hidden pick,
+  all-hidden recovery, Show all, and persisted visibility/camera after reload.
+  The document remained at revision 1 with identical source. Evidence and a
+  screenshot are in `build/hide-isolate-demo/`; the server was stopped. This is
+  browser/native-service evidence, not a new installed Codex-host test.
+- The unchanged full M20 knob, default four-view orthographic drawing completed
+  cold in **202.674 seconds**, versus the original build exhausting its budget at
+  **240.012 seconds**. The original result is a timeout, not its completion time.
+  The final run used the integrated service and selected SDK with no loader
+  override, fresh caches and no concurrent geometry/build tests. Command:
+  `python3 -u tests/cache_benchmark.py build-app-protocol/agent-3d-cad
+  build/drawing-perf --views standard --cold-only --timeout-ms 240000`.
+- Three cached redraws took **0.157, 0.158 and 0.156 seconds** (median **0.157**)
+  with byte-identical PDF/SVG/DXF files. A3 first-angle restyling with dimensions
+  took **0.152 seconds** and reused unchanged cache files. **131 native/cache,
+  ezdxf/XML and history checks** plus **20 independent pypdf checks** passed.
+  All eight DXF audits had zero errors or fixes; projected dimensions matched the
+  source. Poppler inspection confirmed complete four-view A4/A3 sheets and legible
+  dimensions. A thread-length edit changed geometry and retained revision 1 source.
+- Evidence: `build/drawing-perf/cache-benchmark-jljxl88z/report.json` and its
+  artifacts/previews, `build/drawing-perf/final-*.log`, plus the original timeout
+  in `build/drawing-perf/cache-benchmark-koctfa5m/report.json`. The executable hash
+  remained identical after final packaging regeneration. `git diff --check`
+  passed. No global installation, remote push or release.
+
+Additional numerical validation compared original and modified exact projected
+BRep curves on threads of different hands/pitches/lengths, rotated parts, fused
+geometry, overlapping assemblies and a 100x scaled stress case. Of **29 completed
+comparisons**, 26 matched visible and uncovered-hidden geometry within 2e-5 mm;
+three long-D20 views removed baseline-visible intervals. Source-solid ray audits
+found only physically blocked samples in those intervals (right front: 20 samples
+across four intervals after scanning all 152 edges; left isometric: five samples
+after scanning all 70 edges; left front: a sampled subset of an earlier 116/116
+blocked-point audit). No newly visible sample exceeded that tolerance. Three
+long top-view baselines timed out at their 35-second diagnostic limit and remain
+uncompared. These are finite numerical checks, not continuous-domain proofs.
+Details are in `build/drawing-perf/axial-variants/FINAL-EXISTENTIAL.md`.
+
+Rejected faster experiments included splitting surfaces and changing grids for
+all classifiers: they exposed occluded edges or changed count-dependent results.
+They are not included. The accepted patch retains OCCT's numerical limitations;
+first drawings of complex threads still take minutes and need an adequate bounded
+`cad_job` budget. Hide/isolate is presentation-only in the live viewer; exported
+models, drawings and BOMs still include every part. The modified SDK and these
+sources have local macOS evidence, not a new Windows/Linux certification. Existing
+unmodified developer SDKs must be rebuilt with the supplied dependency recipe for
+the optimization, new geometry regressions and verified portable packaging.
+
+Next: further cold HLR improvements only with exact visibility evidence;
+nested/linked assemblies, additional mate types, or multi-sheet/automatic
+annotation layout as separately scoped workflows.
+
+## Previous increment — assembly BOMs and part balloons
+
+Implemented through the shared Service, native CLI/MCP and drawing worker:
+
+- Optional assembly `bom` metadata is keyed by source `input`, with explicit
+  item numbers, part numbers, descriptions and materials. Rows group repeated
+  source instances and count instances rather than solids. Deterministic automatic
+  numbering sorts inputs and skips explicit reservations; fixed item numbers
+  survive membership changes. `set_bom_item` and `remove_bom_item` use the existing
+  atomic revision path, including final-state validation for number swaps.
+- `cad_bom` exports committed or historical assembly inventory as JSON/CSV and a
+  manifest without rebuilding geometry. Optional `feature_id` selects a named
+  assembly. CSV preserves metadata with quoted fields, doubled quotes and CRLF.
+  Publication uses a fresh directory, cancellation checks and a final document
+  lock. Durable `cad_job` also accepts this tool.
+- Drawing `bom: true` adds a wrapped table to PDF/SVG and independent `bom.json`
+  and `bom.csv` artifacts, including DXF-only requests. Balloons derive their item
+  numbers from the same inventory; callers specify a part, a source-local surface
+  point and projected label coordinates. They follow placement, rigid mates and
+  view explosion. The kernel snaps within 1e-5 mm of an exact boundary and rejects
+  missing, ambiguous or occluded attachment points. These checks do not mutate
+  assembled geometry or the saved revision.
+- PDF/SVG and 1:1 mm DXF share numbered circles, arrows and leaders; DXF puts these
+  on `BALLOONS`. Circles clear geometry bounds, other circles and dimension
+  strokes/text, and leaders cannot cross another balloon circle. Layout includes
+  annotations without altering measured geometry extents. Invalid or oversized
+  layouts fail explicitly instead of clipping or dropping rows/balloons.
+- Saved recipes retain parameterized anchors and labels. Anchor/explosion changes
+  invalidate projection cache entries; moving labels rerenders cached projections.
+  Metadata changes retain complete-model cache invalidation. Old recipes, source
+  revisions and artifacts remain immutable. Added an assembled/exploded example
+  and updated protocol, assembly, drawing and bundled agent guidance.
+
+Executed locally on macOS arm64 / OpenCascade 8.0.1:
+
+- `cmake --build build-app-protocol --parallel 4` and
+  `ctest --test-dir build-app-protocol --output-on-failure`: **27/27 passed in
+  28.57 seconds**. New suites passed **68 BOM checks**, **88 balloon kernel checks**
+  and **58 BOM drawing checks**. Coverage includes grouping, numbering, quoted
+  metadata, semantic edits/rollback, historical exports, exact boundary attachment,
+  placement/explosion, hidden/ambiguous anchors, annotation collisions, cache
+  invalidation/reuse, native formats and asynchronous regeneration.
+- **270 schema checks across 19 tools** and **401 official MCP SDK 2.3.0 checks**
+  passed (polling can affect counts), including asynchronous BOM export and
+  persisted job results across process restart.
+- `cmake --build build-app-protocol --target bundle-check --parallel 4` passed
+  native relocation with empty PATH, including BOM JSON/CSV, quoted metadata edits,
+  history, and the sheet table/balloons alongside prior smoke coverage.
+- Generated the four-instance plate/spacer example with demonstration part numbers
+  and descriptions. Poppler visual inspection confirms the two-row table and four
+  correctly numbered balloons. Independent pypdf, ezdxf, XML and CSV readers passed
+  **47 checks**: a single A3 page, table metadata, artifact byte counts, matching
+  inventories, DXF units/radii/centers/numbers and zero DXF audit errors or fixes.
+  Evidence and sample artifacts are under `build/bom-demo/`.
+- `git diff --check` passed. No global installation, remote push or release.
+
+Current limits: flat same-document BOMs; at most 64 source rows and 64 balloons,
+item numbers 1–999, printable ASCII metadata, one balloon per part per view, and
+no section balloons. Label placement is explicit and conservatively clears the
+whole projected geometry bounding rectangle. Tables must fit one sheet, including
+DXF-only requests; table pagination, automatic balloon routing, hierarchical BOMs,
+and part-specific quantity overrides are not implemented. DXFs contain balloons;
+the complete table is in the sheet and JSON/CSV sidecars. These sources have local
+macOS evidence, not a new multi-platform certification.
+
+Next: nested/linked assemblies, additional mate types, per-part hide/isolate,
+or multi-sheet/automatic annotation layout as explicit follow-up workflows.
+
+## Previous increment — editable assemblies and exploded drawings
+
+Implemented through the existing shared native Service, CLI/MCP and bounded
+workers, without adding a separate transport or runtime:
+
+- An `assembly` feature contains 1–64 named part instances of earlier editable
+  solid features. Repeated inputs share source intent while placed copies retain
+  separate exact solids and topology, including coincident instances. Rotation
+  about an explicit axis precedes translation. Parts remain a compound; touching
+  or overlapping geometry is never silently fused. Aggregate volume includes
+  every part, including overlap.
+- Named `rigid` mates align explicit source-coordinate datum frames with an
+  optional parent-frame offset and rotation. The parent forest resolves in any
+  serialization order, fixing all six relative degrees of freedom. Missing
+  references, cycles, multiple incoming mates, invalid frames and conflicting
+  child placements fail explicitly. Roots use their saved placement or identity.
+  A model permits at most 256 total assembly parts and 63 mates per assembly.
+- `set_part_placement`, `set_mate` (upsert) and `remove_mate` are atomic semantic
+  edits. Existing parameter/feature edits update source parts and datum values;
+  previews, revisions, restore, compare, jobs and expected-revision checks use
+  the same existing transaction path. Detaching a child returns it to identity
+  unless the same batch supplies a placement. Explicit placements are never
+  silently discarded when adding a mate.
+- Summaries include part inventory, source feature IDs, row-major world matrices,
+  bounds, volume and mate relationships. Topology/provenance and mesh edges carry
+  part ownership; triangles map through their face IDs. Assembly picks retain
+  evaluation/revision lifetime and expose their owning part. They do not propose
+  fillet selectors in the wrong coordinate system. The live viewer lists part
+  sources and mate parents and displays the selected part.
+- Per-view `explode` offsets translate named parts in world mm after mate
+  placement, including section views. Parameterized recipes survive regeneration.
+  PDF/SVG/DXF views identify exploded geometry, whose measured dimensions include
+  the offsets. Drawing generation does not mutate assembled geometry, HEAD,
+  ordinary exports or historical artifacts. Projection cache keys include the
+  offsets. Cached assemblies reconstruct placement/ownership from exact cached
+  source B-reps and saved intent, avoiding redundant compound snapshots or
+  reliance on deserialized enumeration ownership.
+- Added `docs/ASSEMBLIES.md`, bundled guidance and an editable four-part
+  plate/spacer example with assembled and exploded front/isometric drawings.
+  STEP/STL preserve placed geometry; saved JSON retains the assembly semantics.
+
+Executed locally on macOS arm64 with OpenCascade 8.0.1:
+
+- `cmake --build build-app-protocol --parallel 4` and
+  `ctest --test-dir build-app-protocol --output-on-failure`: **24/24 passed in
+  27.33 seconds**. New suites passed **88 service checks**, **85 model checks**,
+  **5,385 kernel checks**, and **59 drawing checks**. Service counts include job
+  polling and can vary. Coverage includes independent/coincident instances,
+  full frame composition and inverse child orientation, parameter edits, graph
+  rejection, rollback, detach/placement, historical source, cache restoration,
+  stale picks, live context, native STEP readback, asynchronous edits, exploded
+  sections and regeneration. Existing geometry, jobs, cache, drawing, protocol
+  and viewer regressions pass; the WebGL suite now consumes the assembly mesh.
+- **219 schema checks across 18 tools** and **345 official MCP SDK 2.3.0 checks**
+  passed (polling affects counts), including an asynchronous exploded assembly drawing. Discovery schemas
+  cover assembly intent, edits, inventory, ownership and live summary responses.
+- Generated and visually inspected the example PDF using Poppler. Its assembled
+  dimensions are 60 mm wide and 24 mm high; exploded height is 48 mm. Independent
+  pypdf/ezdxf validation passed **22 checks** across the single-page PDF, four DXFs,
+  artifact sizes and retained recipe. All DXFs use mm and audit with zero errors
+  or fixes; exploded labels appear only on the corresponding views.
+- `cmake --build build-app-protocol --target bundle-check --parallel 4` passed
+  verified native relocation with empty PATH and SDK environment removed. Its
+  new assembly smoke requires the part inventory and labeled exploded SVG, in
+  addition to the existing create/edit/reopen/export/drawing/cache/MCP checks.
+  The packaged documentation includes `ASSEMBLIES.md` and the editable examples.
+- Build, CTest, schema/SDK, native artifact and independent-reader evidence is
+  retained under `build/assembly-demo/`. `git diff --check` passed.
+
+Scope: same-document, one-level assemblies and deterministic rigid datum mates.
+Nested assemblies, linked document parts, closed-loop/general mate solving,
+kinematics, collision/fit validation and per-part hide/isolate
+controls remain future work. Solid operations consume source parts, not assembly
+outputs. STEP export is placed compound geometry rather than a promise of XCAF
+product hierarchy or editable mates. This increment has local macOS evidence;
+earlier multi-platform CI and human viewer acceptance do not certify these new
+sources. No global installation, remote push or release was performed.
+
+Next: pursue nested/linked assemblies or additional mate types only
+with explicit workflows; separately investigate cold HLR performance for complex
+threaded solids. The assembly contract is in `ASSEMBLIES.md`.
 
 ## Latest increment — geometry and projection caching
 

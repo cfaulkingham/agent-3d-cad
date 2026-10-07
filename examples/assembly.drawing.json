@@ -1,0 +1,32 @@
+{
+  "document_id":"spacer_assembly",
+  "revision":1,
+  "drawing":{
+    "title":"Editable plate and spacer assembly",
+    "sheet":"A4",
+    "layout":"grid",
+    "views":[
+      {"id":"assembled", "orientation":"front"},
+      {"id":"assembly_iso", "orientation":"isometric"},
+      {"id":"exploded", "orientation":"front", "explode":[
+        {"part_id":"spacer_a", "translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"spacer_b", "translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"cover", "translation":[0,0,{"expression":{"op":"multiply","args":[{"parameter":"explode_gap"},2],"unit":"mm"}}]}
+      ]},
+      {"id":"exploded_iso", "orientation":"isometric", "explode":[
+        {"part_id":"spacer_a", "translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"spacer_b", "translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"cover", "translation":[0,0,{"expression":{"op":"multiply","args":[{"parameter":"explode_gap"},2],"unit":"mm"}}]}
+      ]}
+    ],
+    "dimensions":[
+      {"view":"assembled","kind":"width"},
+      {"view":"assembled","kind":"height"},
+      {"view":"exploded","kind":"height"}
+    ],
+    "notes":[
+      "Exploded dimensions include display offsets; use assembled views for overall sizes.",
+      "Plate and spacer geometry, rigid mates and explode spacing remain parameter editable."
+    ]
+  }
+}

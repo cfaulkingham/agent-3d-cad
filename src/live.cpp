@@ -9,6 +9,7 @@
 #include <fstream>
 #include <memory>
 #include <random>
+#include <set>
 
 namespace agentcad {
 namespace {
@@ -36,7 +37,7 @@ fs::path view_path(const fs::path& root, const std::string& id, bool create = fa
   return path;
 }
 Json empty_state(const std::string& id) {
-  return {{"view_id",id},{"document_id",nullptr},{"generation",nonce()},{"context",nullptr}};
+  return {{"view_id",id},{"document_id",nullptr},{"generation",nonce()},{"context",nullptr},{"hidden_part_ids",Json::array()}};
 }
 Json read_state(const fs::path& path) { return parse_json(read_text(path / "state.json")); }
 void save_state(const fs::path& path, const Json& state) { atomic_text(path / "state.json",state.dump()); }
@@ -48,6 +49,29 @@ Json snapshot(const fs::path& root, const std::string& id) {
 bool same_view(const Json& a, const Json& b) {
   return a.at("generation") == b.at("generation") && a.at("document_id") == b.at("document_id");
 }
+std::set<std::string> display_part_ids(const Json& state) {
+  std::set<std::string> ids;
+  if (state.contains("display") && state.at("display").at("summary").contains("assembly"))
+    for (const auto& part:state.at("display").at("summary").at("assembly").at("parts")) ids.insert(text_field(part,"id"));
+  return ids;
+}
+Json validate_hidden_parts(const Json& hidden,const Json& state) {
+  if (!hidden.is_array() || hidden.size()>64) throw Error("invalid_argument","hidden_part_ids must contain at most 64 unique assembly part IDs");
+  const auto available=display_part_ids(state);std::set<std::string> seen;
+  for (const auto& part:hidden) {
+    if (!part.is_string()) throw Error("invalid_argument","hidden_part_ids entries must be assembly part IDs");
+    const auto id=part.get<std::string>();identifier(id);
+    if (!available.contains(id)) throw Error("invalid_argument","Hidden part is absent from the displayed assembly",{{"part_id",id}});
+    if (!seen.insert(id).second) throw Error("invalid_argument","hidden_part_ids must be unique",{{"part_id",id}});
+  }
+  return hidden;
+}
+void prune_hidden_parts(Json& state) {
+  const auto available=display_part_ids(state);Json retained=Json::array();
+  for (const auto& id:state.value("hidden_part_ids",Json::array()))
+    if (available.contains(id.get<std::string>())) retained.push_back(id);
+  state["hidden_part_ids"]=std::move(retained);
+}
 Json sync_status(const Json& state, const Json& revision, const std::string& status) {
   return {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
     {"revision",revision},{"state",status},{"changed",false}};
@@ -58,6 +82,7 @@ Json ready_status(const Json& state, const Json& record, const Json& arguments) 
   result["evaluation_id"] = display.at("evaluation_id");
   result["summary"] = display.at("summary");
   result["feature_id"] = display.at("feature_id");
+  result["hidden_part_ids"] = state.value("hidden_part_ids",Json::array());
   const bool changed = arguments.value("known_evaluation_id",std::string{}) != display.at("evaluation_id").get<std::string>();
   result["changed"] = changed;
   if (changed) result["model"] = record.at("model");
@@ -78,7 +103,8 @@ void write_frozen(const fs::path& path, const Json& evaluation) {
 }
 Json context_result(Store& store, const Json& state) {
   Json result = {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
-    {"revision",nullptr},{"evaluation_id",nullptr},{"head_revision",nullptr},{"stale",false},{"selection",nullptr}};
+    {"revision",nullptr},{"evaluation_id",nullptr},{"head_revision",nullptr},{"stale",false},{"selection",nullptr},
+    {"hidden_part_ids",state.value("hidden_part_ids",Json::array())}};
   if (state.at("document_id").is_null()) return result;
   try { result["head_revision"] = store.read(state.at("document_id").get<std::string>()).at("revision"); }
   catch (const Error& e) { if (e.code != "not_found") throw; }
@@ -87,6 +113,9 @@ Json context_result(Store& store, const Json& state) {
     result["evaluation_id"] = state.at("display").at("evaluation_id");
   }
   if (!state.at("context").is_null()) result.update(state.at("context"));
+  // Visibility describes the current display, even when the saved pick belongs
+  // to an older evaluation. It is never restored from that stale context.
+  result["hidden_part_ids"]=state.value("hidden_part_ids",Json::array());
   result["stale"] = (!result.at("revision").is_null() && result.at("revision") != result.at("head_revision")) ||
     (!result.at("evaluation_id").is_null() && (!state.contains("display") ||
       result.at("evaluation_id") != state.at("display").at("evaluation_id")));
@@ -171,6 +200,7 @@ Json synchronize(Store& store, const Json& arguments) {
           store.read(document).at("revision") != revision) continue;
       current["display"] = {{"document_id",document},{"revision",revision},{"evaluation_id",eid},
         {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")}};
+      prune_hidden_parts(current);
       current.erase("pending"); current.erase("failure"); save_state(path,current);
       return ready_status(current,record,arguments);
     }
@@ -242,6 +272,14 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
     auto current = read_state(path);
     if (!same_view(current,state)) throw Error("stale_selection","View changed before context could be saved");
     check_display(store,current,eid);
+    const auto hidden=validate_hidden_parts(arguments.contains("hidden_part_ids")?arguments.at("hidden_part_ids"):
+      current.value("hidden_part_ids",Json::array()),current);
+    if (context.contains("resolved_selection")) {
+      const auto& geometry=context.at("resolved_selection").at("geometry");
+      if (geometry.contains("part_id") && std::find(hidden.begin(),hidden.end(),geometry.at("part_id"))!=hidden.end())
+        throw Error("invalid_argument","Selection belongs to a hidden assembly part",{{"part_id",geometry.at("part_id")}});
+    }
+    current["hidden_part_ids"]=hidden;
     current["context"] = context; save_state(path,current); state = std::move(current);
   }
   return context_result(store,state);
@@ -273,7 +311,9 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
     auto state = fs::exists(path/"state.json") ? read_state(path) : empty_state(id);
     if (arguments.contains("document_id") && (state.at("document_id") != arguments.at("document_id") ||
         (tool == "cad_show" && state.contains("failure")))) {
+      const auto hidden=state.at("document_id")==arguments.at("document_id")?state.value("hidden_part_ids",Json::array()):Json::array();
       state = empty_state(id); state["document_id"] = arguments.at("document_id");
+      state["hidden_part_ids"]=hidden;
     }
     save_state(path,state);
     return {{"view_id",id},{"document_id",state.at("document_id")},{"resource_uri",viewer_app_uri}};
@@ -294,7 +334,7 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
     fields(arguments,{"action","view_id","evaluation_id"},{"offset"}); return mesh_chunk(store,arguments);
   }
   if (action == "context") {
-    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt"});
+    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids"});
     return publish_context(service,store,arguments);
   }
   throw Error("invalid_argument","Viewer action must be sync, mesh or context");
@@ -311,22 +351,24 @@ Json live_tool_definitions() {
   const Json camera = object({{"yaw",numeric},{"pitch",numeric},{"zoom",{{"type","number"},{"minimum",0.01},{"maximum",1000}}},
     {"pan",{{"type","array"},{"items",numeric},{"minItems",2},{"maxItems",2}}}}, {"yaw","pitch","zoom","pan"});
   const Json prompt = {{"type","string"},{"maxLength",8192}};
+  const Json hidden_parts={{"type","array"},{"items",id},{"maxItems",64},{"uniqueItems",true}};
   const Json error = object({{"code",{{"type","string"}}},{"message",{{"type","string"}}},{"details",{{"type","object"}}}}, {"code","message","details"});
   const Json context = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},{"evaluation_id",nullable(id)},
     {"head_revision",nullable(revision)},{"stale",{{"type","boolean"}}},{"selection",nullable(pick)},
     {"resolved_selection",object({{"reference",pick},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},
       {"selector",{{"$ref","#/$defs/selector"}}}}, {"reference","geometry"})},
-    {"camera",camera},{"prompt",prompt},{"updated_at_unix_ms",{{"type","integer"}}}},
-    {"view_id","document_id","revision","evaluation_id","head_revision","stale","selection"});
+    {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"updated_at_unix_ms",{{"type","integer"}}}},
+    {"view_id","document_id","revision","evaluation_id","head_revision","stale","selection","hidden_part_ids"});
   const Json identity = object({{"view_id",id},{"document_id",nullable(id)},{"resource_uri",{{"const",viewer_app_uri}}}}, {"view_id","document_id","resource_uri"});
   const Json point = {{"type","array"},{"items",{{"type","number"}}},{"minItems",3},{"maxItems",3}};
   const Json summary = object({{"valid",{{"const",true}}},{"units",{{"const","mm"}}},{"volume_mm3",{{"type","number"}}},{"area_mm2",{{"type","number"}}},
     {"center_of_mass_mm",point},{"bounds_mm",object({{"min",point},{"max",point}},{"min","max"})},
-    {"solid_count",{{"type","integer"},{"minimum",0}}},{"face_count",{{"type","integer"},{"minimum",0}}},{"edge_count",{{"type","integer"},{"minimum",0}}}},
+    {"solid_count",{{"type","integer"},{"minimum",0}}},{"face_count",{{"type","integer"},{"minimum",0}}},{"edge_count",{{"type","integer"},{"minimum",0}}},
+    {"assembly",{{"$ref","#/$defs/assembly_summary"}}}},
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
   const Json sync = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},
     {"state",{{"enum",{"empty","loading","ready","error"}}}},{"changed",{{"type","boolean"}}},{"evaluation_id",id},{"feature_id",id},
-    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error}}, {"view_id","document_id","revision","state","changed"});
+    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"hidden_part_ids",hidden_parts}}, {"view_id","document_id","revision","state","changed"});
   const Json offset = {{"type","integer"},{"minimum",0},{"maximum",max_view_bytes}};
   const Json chunk = object({{"data",{{"type","string"},{"maxLength",chunk_bytes}}},{"offset",offset},{"next_offset",nullable(offset)},{"total_bytes",offset}},
     {"data","offset","next_offset","total_bytes"});
@@ -339,11 +381,11 @@ Json live_tool_definitions() {
     object({{"view_id",id},{"document_id",id}},Json::array()),identity,false);
   open["_meta"] = {{"ui",{{"resourceUri",viewer_app_uri}}}};
   open["_meta"]["openai/ui"] = {{"preferredModelDisplayMode","fullscreen"}};
-  auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks and validated selection/camera/prompt context. Geometry is never edited through this tool.",
+  auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks, hidden assembly parts and validated selection/camera/prompt context. Geometry is never edited through this tool.",
     {{"type","object"},{"oneOf",Json::array({
       object({{"action",{{"const","sync"}}},{"view_id",id},{"known_evaluation_id",id}},{"action","view_id"}),
       object({{"action",{{"const","mesh"}}},{"view_id",id},{"evaluation_id",id},{"offset",offset}},{"action","view_id","evaluation_id"}),
-      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",nullable(pick)},{"camera",camera},{"prompt",prompt}},
+      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",nullable(pick)},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts}},
         {"action","view_id","evaluation_id","selection"})})}},
     {{"type","object"},{"oneOf",Json::array({sync,chunk,context})}},false);
   viewer["_meta"] = {{"ui",{{"visibility",Json::array({"app"})}}}};
@@ -353,7 +395,7 @@ Json live_tool_definitions() {
     tool("cad_list","List at most 1000 saved documents and committed HEAD revisions.",object(Json::object(),Json::array()),
       object({{"documents",{{"type","array"},{"maxItems",document_limit},{"items",object({{"document_id",id},{"revision",revision}},{"document_id","revision"})}}},
         {"truncated",{{"type","boolean"}}}}, {"documents","truncated"}),true),
-    tool("cad_context","Read validated viewer selection, camera and prompt context. stale reports a changed HEAD or displayed evaluation.",
+    tool("cad_context","Read validated viewer selection, camera, prompt and current hidden assembly part IDs. stale reports a changed HEAD or displayed evaluation.",
       object({{"view_id",id}},Json::array()),context,true),viewer});
 }
 }

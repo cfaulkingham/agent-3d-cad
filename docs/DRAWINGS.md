@@ -10,8 +10,14 @@ bounded, disposable workspace cache. Changing sheet layout, dimensions, explicit
 tolerances, notes, view names or formats rerenders without repeating projection.
 Model/build changes invalidate geometry and projections; changing the ordered
 views, hidden lines or section/hatch settings invalidates the view-set projection.
+Per-view exploded part IDs and resolved translations also participate in the
+projection key, so assembled and exploded views never reuse one another's
+geometry.
 The first exact hidden-line drawing of a complex threaded part can still exceed
-the normal job budget. Cache contents are never editable source or stable
+the normal job budget. The pinned dependency recipe includes an OCCT midpoint
+classification optimization for these cold projections; see
+[DEPENDENCIES.md](DEPENDENCIES.md) for its scope and [HANDOFF.md](HANDOFF.md) for
+measured results. Cache contents are never editable source or stable
 selection identities; deleting them only causes regeneration.
 
 ```json
@@ -100,7 +106,106 @@ OpenCascade's exact B-rep hidden-line algorithm produces visible and hidden
 edges. Lines, circles and circular arcs remain analytic vector entities. Other
 curves are approximated by polylines at a 0.02 mm model-space deflection; this
 is a drawing tolerance, not a manufacturing tolerance. `hidden_lines: false`
-omits obscured edges. The 3D source and STEP exports remain exact solids.
+omits obscured edges. Hidden geometry is emitted before visible geometry in
+PDF/SVG and DXF so coincident hidden dashes do not paint over visible outlines.
+Center marks, dimensions and balloons follow the geometry. The 3D source and
+STEP exports remain exact solids.
+
+## Exploded assembly views
+
+An assembly output can add `explode` to any drawing view. It contains one to 64
+unique assembly part IDs, each with a three-component translation in world mm:
+
+```json
+{"layout":"grid", "views":[
+  {"id":"assembled","orientation":"front"},
+  {"id":"exploded","orientation":"front",
+   "explode":[{"part_id":"spacer","translation":[0,0,{"parameter":"explode_gap"}]}]}
+]}
+```
+
+Offsets apply after each part's solved placement and rigid mates. They affect
+only that view; unlisted parts retain their assembled positions. Values support
+the same parameters and bounded mm expressions as model coordinates. Empty
+lists, duplicate IDs, unknown parts and an output that is not an assembly fail
+explicitly. A section with `explode` intersects the translated assembly with
+the requested world plane and hatches the resulting material.
+
+PDF/SVG view labels and individual DXFs visibly say `EXPLODED`. Dimensions in
+these views measure the **exploded geometry**, including artificial spacing;
+they do not report the assembled distances. Use a normal view for assembled
+dimensions. A grid can show assembled and exploded versions of the same
+orientation side by side. Standard layouts still permit only one view of each
+orthographic/isometric orientation.
+
+The source model, mate definitions, committed placements and STEP/STL exports
+are unchanged by exploded drawing generation. Saved drawing recipes retain
+parameter references, so regeneration after an edit re-resolves both placements
+and explode offsets. `examples/assembly.create.json` and
+`examples/assembly.drawing.json` demonstrate editable plates and spacers, rigid
+mates, and normal and exploded views in one sheet.
+BOM tables and part balloons are described below; exploded paths and automatic
+separation are outside this increment.
+
+## Assembly BOM tables and part balloons
+
+Set `bom: true` on a drawing recipe to include the output assembly's bill of
+materials. Rows group instances by source feature and use saved assembly metadata
+and deterministic item numbering; quantities count instances. The same item
+number applies to every instance of that source. Neither item numbers nor
+quantities are arbitrary drawing annotations. See [ASSEMBLIES.md](ASSEMBLIES.md)
+for metadata edits, numbering rules and the standalone `cad_bom` export.
+
+Optional `balloons` connect item numbers to visible part surfaces:
+
+```json
+{"bom":true,"views":[{"id":"front","orientation":"front"}],
+ "balloons":[{"view":"front","part_id":"base",
+              "anchor":[10,0,2],"label":[-10,2]}]}
+```
+
+Each balloon requires an existing view and part ID. `anchor` is a three-element
+point in that part's **source coordinates**, before placement, mates or explosion.
+It must lie on the exact solid's boundary and be visible from that view. `label`
+is a two-element balloon center in the view's projected model-mm coordinates,
+before sheet scale. Both support mm parameters and bounded expressions. Saved
+recipes preserve those references; regeneration recomputes the surface position,
+solved placement, exploded offset and item number from the requested revision.
+
+At most 64 balloons are accepted, with at most one per part in each view. They
+require `bom: true`, an assembly output, and a nonsection view. Off-surface,
+occluded, coincident or ambiguous part anchors fail explicitly. A projected
+coincidence is not permission to attach to another part. Balloon circles have a
+7 mm sheet diameter. Their centers must clear the view's geometry bounding
+rectangle by their radius plus 1 mm, and circles must be separated by 1 mm.
+Leaders must reach beyond the circle by at least 2 mm and cannot cross another
+balloon. Balloon circles must also clear dimension annotations, including angular
+arcs, extension/leader lines, arrowheads and text. Circles and leaders participate in sheet fitting; overlapping labels or
+a layout that cannot fit fail rather than silently relocating or omitting
+annotations. Put labels in clear space around the view. Balloons identify parts
+and do not measure lengths.
+
+Attachment checks use a 0.00001 mm boundary tolerance. Missing/off-boundary
+anchors return `selection_missing`, an occluded anchor returns `invalid_drawing`,
+and an anchor shared with another part's boundary returns `selection_ambiguous`.
+Errors identify the output feature, view and part for repair.
+
+PDF/SVG sheets include the BOM table. `bom.json` and `bom.csv` are independent
+table sidecars regardless of the selected geometry formats. JSON includes the
+source document/revision identity; CSV quotes every field, uses CRLF records and
+joins each row's part IDs with semicolons. DXFs retain the part balloons and leaders
+on a `BALLOONS` layer at 1:1 mm. The response includes `bom` and resolved
+`balloons` with `view`, `part_id`, `item_number`, `anchor_mm` and `label_mm`.
+The anchor and label coordinates in the response are projected 2D mm. A saved
+recipe records both the original input and resolved evidence. Balloon label-only
+changes rerender from cached projections; changing source anchors invalidates
+the view projection cache because geometric attachment and visibility must be
+checked again. BOM metadata edits are model changes and retain the complete-model
+cache invalidation rule.
+
+`examples/assembly-bom.drawing.json` adds a BOM and balloons to the existing
+`examples/assembly.create.json` design. It leaves the older assembly drawing
+recipe unchanged.
 
 ## Dimensions and notes
 
@@ -212,6 +317,12 @@ are a unique nonempty subset of `svg`, `pdf`, and `dxf`.
   separate geometry and annotations. Hatching is clipped LINE entities on its
   own layer, not a CAD editor's associative HATCH object. These are view
   projections, not automatically approved laser-cut or manufacturing profiles.
+
+When `bom: true`, the complete table must fit the selected sheet with its views;
+long metadata wraps and an oversized table fails explicitly. Rows are never
+truncated or silently split across pages. JSON/CSV sidecars are included in
+addition to the requested `svg`/`pdf`/`dxf` geometry formats, for at most ten
+artifacts (six DXFs, two sheets and two BOM tables).
 
 The response contains artifact paths and byte counts, measured dimensions,
 sheet dimensions, scale, `layout`, `view_layouts`, a recipe path, and a manifest

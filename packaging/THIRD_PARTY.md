@@ -3,6 +3,9 @@
 Open CASCADE Technology 8.0.1 is distributed under its upstream LGPL 2.1
 license and Open CASCADE exception. Exact license texts are in `occt/`.
 Upstream source: https://github.com/Open-Cascade-SAS/OCCT/tree/V8_0_1
+The pinned build includes the `agentcad-hlr-midpoint-v1` modification. Its
+reproducible patch, scope and complete modified sources are retained as
+`occt/PatchOcctHlr.cmake`, `occt/OCCT-HLR-PATCH.md` and `occt/modified/`.
 
 nlohmann JSON 3.12.0 is distributed under its upstream MIT license, retained
 in `nlohmann-json/`. Source: https://github.com/nlohmann/json/tree/v3.12.0

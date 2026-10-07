@@ -12,11 +12,26 @@
 - SHA-256: `0d6913eae4bcc09a3653ceced6dda1aec11c35a1513d4c06762c9b002092c68a`.
 
 The main CMake project requires exactly 8.0.1 and the native translation unit
-checks `OCC_VERSION_HEX` at compile time. The optional dependency build uses
-unmodified upstream source and checksum verification; no copied kernel patch or
-Python compatibility layer is used. Exceptions must remain enabled in Release
+checks `OCC_VERSION_HEX` at compile time. The dependency build verifies that archive
+and applies the checked, reproducible `agentcad-hlr-midpoint-v1` modification in
+`cmake/dependencies/PatchOcctHlr.cmake`. Two HLR checks that discard intersection
+counts use a bounded dense BSpline ray grid, falling back to the original grid
+when no qualified occluder is found. Count-dependent calls retain their original
+solver. Source geometry, topology, object layouts and existing public symbols
+remain unchanged. This is an OCCT 8.0.1 modification, not a kernel upgrade or a
+Python compatibility layer. Exceptions must remain enabled in Release
 (`BUILD_RELEASE_DISABLE_EXCEPTIONS=OFF`). The dependency recipe builds shared
 libraries and the required toolkit closure, with GUI integrations disabled.
+The script verifies both input and output hashes for all five modified files;
+SDK notices and portable bundles include the patch, its explanation and complete
+modified source/header files. See
+[OCCT-HLR-PATCH.md](../cmake/dependencies/OCCT-HLR-PATCH.md) for its scope.
+The SDK records the installed TKHLR hashes in its modification manifest.
+Portable packaging verifies the selected library against that record before
+claiming the patch in provenance; mismatched SDKs and notices fail explicitly.
+Existing unmodified SDKs retain the previous cold-drawing behavior; rebuild with
+the dependency recipe to use the optimization and its geometry regression suite.
+Patch and notice script changes invalidate their dependency-build steps.
 
 The local initial build uses an existing OCCT 8.0.1 SDK. This is a development
 configuration, not a runtime link to the Rust API and not proof of portable
@@ -73,8 +88,9 @@ the cache automatically. Packaging and service-test changes do not change the SD
 
 Original project code has no selected license yet. The owner should choose one
 before public publication; no license was inferred from sibling projects.
-No third-party source or library is checked into the project. Dependency downloads
-stay under ignored build/cache directories.
+No third-party library is checked into the project. The reproducible OCCT patch
+contains upstream source context with its attribution; complete dependency source
+downloads stay under ignored build/cache directories.
 
 OCCT carries its upstream LGPL 2.1 terms with the Open CASCADE exception;
 nlohmann JSON carries its upstream MIT terms. Consult the exact release license

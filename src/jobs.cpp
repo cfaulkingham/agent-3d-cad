@@ -508,7 +508,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return public_job(state);
   }
   const auto tool = text_field(arguments, "tool");
-  if (tool != "cad_create" && tool != "cad_apply" && tool != "cad_restore" && tool != "cad_import" && tool != "cad_query" && tool != "cad_export" && tool != "cad_drawing" && tool != "cad_preview" && tool != "cad_view")
+    if (tool != "cad_create" && tool != "cad_apply" && tool != "cad_restore" && tool != "cad_import" && tool != "cad_query" && tool != "cad_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

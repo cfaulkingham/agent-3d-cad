@@ -9,6 +9,7 @@
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
@@ -32,6 +33,8 @@
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRep_Tool.hxx>
@@ -60,6 +63,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Lin.hxx>
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
 #include <Message_PrinterOStream.hxx>
@@ -72,6 +76,7 @@
 #include <sstream>
 #include <fstream>
 #include <set>
+#include <tuple>
 
 static_assert(OCC_VERSION_HEX == 0x080001, "agent-3d-cad requires OCCT 8.0.1");
 
@@ -96,10 +101,18 @@ private:
   std::size_t limit_;
 };
 using ShapeMap = NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher>;
+struct AssemblyPart {
+  std::string id, input;
+  gp_Trsf transform;
+  TopoDS_Shape shape;
+};
 struct FeatureGeometry {
   TopoDS_Shape shape;
   ShapeMap faces, edges;
   Json provenance;
+  std::vector<AssemblyPart> parts;
+  Json mates = Json::array();
+  std::vector<std::string> face_parts, edge_parts;
   explicit FeatureGeometry(const TopoDS_Shape& value) : shape(value) {
     TopExp::MapShapes(shape, TopAbs_FACE, faces);
     TopExp::MapShapes(shape, TopAbs_EDGE, edges);
@@ -287,6 +300,126 @@ gp_Dir parameter_direction(const Json& value, const Json& parameters) {
 gp_Ax2 parameter_plane(const Json& value, const Json& parameters) {
   return gp_Ax2(parameter_point(value.at("origin"),parameters), parameter_direction(value.at("normal"),parameters), parameter_direction(value.at("x_direction"),parameters));
 }
+gp_Trsf placement_transform(const Json& value, const Json& parameters) {
+  gp_Trsf result;
+  if (value.contains("rotation")) {
+    const auto& rotation=value.at("rotation");
+    result.SetRotation(gp_Ax1(parameter_point(rotation.at("origin"),parameters),parameter_direction(rotation.at("axis"),parameters)),
+      scalar(rotation.at("angle_deg"),parameters,"deg")*std::numbers::pi/180);
+  }
+  if (value.contains("translation")) {
+    const auto delta=vector3(value.at("translation"),parameters);
+    gp_Trsf translation; translation.SetTranslation(gp_Vec(delta[0],delta[1],delta[2]));
+    result=translation*result;
+  }
+  return result;
+}
+gp_Trsf local_frame(const Json& value,const Json& parameters) {
+  // SetTransformation maps world coordinates into the frame; inversion gives
+  // the local-to-world placement used in the mate composition below.
+  gp_Trsf result; result.SetTransformation(gp_Ax3(parameter_plane(value,parameters)));
+  result.Invert(); return result;
+}
+Json matrix(const gp_Trsf& transform) {
+  Json result=Json::array();
+  for (int row=1;row<=3;++row) for (int column=1;column<=4;++column) result.push_back(transform.Value(row,column));
+  for (const auto value:{0,0,0,1}) result.push_back(value);
+  return result;
+}
+FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
+                               const std::map<std::string,FeatureGeometry>& sources,
+                               Json& history,bool& history_truncated) {
+  const auto& parts=feature.at("parts");
+  std::map<std::string,const Json*> incoming;
+  if (feature.contains("mates")) for (const auto& mate:feature.at("mates")) incoming.emplace(text_field(mate,"child"),&mate);
+  std::map<std::string,gp_Trsf> transforms;
+  // The document validates a forest. Resolve parents first independently of
+  // the serialization order of either the parts or the mates.
+  while (transforms.size()<parts.size()) {
+    bool progress=false;
+    for (const auto& part:parts) {
+      const auto id=text_field(part,"id");
+      if (transforms.contains(id)) continue;
+      const auto relation=incoming.find(id);
+      if (relation==incoming.end()) {
+        transforms.emplace(id,placement_transform(part.value("placement",Json::object()),parameters));
+      } else {
+        const auto& mate=*relation->second;
+        const auto parent=transforms.find(text_field(mate,"parent"));
+        if (parent==transforms.end()) continue;
+        try {
+          gp_Trsf offset,rotation;
+          if (mate.contains("offset")) {
+            const auto delta=vector3(mate.at("offset"),parameters);
+            offset.SetTranslation(gp_Vec(delta[0],delta[1],delta[2]));
+          }
+          if (mate.contains("angle_deg")) rotation.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),
+            scalar(mate.at("angle_deg"),parameters,"deg")*std::numbers::pi/180);
+          transforms.emplace(id,parent->second*local_frame(mate.at("parent_frame"),parameters)*offset*rotation*
+            local_frame(mate.at("child_frame"),parameters).Inverted());
+        } catch (const Standard_Failure& e) {
+          throw Error("kernel_failure",e.what(),{{"part_id",id},{"mate_id",mate.at("id")}});
+        }
+      }
+      progress=true;
+    }
+    if (!progress) throw Error("invalid_model","Assembly mate graph cannot be resolved");
+  }
+  BRep_Builder builder; TopoDS_Compound compound; builder.MakeCompound(compound);
+  std::vector<AssemblyPart> resolved;
+  std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> operations;
+  for (const auto& part:parts) {
+    const auto id=text_field(part,"id"),input=text_field(part,"input");
+    try {
+      // copyGeom=true keeps repeated, coincident parts independent, including
+      // identity placements. No Boolean operation changes their solid volumes.
+      auto operation=std::make_unique<BRepBuilderAPI_Transform>(sources.at(input).shape,transforms.at(id),true);
+      if (!operation->IsDone()) throw Error("kernel_failure","Assembly part placement failed",{{"part_id",id}});
+      check_shape(operation->Shape());
+      resolved.push_back({id,input,transforms.at(id),operation->Shape()});
+      builder.Add(compound,operation->Shape());
+      operations.push_back(std::move(operation));
+    } catch (const Error& e) {
+      auto details=e.details; details["part_id"]=id; throw Error(e.code,e.what(),details);
+    } catch (const Standard_Failure& e) { throw Error("kernel_failure",e.what(),{{"part_id",id}}); }
+  }
+  check_shape(compound);
+  FeatureGeometry result(compound); result.parts=std::move(resolved);
+  result.face_parts.resize(result.faces.Extent()+1); result.edge_parts.resize(result.edges.Extent()+1);
+  for (std::size_t p=0;p<result.parts.size();++p) {
+    const auto& part=result.parts[p];
+    const FeatureGeometry geometry(part.shape);
+    for (const auto& [source,target,owners]:std::initializer_list<std::tuple<const ShapeMap*,const ShapeMap*,std::vector<std::string>*>>{
+        {&geometry.faces,&result.faces,&result.face_parts},{&geometry.edges,&result.edges,&result.edge_parts}}) {
+      for (int i=1;i<=source->Extent();++i) {
+        const int index=target->FindIndex((*source)(i));
+        if (!index || !(*owners)[index].empty()) throw Error("kernel_failure","Assembly topology ownership is ambiguous",{{"part_id",part.id}});
+        (*owners)[index]=part.id;
+      }
+    }
+    const auto start=history.size();
+    record_history(*operations[p],sources.at(part.input),part.input,result,history,history_truncated);
+    for (std::size_t i=start;i<history.size();++i) history[i]["part_id"]=part.id;
+  }
+  for (const auto* owners:{&result.face_parts,&result.edge_parts})
+    for (std::size_t i=1;i<owners->size();++i) if ((*owners)[i].empty()) throw Error("kernel_failure","Assembly topology has no owning part");
+  if (feature.contains("mates")) for (const auto& mate:feature.at("mates"))
+    result.mates.push_back({{"id",mate.at("id")},{"type",mate.at("type")},{"parent",mate.at("parent")},{"child",mate.at("child")}});
+  return result;
+}
+Json feature_provenance(const Json& feature,const Json& history,bool history_truncated) {
+  Json dependencies=Json::array();
+  for (const auto* key:{"input","left","right"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
+  if (feature.contains("sections")) dependencies=feature.at("sections");
+  if (feature.at("type")=="assembly") {
+    std::set<std::string> added;
+    for (const auto& part:feature.at("parts")) if (added.insert(text_field(part,"input")).second) dependencies.push_back(part.at("input"));
+  }
+  Json result={{"feature_id",feature.at("id")},{"feature_type",feature.at("type")},{"dependencies",dependencies},
+    {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
+  if (feature.at("type")=="import_step") result["content_sha256"]=feature.at("sha256");
+  return result;
+}
 TopoDS_Face sketch_face(const Json& profile, const Json& parameters, const gp_Ax2& plane) {
   const auto kind = text_field(profile,"type");
   TopoDS_Wire wire;
@@ -389,6 +522,7 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
     const auto type = text_field(feature, "type");
     try {
       TopoDS_Shape shape;
+      std::unique_ptr<FeatureGeometry> assembly;
       Json history=Json::array();
       bool history_truncated=false;
       const auto position = feature.contains("origin") ? vector3(feature.at("origin"), parameters) : std::array<double,3>{0,0,0};
@@ -451,17 +585,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         if (!operation.IsDone()) throw Error("kernel_failure","Sweep failed");
         shape=operation.Shape();
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
+      } else if (type == "assembly") {
+        assembly=std::make_unique<FeatureGeometry>(build_assembly(feature,parameters,impl_->features,history,history_truncated));
+        shape=assembly->shape;
       } else if (type == "transform" || type == "instance") {
-        gp_Trsf transform;
-        if (feature.contains("rotation")) {
-          const auto& rotation = feature.at("rotation");
-          transform.SetRotation(gp_Ax1(parameter_point(rotation.at("origin"),parameters),parameter_direction(rotation.at("axis"),parameters)),scalar(rotation.at("angle_deg"),parameters,"deg")*std::numbers::pi/180);
-        }
-        if (feature.contains("translation")) {
-          const auto delta=vector3(feature.at("translation"),parameters);
-          gp_Trsf translation; translation.SetTranslation(gp_Vec(delta[0],delta[1],delta[2]));
-          transform=translation*transform;
-        }
+        const auto transform=placement_transform(feature,parameters);
         BRepBuilderAPI_Transform operation(shapes.at(text_field(feature,"input")),transform,true);
         if (!operation.IsDone()) throw Error("kernel_failure","Transform failed");
         shape=operation.Shape();
@@ -565,13 +693,8 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       }
       if (type != "sketch") check_shape(shape);
       shapes.emplace(id, shape);
-      impl_->features.emplace(id, FeatureGeometry(shape));
-      Json dependencies=Json::array();
-      for (const auto* key : {"input","left","right"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
-      if (feature.contains("sections")) dependencies=feature.at("sections");
-      impl_->features.at(id).provenance={{"feature_id",id},{"feature_type",type},{"dependencies",dependencies},
-        {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
-      if (type == "import_step") impl_->features.at(id).provenance["content_sha256"]=feature.at("sha256");
+      impl_->features.emplace(id,assembly ? std::move(*assembly) : FeatureGeometry(shape));
+      impl_->features.at(id).provenance=feature_provenance(feature,history,history_truncated);
     } catch (const Error& e) {
       auto details = e.details; details["feature_id"] = id;
       throw Error(e.code, e.what(), details);
@@ -590,6 +713,19 @@ BuiltModel::BuiltModel(const Json& model, const Json& snapshot) : impl_(std::mak
     for(const auto& feature:model.at("features")) {
       const auto id=text_field(feature,"id");
       const auto& entry=snapshot.at("features").at(id);
+      if (feature.at("type")=="assembly") {
+        if (!entry.value("assembly",false)) throw Error("cache_miss","Missing cached assembly marker");
+        // Recompute placements and ownership from saved intent and restored
+        // exact input shapes. B-rep deserialization cannot prove old enumeration
+        // IDs still denote the same part, so none are trusted from the cache.
+        Json history=Json::array(); bool truncated=false;
+        auto geometry=build_assembly(feature,model.at("parameters"),impl_->features,history,truncated);
+        if (geometry.faces.Extent()!=entry.at("faces") || geometry.edges.Extent()!=entry.at("edges"))
+          throw Error("cache_miss","Cached assembly topology count mismatch");
+        geometry.provenance=feature_provenance(feature,history,truncated);
+        impl_->features.emplace(id,std::move(geometry));
+        continue;
+      }
       std::istringstream stream(entry.at("brep").get<std::string>());
       TopoDS_Shape shape; BRepTools::Read(shape,stream,BRep_Builder{});
       if(stream.fail() || shape.IsNull()) throw Error("cache_miss","Cannot read cached B-rep");
@@ -608,6 +744,10 @@ Json BuiltModel::snapshot() const {
   try {
     Json features=Json::object(); std::size_t bytes=0;
     for(const auto& [id,geometry]:impl_->features) {
+      if (!geometry.parts.empty()) {
+        features[id]={{"assembly",true},{"faces",geometry.faces.Extent()},{"edges",geometry.edges.Extent()}};
+        continue;
+      }
       SnapshotBuffer buffer(32*1024*1024-bytes); std::ostream stream(&buffer);
       // Tessellation is derived data. Store exact curves, surfaces and topology.
       BRepTools::Write(geometry.shape,stream,false,false,TopTools_FormatVersion_CURRENT);
@@ -624,7 +764,8 @@ BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
 BuiltModel& BuiltModel::operator=(BuiltModel&&) noexcept = default;
 
 Json BuiltModel::summary(const std::string& feature_id) const {
-  const auto& shape = impl_->feature(feature_id).shape;
+  const auto& geometry = impl_->feature(feature_id);
+  const auto& shape = geometry.shape;
   const auto solids = count(shape, TopAbs_SOLID);
   GProp_GProps volume, area;
   if (solids) BRepGProp::VolumeProperties(shape, volume);
@@ -633,11 +774,20 @@ Json BuiltModel::summary(const std::string& feature_id) const {
   BRepBndLib::AddOptimal(shape, box, false, false);
   const auto limits = box.Get();
   const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
-  return {{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
+  Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
     {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
     {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
     {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
     {"edge_count", count(shape, TopAbs_EDGE)}};
+  if (!geometry.parts.empty()) {
+    result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
+    for (const auto& part:geometry.parts) {
+      GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
+      result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
+        {"bounds_mm",bounds(part.shape)},{"volume_mm3",mass.Mass()}});
+    }
+  }
+  return result;
 }
 
 Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limits) const {
@@ -654,6 +804,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       BRepAdaptor_Surface surface(face);
       Json item = {{"id", "face-" + std::to_string(i)}, {"surface_kind", surface_kind(surface.GetType())},
         {"area_mm2", props.Mass()}, {"center_mm", point(props.CentreOfMass())}, {"bounds_mm", bounds(face)}};
+      if (!geometry.parts.empty()) item["part_id"]=geometry.face_parts[i];
       if (surface.GetType() == GeomAbs_Plane) {
         auto normal = surface.Plane().Axis().Direction();
         if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
@@ -661,10 +812,17 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       }
       result["faces"].push_back(item);
     }
-    for (int i = 1; i <= geometry.edges.Extent(); ++i) result["edges"].push_back(edge_descriptor(TopoDS::Edge(geometry.edges(i)), i));
+    for (int i = 1; i <= geometry.edges.Extent(); ++i) {
+      auto edge=edge_descriptor(TopoDS::Edge(geometry.edges(i)),i);
+      if (!geometry.parts.empty()) edge["part_id"]=geometry.edge_parts[i];
+      result["edges"].push_back(std::move(edge));
+    }
     // A pick suggests a geometric rule only when that rule is unique here. The
     // caller must keep the rule, never the enumeration ID, for future rebuilds.
     for (auto& edge : result["edges"]) {
+      // Assembly picks identify editable source parts. A geometric rule on the
+      // placed aggregate is not an edit rule for those source coordinates.
+      if (!geometry.parts.empty()) continue;
       if (edge.at("degenerate") == true) continue;
       if (edge.at("length_mm").get<double>() > 1e6) continue;
       const auto center = edge.at("center_mm").get<std::array<double,3>>();
@@ -725,7 +883,9 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
         total_points += sampling.NbPoints();
         for (int node = 1; node <= sampling.NbPoints(); ++node) points.push_back(point(sampling.Value(node)));
       }
-      result["edges"].push_back({{"id", "edge-" + std::to_string(i)}, {"points", points}});
+      Json item={{"id", "edge-" + std::to_string(i)}, {"points", points}};
+      if (!geometry.parts.empty()) item["part_id"]=geometry.edge_parts[i];
+      result["edges"].push_back(std::move(item));
     }
     return result;
   } catch (const Standard_Failure& e) { throw Error("kernel_failure", e.what(), {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
@@ -747,6 +907,73 @@ gp_Ax2 drawing_frame(const std::string& orientation, const std::string& section_
   if (orientation == "isometric")
     return gp_Ax2(gp_Pnt(0,0,0), gp_Dir(1,-1,1), gp_Dir(1,1,0));
   throw Error("invalid_argument", "Unknown drawing orientation or section axis");
+}
+Json balloon_anchors(const Json& requested,const std::vector<AssemblyPart>& parts,
+                     const TopoDS_Shape& shape,const gp_Ax2& frame,const std::string& feature_id) {
+  constexpr double tolerance=1e-5;
+  if (parts.empty()) throw Error("invalid_argument","Balloons require an assembly output",{{"feature_id",feature_id}});
+  if (!requested.is_array() || requested.empty() || requested.size()>64)
+    throw Error("invalid_argument","A view permits 1 to 64 balloon anchors",{{"feature_id",feature_id}});
+  struct Boundary { TopoDS_Shape shape; Bnd_Box box; };
+  std::map<std::string,Boundary> boundaries;
+  for (const auto& part:parts) {
+    // Solid-point distance is zero for an arbitrary interior point. Distance
+    // to a compound of boundary faces is the required surface attachment test.
+    BRep_Builder builder; TopoDS_Compound boundary; builder.MakeCompound(boundary);
+    ShapeMap faces; TopExp::MapShapes(part.shape,TopAbs_FACE,faces);
+    for (int i=1;i<=faces.Extent();++i) builder.Add(boundary,faces(i));
+    Bnd_Box box; BRepBndLib::AddOptimal(part.shape,box,false,false); box.Enlarge(tolerance);
+    boundaries.emplace(part.id,Boundary{boundary,box});
+  }
+  Bnd_Box box; BRepBndLib::AddOptimal(shape,box,false,false);
+  const auto limits=box.Get();
+  const double ray_length=std::hypot(limits.Xmax-limits.Xmin,limits.Ymax-limits.Ymin,limits.Zmax-limits.Zmin)+1;
+  IntCurvesFace_ShapeIntersector ray;
+  ray.Load(shape,1e-7);
+  Json result=Json::array(); std::set<std::string> seen;
+  for (const auto& anchor:requested) {
+    std::string part_id;
+    try {
+      fields(anchor,{"part_id","point"}); part_id=text_field(anchor,"part_id");
+      if (!seen.insert(part_id).second) throw Error("invalid_argument","A view repeats a balloon part");
+      const auto part=std::find_if(parts.begin(),parts.end(),[&](const auto& item){return item.id==part_id;});
+      if (part==parts.end()) throw Error("selection_missing","Balloon refers to an unknown assembly part");
+      const auto source=parameter_point(anchor.at("point"),Json::object());
+      const auto world=source.Transformed(part->transform);
+      const auto vertex=BRepBuilderAPI_MakeVertex(world).Vertex();
+      BRepExtrema_DistShapeShape distance(vertex,boundaries.at(part_id).shape);
+      if (!distance.IsDone() || !std::isfinite(distance.Value())) throw Error("kernel_failure","Cannot verify balloon boundary attachment");
+      if (distance.Value()>tolerance) throw Error("selection_missing","Balloon anchor is not on the named part boundary",
+        {{"distance_mm",distance.Value()},{"tolerance_mm",tolerance}});
+      const auto attached=distance.PointOnShape2(1);
+      for (int i=2;i<=distance.NbSolution();++i) if (attached.Distance(distance.PointOnShape2(i))>1e-7)
+        throw Error("selection_ambiguous","Balloon anchor is equally close to distinct boundary locations");
+      const auto attached_vertex=BRepBuilderAPI_MakeVertex(attached).Vertex();
+      for (const auto& [other,boundary]:boundaries) {
+        if (other==part_id || boundary.box.IsOut(attached)) continue;
+        BRepExtrema_DistShapeShape coincidence(attached_vertex,boundary.shape);
+        if (!coincidence.IsDone()) throw Error("kernel_failure","Cannot verify balloon part ownership");
+        if (coincidence.Value()<=tolerance) throw Error("selection_ambiguous","Balloon anchor touches another part boundary",
+          {{"other_part_id",other},{"tolerance_mm",tolerance}});
+      }
+      // The drawing frame's +Z points toward the orthographic camera. Any
+      // boundary farther along that ray occludes the anchor, including a back
+      // face of this same part. Tangential hits are conservatively occluding.
+      ray.Perform(gp_Lin(attached,frame.Direction()),-tolerance,ray_length);
+      if (!ray.IsDone()) throw Error("kernel_failure","Cannot verify balloon anchor visibility");
+      for (int i=1;i<=ray.NbPnt();++i) if (ray.WParameter(i)>tolerance)
+        throw Error("invalid_drawing","Balloon anchor is occluded in this view",{{"occlusion_distance_mm",ray.WParameter(i)}});
+      const gp_Vec position(frame.Location(),attached);
+      result.push_back({{"part_id",part_id},{"point",{position.Dot(gp_Vec(frame.XDirection())),position.Dot(gp_Vec(frame.YDirection()))}}});
+    } catch (const Error& e) {
+      auto details=e.details; details["feature_id"]=feature_id;
+      if (!part_id.empty()) details["part_id"]=part_id;
+      throw Error(e.code,e.what(),details);
+    } catch (const Standard_Failure& e) {
+      throw Error("kernel_failure",e.what(),{{"feature_id",feature_id},{"part_id",part_id}});
+    }
+  }
+  return result;
 }
 
 double drawing_number(double value) {
@@ -963,12 +1190,45 @@ Json BuiltModel::drawing(const Json& spec) const {
   DrawingBudget budget;
   Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance}};
   std::set<std::string> ids;
+  std::size_t anchor_count=0;
   for (const auto& view : spec.at("views")) {
-    fields(view,{"id","orientation"},{"section","hatch"});
+    fields(view,{"id","orientation"},{"section","hatch","explode","balloon_anchors"});
     const auto id = text_field(view,"id"); identifier(id);
     if (!ids.insert(id).second) throw Error("invalid_argument", "Drawing view IDs must be unique", {{"view_id",id}});
     try {
       const auto orientation = text_field(view,"orientation");
+      TopoDS_Shape view_shape=impl_->shape;
+      auto view_parts=impl_->feature("").parts;
+      if (view.contains("explode")) {
+        const auto& geometry=impl_->feature("");
+        if (geometry.parts.empty()) throw Error("invalid_argument","Exploded views require an assembly output");
+        const auto& explode=view.at("explode");
+        if (!explode.is_array() || explode.empty() || explode.size()>64)
+          throw Error("invalid_argument","Exploded views require 1 to 64 part translations");
+        std::map<std::string,gp_Trsf> translations;
+        for (const auto& item:explode) {
+          fields(item,{"part_id","translation"});
+          const auto part_id=text_field(item,"part_id");
+          if (std::none_of(geometry.parts.begin(),geometry.parts.end(),[&](const auto& part){return part.id==part_id;}))
+            throw Error("invalid_argument","Exploded view refers to an unknown assembly part",{{"part_id",part_id}});
+          const auto delta=vector3(item.at("translation"),Json::object());
+          gp_Trsf translation; translation.SetTranslation(gp_Vec(delta[0],delta[1],delta[2]));
+          if (!translations.emplace(part_id,translation).second)
+            throw Error("invalid_argument","Exploded view repeats a part",{{"part_id",part_id}});
+        }
+        BRep_Builder builder; TopoDS_Compound compound; builder.MakeCompound(compound);
+        for (auto& part:view_parts) {
+          const auto found=translations.find(part.id);
+          const gp_Trsf translation=found==translations.end() ? gp_Trsf{} : found->second;
+          // Translations are world coordinates applied after mate placement.
+          // Copy every part so projections never mutate the assembled result.
+          BRepBuilderAPI_Transform copy(part.shape,translation,true);
+          if (!copy.IsDone()) throw Error("kernel_failure","Exploded part placement failed",{{"part_id",part.id}});
+          builder.Add(compound,copy.Shape());
+          part.shape=copy.Shape(); part.transform=translation*part.transform;
+        }
+        view_shape=compound;
+      }
       if (view.contains("hatch") && (orientation!="section" || !view.at("hatch").is_boolean()))
         throw Error("invalid_argument", "Only section views accept a boolean hatch flag");
       std::string axis;
@@ -979,6 +1239,13 @@ Json BuiltModel::drawing(const Json& spec) const {
         axis = text_field(view.at("section"),"axis"); offset = number(view.at("section").at("offset"));
       } else if (view.contains("section")) throw Error("invalid_argument", "Only section views accept a section plane");
       const auto frame = drawing_frame(orientation,axis);
+      Json projected_anchors;
+      if (view.contains("balloon_anchors")) {
+        if (orientation=="section") throw Error("invalid_argument","Section balloons are not supported",{{"feature_id",impl_->output}});
+        anchor_count+=view.at("balloon_anchors").size();
+        if (anchor_count>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",impl_->output}});
+        projected_anchors=balloon_anchors(view.at("balloon_anchors"),view_parts,view_shape,frame,impl_->output);
+      }
       DrawingView projected(budget);
       Json regions=Json::array();
       if (orientation == "section") {
@@ -988,7 +1255,7 @@ Json BuiltModel::drawing(const Json& spec) const {
         else location.SetZ(offset);
         const auto plane = BRepBuilderAPI_MakeFace(gp_Pln(location,frame.Direction())).Face();
         NCollection_List<TopoDS_Shape> arguments, tools;
-        arguments.Append(impl_->shape); tools.Append(plane);
+        arguments.Append(view_shape); tools.Append(plane);
         BRepAlgoAPI_Section section;
         section.SetArguments(arguments); section.SetTools(tools);
         section.SetNonDestructive(true); section.SetRunParallel(false);
@@ -1004,7 +1271,7 @@ Json BuiltModel::drawing(const Json& spec) const {
           // Pattern compounds may contain interfering solids. Boolean common
           // on that entire compound is not a reliable material classification;
           // intersect each solid and let the renderer union its hatch intervals.
-          ShapeMap solids; TopExp::MapShapes(impl_->shape,TopAbs_SOLID,solids);
+          ShapeMap solids; TopExp::MapShapes(view_shape,TopAbs_SOLID,solids);
           for (int s=1;s<=solids.Extent();++s) {
             NCollection_List<TopoDS_Shape> solid_argument; solid_argument.Append(solids(s));
             BRepAlgoAPI_Common material;
@@ -1024,7 +1291,7 @@ Json BuiltModel::drawing(const Json& spec) const {
         }
       } else {
         occ::handle<HLRBRep_Algo> algorithm = new HLRBRep_Algo;
-        algorithm->Add(impl_->shape,0);
+        algorithm->Add(view_shape,0);
         algorithm->Projector(HLRAlgo_Projector(frame));
         algorithm->Update(); algorithm->Hide();
         HLRBRep_HLRToShape extraction(algorithm);
@@ -1043,6 +1310,8 @@ Json BuiltModel::drawing(const Json& spec) const {
       if (projected.entities.empty()) throw Error(orientation == "section" ? "empty_section" : "empty_projection", "Drawing view contains no curves");
       const auto b = projected.bounds.Get();
       Json output={{"id",id},{"orientation",orientation},{"bounds_mm",{b.Xmin,b.Ymin,b.Xmax,b.Ymax}},{"entities",std::move(projected.entities)}};
+      if (view.contains("explode")) output["explode"]=view.at("explode");
+      if (!projected_anchors.is_null()) output["balloon_anchors"]=std::move(projected_anchors);
       if (orientation=="section" && view.value("hatch",true)) output["section_regions"]=std::move(regions);
       result["views"].push_back(std::move(output));
     } catch (const Error& e) {

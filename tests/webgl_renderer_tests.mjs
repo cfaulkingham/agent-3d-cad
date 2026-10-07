@@ -11,7 +11,7 @@ function test(name,action){action();checks++;console.log('PASS '+name);}
 const scheduled=new Map();let nextFrame=1;
 const environment={console,requestAnimationFrame:callback=>{const id=nextFrame++;scheduled.set(id,callback);return id;},cancelAnimationFrame:id=>scheduled.delete(id),devicePixelRatio:2};
 vm.runInNewContext(source,environment);
-const Renderer=environment.CadRenderer,{validate,prepare,project,screenRay,pick,trace,camera,gpuData}=Renderer.math;
+const Renderer=environment.CadRenderer,{validate,prepare,visibleModel,project,screenRay,pick,trace,camera,gpuData}=Renderer.math;
 const defaultCamera={yaw:0,pitch:Math.PI/2,zoom:1,pan:[0,0]};
 function evaluation(positions,triangles,triangleFaces,edges=[]) {
   return {schema_version:1,document_id:'test',revision:1,evaluation_id:'evaluation-a',feature_id:'part',
@@ -21,6 +21,15 @@ function evaluation(positions,triangles,triangleFaces,edges=[]) {
 }
 const flat=[[-1,-1,0],[1,-1,0],[-1,1,0]];
 const base=evaluation(flat,[[0,1,2]],['face-1']);
+function assembly() {
+  const data=evaluation([...flat,...flat.map(([x,y])=>[x,y,.5])],[[0,1,2],[3,4,5]],['face-1','face-2'],[
+    {id:'edge-1',part_id:'base',points:[[-.8,-.4,0],[.2,-.4,0]]},
+    {id:'edge-2',part_id:'cover',points:[[-.8,-.4,.5],[.2,-.4,.5]]}
+  ]);
+  data.summary.assembly={parts:[{id:'base',input:'plate',bounds_mm:{min:[-1,-1,0],max:[1,1,0]}},{id:'cover',input:'plate',bounds_mm:{min:[-1,-1,.5],max:[1,1,.5]}}],mates:[]};
+  for(let i=0;i<2;i++){data.topology.faces[i].part_id=i?'cover':'base';data.topology.edges[i].part_id=i?'cover':'base';}
+  return data;
+}
 function at(model,point,mode='face',view=defaultCamera){const p=project(point,view,400,400);return pick(model,view,400,400,p[0],p[1],mode);}
 test('payload validates exact mapping',()=>assert.equal(validate(base),base));
 for(const [name,modify] of [
@@ -85,6 +94,24 @@ test('GPU faces and lines retain the exact topology numbers',()=>{
   const d=structuredClone(base);d.mesh.edges=[{id:'edge-1',points:[flat[0],flat[1]]}];d.topology.edges=[{id:'edge-1'}];const buffers=gpuData(prepare(d));
   assert.equal(buffers.faces.length,21);assert.equal(buffers.edges.length,8);assert.equal(buffers.faces[6],1);assert.equal(buffers.edges[3],1);assert.equal(buffers.ranges.get('edge-1').count,2);
 });
+test('hidden assembly parts neither draw nor occlude visible face and edge picks',()=>{
+  const data=assembly(),original=JSON.stringify(data),full=prepare(data),shown=visibleModel(full,['cover']);
+  assert.equal(at(full,[-.1,-.1,0]).id,'face-2');assert.equal(at(shown,[-.1,-.1,0]).id,'face-1');
+  assert.equal(at(shown,[-.1,-.1,0],'edge').id,'edge-1');
+  assert.equal(shown.indices.length,3);assert.equal(shown.edges.length,1);assert.equal(gpuData(shown).faces.length,21);assert.equal(gpuData(shown).edges.length,8);
+  assert.equal(shown.identity,full.identity);assert.equal(shown.positions,full.positions);assert.equal(shown.faceNumbers.get('face-1'),full.faceNumbers.get('face-1'));assert.equal(JSON.stringify(data),original);
+});
+test('all-hidden geometry remains a valid empty draw/pick model and can be restored',()=>{
+  const full=prepare(assembly()),empty=visibleModel(full,['cover','base']);
+  assert.equal(empty.indices.length,0);assert.equal(empty.bounds,null);assert.equal(at(empty,[0,0,0]).id,null);assert.equal(at(empty,[0,0,0],'edge').id,null);
+  assert.equal(gpuData(empty).faces.length,0);assert.equal(gpuData(empty).edges.length,0);assert.equal(visibleModel(full,[]),full);
+  assert.throws(()=>visibleModel(full,['missing']));assert.throws(()=>visibleModel(full,['base','base']));
+});
+test('assembly ownership is validated before presentation filtering',()=>{
+  for(const alter of [data=>delete data.topology.faces[0].part_id,data=>data.mesh.edges[0].part_id='cover',data=>data.summary.assembly.parts[0].bounds_mm.max[0]=10]) {
+    const data=assembly();alter(data);assert.throws(()=>prepare(data));
+  }
+});
 function mockCanvas({webgl2=true,unavailable=false}={}) {
   const stats={createdBuffers:0,deletedBuffers:0,createdPrograms:0,deletedPrograms:0,draws:0,listeners:new Map(),contexts:[],dimensions:[]};let id=0;
   const gl=new Proxy({NO_ERROR:0,COMPILE_STATUS:1,LINK_STATUS:2,MAX_RENDERBUFFER_SIZE:3,MAX_VIEWPORT_DIMS:4,ALIASED_LINE_WIDTH_RANGE:5,
@@ -116,6 +143,19 @@ test('camera survives reload; reset and explicit replacement are available',()=>
   const copy=renderer.getCamera();copy.pan[0]=9;assert.equal(JSON.stringify(renderer.getCamera()),saved);
   renderer.load(base,{preserveCamera:false});assert.equal(renderer.getCamera().zoom,1);renderer.setView('top');assert.equal(renderer.getCamera().pitch,Math.PI/2);renderer.reset();assert.equal(renderer.getCamera().pitch,.6);renderer.destroy();
 });
+test('visibility filters GPU capture/highlights, fits remaining parts, and avoids redundant rebuilds',()=>{
+  const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas),data=assembly();renderer.load(data);renderer.reset();const fullZoom=renderer.getCamera().zoom;
+  renderer.setSelection({...data,kind:'face',entity_id:'face-2'});renderer.setHiddenParts(['cover']);
+  assert.equal(renderer.selection,null);assert.equal(renderer.resources.faceCount,3);assert.equal(renderer.resources.edgeCount,2);
+  assert.throws(()=>renderer.setSelection({...data,kind:'face',entity_id:'face-2'}));
+  const created=stats.createdBuffers,model=renderer.model;renderer.setHiddenParts(['cover']);renderer.setView('front');
+  assert.equal(stats.createdBuffers,created);assert.equal(renderer.model,model);
+  renderer.reset();assert.ok(renderer.getCamera().zoom>fullZoom);renderer.setHiddenParts(['base','cover']);flush();
+  assert.equal(renderer.resources.faceCount,0);assert.equal(renderer.resources.edgeCount,0);assert.match(renderer.capture(),/^data:image\/png/);
+  renderer.reset();assert.ok(Number.isFinite(renderer.getCamera().zoom));renderer.setHiddenParts([]);assert.equal(renderer.resources.faceCount,6);
+  renderer.load({...data,evaluation_id:'evaluation-b'},{hiddenPartIds:['base']});assert.equal(renderer.model.indices.length,3);assert.ok(renderer.model.geometries.face.has('face-2'));
+  renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);
+});
 test('stale references and malformed loads cannot replace a valid model',()=>{
   const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);assert.throws(()=>renderer.setSelection({...base,evaluation_id:'old',kind:'face',entity_id:'face-1'}));
   assert.throws(()=>renderer.load({}));assert.equal(renderer.model.identity.evaluation_id,'evaluation-a');renderer.destroy();
@@ -145,10 +185,20 @@ if(process.argv[2]) {
       const result=spawnSync(executable,['call',tool,'--workspace',workspace,'--input','-'],{input:JSON.stringify(args),encoding:'utf8',timeout:45000,maxBuffer:64*1024*1024});
       assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
     };
-    for(const name of ['plate','bracket','nozzle'])test('native '+name+' mesh prepares and maps without conversion',()=>{
+    for(const name of ['plate','bracket','nozzle','assembly'])test('native '+name+' mesh prepares and maps without conversion',()=>{
       const creation=JSON.parse(fs.readFileSync(new URL('../examples/'+name+'.create.json',import.meta.url),'utf8'));
       call('cad_create',creation);const evaluation=call('cad_query',{document_id:creation.document_id,revision:1,kind:'mesh'}),model=prepare(evaluation),buffers=gpuData(model);
       assert.ok(buffers.faces.length>0);assert.equal(model.faces.length,evaluation.topology.faces.length);assert.equal(model.edges.length,evaluation.topology.edges.length);
+      if(name==='assembly') {
+        const parts=new Set(evaluation.summary.assembly.parts.map(p=>p.id));
+        assert.ok(parts.size>1);
+        for(const face of model.geometries.face.values())assert.ok(parts.has(face.part_id));
+        for(const edge of model.geometries.edge.values())assert.ok(parts.has(edge.part_id));
+        const keep=[...parts][0],filtered=visibleModel(model,[...parts].filter(id=>id!==keep));
+        assert.ok(filtered.indices.length>0&&filtered.indices.length<model.indices.length);
+        for(const face of filtered.geometries.face.values())assert.equal(face.part_id,keep);
+        for(const edge of filtered.geometries.edge.values())assert.equal(edge.part_id,keep);
+      }
       let picked=false;
       for(let i=0;i<model.indices.length;i+=3){const centroid=[0,0,0];for(let j=0;j<3;j++)for(let a=0;a<3;a++)centroid[a]+=model.positions[3*model.indices[i+j]+a]/3;const p=project(centroid,defaultCamera,400,400);if(pick(model,defaultCamera,400,400,p[0],p[1],'face').id){picked=true;break;}}
       assert.ok(picked,'native mesh has a selectable visible face');

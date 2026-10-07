@@ -20,7 +20,11 @@ MCP Apps host; ordinary CLI/MCP clients still receive structured JSON and text.
 Build the pinned shared dependencies with `cmake/dependencies` first. That
 recipe downloads checksum-verified OCCT 8.0.1 and FreeType 2.14.3, disables
 optional external FreeType integrations, installs the required OCCT resources and exact
-upstream notices, and leaves exceptions enabled. `AGENTCAD_SYSTEM_FREETYPE=ON`
+upstream notices, and leaves exceptions enabled. It applies the reproducible
+`agentcad-hlr-midpoint-v1` optimization; bundles include its patch, explanation
+and five complete modified files alongside the upstream notices. SDKs built
+before this change must be rebuilt for the optimization and regression suite.
+`AGENTCAD_SYSTEM_FREETYPE=ON`
 is a developer override whose additional dependency notices require review.
 `AGENTCAD_OCCT_ARCHIVE` and `AGENTCAD_FREETYPE_ARCHIVE` accept offline archives
 without bypassing hash checks. Windows uses a native MSVC x64 developer prompt.

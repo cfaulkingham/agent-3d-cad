@@ -7,15 +7,18 @@ PDF/SVG/DXF drawings through MCP or
 the CLI. Models contain structured intent; they never execute scripts or compile
 code. End-user bundles need no Python, Rust, Node, CMake or compiler.
 
-**Status: native preview, including M4 live viewing and M5 drawings; platform/release evidence is
+**Status: native preview, including M4 live viewing, M5 drawings and M6 assemblies; platform/release evidence is
 tracked in [HANDOFF.md](docs/HANDOFF.md).** The service includes selective fillets,
 workplanes and numeric profiles, extrusion/revolution/loft/sweep, transforms,
 patterns, reusable instances, holes, bounded expressions, immutable STEP imports,
-an offline viewer, and durable bounded jobs. A general sketch constraint solver,
-assemblies, manufacturing certification and remote hosting are outside this scope.
+an offline viewer, durable bounded jobs, and editable assemblies with placements,
+rigid datum mates, BOM exports and exploded drawings with part balloons. A general sketch or mate constraint
+solver, kinematics, manufacturing certification and remote hosting are outside
+this scope.
 
 The service includes a bundled **live MCP App viewer**: a model
-library, feature tree, WebGL rendering, face/edge selection, camera retention,
+library, feature tree, WebGL rendering, face/edge selection, per-part hide/isolate,
+camera retention,
 and Quick Edit requests with exact revision context. An open view follows saved
 edits automatically. The select–edit–refresh workflow has been observed in the
 actual Codex host on macOS arm64. Quick Edit may prepare a chat composer draft
@@ -37,6 +40,9 @@ ctest --test-dir build --output-on-failure
 ```
 
 An existing exact exception-enabled OCCT SDK can be selected with OpenCASCADE_DIR.
+Use the supplied dependency recipe's HLR midpoint patch for the cold-drawing
+optimization and current performance geometry regressions; an unmodified SDK
+retains the previous behavior. The patch and modified source accompany bundles.
 CMake fetches checksum-pinned nlohmann JSON 3.12.0 when not installed. Offline
 build overrides and bundle instructions are in [DISTRIBUTION.md](docs/DISTRIBUTION.md).
 Local convenience presets and SDKs are ignored and are not repository requirements.
@@ -79,6 +85,19 @@ CLI `--input -` reads JSON from stdin. Errors are JSON on stderr with exit code 
 `tools` publishes full input/output schemas. The [protocol](docs/PROTOCOL.md)
 describes feature and selection contracts, limits, errors and persistence.
 
+An `assembly` feature gives reusable source solids distinct part IDs and world
+placements. Rigid mates align explicit parent/child datum frames with editable
+offsets and angles; changing source parameters rebuilds every affected instance.
+Assembly geometry stays separate even where parts touch or overlap. Use
+`set_part_placement`, `set_mate`, and `remove_mate` for atomic arrangement edits,
+and view-specific part offsets for exploded drawings. See
+[ASSEMBLIES.md](docs/ASSEMBLIES.md) for a complete editable example, transform
+conventions, inspection fields and the supported one-level assembly scope.
+Source-keyed BOM metadata supplies optional item/part numbers, descriptions and
+materials; quantities count instances. `cad_bom` exports revision-qualified
+JSON/CSV. Drawing `bom: true` adds the table and optional visible-surface balloons.
+See `examples/assembly-bom.drawing.json` for an assembled/exploded sheet.
+
 Repeated queries, exports and drawings automatically reuse exact geometry and
 projected drawing views in a bounded workspace cache. Drawing layout, dimensions,
 tolerances and formats can change without repeating projection. Model edits or
@@ -88,6 +107,8 @@ timeout. Developer benchmark: `python3 tests/cache_benchmark.py
 build/agent-3d-cad build/cache-benchmark` (isolated workspaces; two hatched sections
 of the full M20 knob, cold/warm/style-change and geometry-only timings). Optional
 `--views standard` exercises the much slower four-view hidden-line drawing.
+Use `--cold-only` to measure the first drawing alone, and `--timeout-ms` to set
+its bounded job budget. Failed jobs retain timings and errors in the report.
 
 ## Jobs and retries
 
@@ -121,7 +142,7 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-Eighteen application tools expose create/read/apply/restore/import, query/export/drawing,
+Nineteen application tools expose create/read/apply/restore/import, query/export/BOM/drawing,
 view/preview/selection resolution, comparison, jobs, model discovery and live
 view context. `cad_open` attaches the bundled MCP App resource; `cad_viewer` is an
 app-only transport tool. This is a local stdio service with no HTTP endpoint.

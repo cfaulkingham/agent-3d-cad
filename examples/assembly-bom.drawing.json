@@ -1,0 +1,32 @@
+{
+  "document_id":"spacer_assembly",
+  "revision":1,
+  "drawing":{
+    "title":"Plate and spacer assembly - bill of materials",
+    "sheet":"A3",
+    "layout":"grid",
+    "bom":true,
+    "views":[
+      {"id":"assembled","orientation":"front"},
+      {"id":"exploded","orientation":"front","explode":[
+        {"part_id":"spacer_a","translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"spacer_b","translation":[0,0,{"parameter":"explode_gap"}]},
+        {"part_id":"cover","translation":[0,0,{"expression":{"op":"multiply","args":[{"parameter":"explode_gap"},2],"unit":"mm"}}]}
+      ]}
+    ],
+    "balloons":[
+      {"view":"exploded","part_id":"base","anchor":[20,0,{"expression":{"op":"multiply","args":[{"parameter":"plate_thickness"},0.5],"unit":"mm"}}],"label":[-15,2]},
+      {"view":"exploded","part_id":"spacer_a","anchor":[0,{"expression":{"op":"multiply","args":[{"parameter":"spacer_radius"},-1],"unit":"mm"}},{"expression":{"op":"multiply","args":[{"parameter":"spacer_height"},0.5],"unit":"mm"}}],"label":[-15,24]},
+      {"view":"exploded","part_id":"spacer_b","anchor":[0,{"expression":{"op":"multiply","args":[{"parameter":"spacer_radius"},-1],"unit":"mm"}},{"expression":{"op":"multiply","args":[{"parameter":"spacer_height"},0.5],"unit":"mm"}}],"label":[75,24]},
+      {"view":"exploded","part_id":"cover","anchor":[20,0,{"expression":{"op":"multiply","args":[{"parameter":"plate_thickness"},0.5],"unit":"mm"}}],"label":[75,46]}
+    ],
+    "dimensions":[
+      {"view":"assembled","kind":"width"},
+      {"view":"assembled","kind":"height"}
+    ],
+    "notes":[
+      "Item 1: two shared plate instances. Item 2: two shared spacer instances.",
+      "Balloons use source-surface anchors; explode offsets do not change saved placements."
+    ]
+  }
+}

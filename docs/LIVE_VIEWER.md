@@ -60,7 +60,25 @@ Ask the agent to create or reopen a design. For a concrete first session:
    zoom and pan, and clears the obsolete selected edge.
 
 The model library switches documents in this view. Features expand to show
-editable source intent; there are no assembly or hide/isolate controls yet.
+editable source intent. Assembly features also list their part IDs, source
+features and parent mate relationships; selected geometry identifies its owning
+part. Placement and mate edits use the shared CAD tools. Assembly part controls
+hide or show individual instances, isolate one part, and show all parts again.
+Hidden parts are excluded from rendering and picking; hiding a selected part
+clears the pick. These controls change this view's presentation, while the saved
+model, exact measurements, exports and bill of materials retain every part.
+
+Visibility is saved per `view_id` as `hidden_part_ids`, available to the agent in
+`cad_context` and every ready `cad_viewer` sync response. It survives restarting
+the service and follows same-document revisions: surviving part IDs retain
+their visibility, and removed IDs are pruned when the new mesh is displayed.
+Switching to a different document clears the mask. A stale saved selection still
+reports `stale: true`; its old context cannot overwrite the current hidden IDs.
+Selecting a hidden part or submitting visibility for an obsolete evaluation
+fails without changing the saved view state. All visibility edits require the
+current displayed evaluation, so a view that is loading or stale must synchronize
+before changing its mask.
+
 Drag to orbit, Shift/right drag to pan, wheel to zoom, and use the view buttons
 for orthographic directions. Keyboard arrows orbit; Shift+arrows pan; Home resets.
 Selected faces/edges display their native measurements. Faces are inspectable;

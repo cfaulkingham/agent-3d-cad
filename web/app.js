@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id), bridge = new CadBridge();
   let renderer = null, rendered = null, drawnEvaluation = null, sending = false, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
-  let sizeObserver = null, resizeTimer = null;
+  let sizeObserver = null, resizeTimer = null, partsKey = null;
   const fmt = value => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—';
   const status = text => { $('edit-status').textContent = text; };
   const fail = error => { $('view-error').hidden = false; $('view-error').textContent = error.message; };
@@ -23,12 +23,16 @@
     let rows = [];
     if (s) {
       const e = s.geometry;
+      if (e.part_id) rows.push(['Part', e.part_id]);
       if (Number.isFinite(e.length_mm)) rows.push(['Length', `${fmt(e.length_mm)} mm`]);
       if (Number.isFinite(e.area_mm2)) rows.push(['Area', `${fmt(e.area_mm2)} mm²`]);
       if (Number.isFinite(e.radius_mm)) rows.push(['Radius', `${fmt(e.radius_mm)} mm`]);
       if (e.center_mm) rows.push(['Center', e.center_mm.map(fmt).join(', ')]);
       rows.push(['Feature', s.reference.feature_id], ['Revision', s.reference.revision]);
-    } else if (summary) rows = [['Volume', `${fmt(summary.volume_mm3)} mm³`], ['Surface area', `${fmt(summary.area_mm2)} mm²`], ['Solids', summary.solid_count], ['Faces / edges', `${summary.face_count} / ${summary.edge_count}`]];
+    } else if (summary) {
+      rows = [['Volume', `${fmt(summary.volume_mm3)} mm³`], ['Surface area', `${fmt(summary.area_mm2)} mm²`], ['Solids', summary.solid_count], ['Faces / edges', `${summary.face_count} / ${summary.edge_count}`]];
+      if (summary.assembly) rows.unshift(['Parts', summary.assembly.parts.length], ['Rigid mates', summary.assembly.mates.length]);
+    }
     facts($('measurements'), rows);
   }
   function modelTree(model) {
@@ -38,9 +42,39 @@
       title.append(document.createTextNode(feature.id)); type.className = 'feature-type';
       type.textContent = `${feature.type}${feature.id === model.output ? ' · output' : ''}`; title.append(type);
       const shown = { ...feature }; if (shown.content) shown.content = '(embedded STEP content)';
-      code.textContent = JSON.stringify(shown, null, 2); detail.append(title, code); $('features').append(detail);
+      code.textContent = JSON.stringify(shown, null, 2); detail.append(title);
+      if (feature.type === 'assembly') {
+        for (const part of feature.parts) {
+          const row = document.createElement('p'), mate = feature.mates?.find(item => item.child === part.id);
+          row.className = 'assembly-part';
+          row.textContent = `${part.id} → ${part.input} · ${mate ? `mated to ${mate.parent}` : 'placed root'}`;
+          detail.append(row);
+        }
+      }
+      detail.append(code); $('features').append(detail);
     }
     facts($('parameters'), Object.entries(model?.parameters || {}).map(([name, value]) => [name, fmt(value)]));
+  }
+  function partControls(v) {
+    const parts = v.payload?.summary?.assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !sending;
+    const key = JSON.stringify([v.payload?.evaluation_id, hidden, ready, v.visibility_unsaved]);
+    if (key === partsKey) return; partsKey = key;
+    $('parts-panel').hidden = !parts.length; $('parts-list').replaceChildren();
+    $('parts-status').textContent = `${hidden.length} of ${parts.length} parts hidden`;
+    $('show-all-parts').disabled = !ready || (!hidden.length && !v.visibility_unsaved);
+    $('all-hidden').hidden = !parts.length || hidden.length !== parts.length;
+    $('restore-parts').disabled = !ready;
+    for (const part of parts) {
+      const row = document.createElement('div'), name = document.createElement('span'), toggle = document.createElement('button'), isolate = document.createElement('button');
+      const isHidden = hidden.includes(part.id);
+      row.className = `part-control${isHidden ? ' part-hidden' : ''}`; name.textContent = part.id; name.title = `${part.id} → ${part.input}`;
+      toggle.textContent = isHidden ? 'Show' : 'Hide'; toggle.setAttribute('aria-label', `${isHidden ? 'Show' : 'Hide'} part ${part.id}`);
+      isolate.textContent = 'Isolate'; isolate.setAttribute('aria-label', `Isolate part ${part.id}`);
+      toggle.disabled = isolate.disabled = !ready;
+      toggle.onclick = () => state.setPartVisible(part.id, isHidden).catch(error => status(error.message));
+      isolate.onclick = () => state.isolatePart(part.id).catch(error => status(error.message));
+      row.append(name, toggle, isolate); $('parts-list').append(row);
+    }
   }
   function update(v) {
     const ready = v.status === 'ready' && !!v.payload;
@@ -65,23 +99,25 @@
       const same = rendered?.document_id === v.payload.document_id;
       drawnEvaluation = null;
       try {
-        renderer?.load(v.payload, { preserveCamera: same });
+        renderer?.load(v.payload, { preserveCamera: same, hiddenPartIds: v.hidden_part_ids || [] });
         if (v.camera) renderer?.setCamera(v.camera);
         v.camera = renderer?.getCamera() || null;
         rendered = v.payload; modelTree(v.model); status('');
       } catch (error) { rendererError = error.message; fail(error); }
     }
     if (!v.payload) { modelTree(null); rendered = null; drawnEvaluation = null; }
+    partControls(v);
     $('loading-text').textContent = v.payload ? 'Updating… Previous revision shown' : 'Building current revision…';
     if (v.context_error) status(v.context_error);
-    try { renderer?.setSelection(v.selection?.reference || null); } catch (error) { fail(error); }
+    try { renderer?.setHiddenParts(v.hidden_part_ids || []); renderer?.setSelection(v.selection?.reference || null); } catch (error) { fail(error); }
     inspect(v);
     const s = v.payload?.summary;
-    $('model-facts').textContent = s ? `${s.solid_count} solid${s.solid_count === 1 ? '' : 's'} · ${s.face_count} faces · ${s.edge_count} edges` : 'Ready when you are';
+    $('model-facts').textContent = s ? `${s.assembly ? `${s.assembly.parts.length} parts · ${(v.hidden_part_ids || []).length} hidden · ` : ''}${s.solid_count} solid${s.solid_count === 1 ? '' : 's'} · ${s.face_count} faces · ${s.edge_count} edges` : 'Ready when you are';
     $('dimensions').textContent = s ? s.bounds_mm.min.map((n, i) => fmt(s.bounds_mm.max[i] - n)).join(' × ') + ' mm' : '';
     for (const button of $('documents').querySelectorAll('button')) button.setAttribute('aria-current', String(button.dataset.document === v.document_id));
   }
   const state = new CadLiveState(bridge, update);
+  for (const id of ['show-all-parts', 'restore-parts']) $(id).onclick = () => state.showAll().catch(error => status(error.message));
   function saveSoon() {
     clearTimeout(contextTimer);
     contextTimer = setTimeout(() => {

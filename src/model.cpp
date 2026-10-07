@@ -38,6 +38,14 @@ Json model_definitions() {
   })}};
   const Json axis_schema = object({{"origin",vector_ref},{"direction",vector_ref}}, {"origin","direction"});
   const Json rotation_schema = object({{"origin",vector_ref},{"axis",vector_ref},{"angle_deg",scalar_ref}}, {"origin","axis","angle_deg"});
+  const Json placement_schema = object({{"translation",vector_ref},{"rotation",rotation_schema}}, Json::array());
+  const auto bom_text=[](int maximum) {return Json{{"type","string"},{"maxLength",maximum},{"not",{{"pattern","[^ -~]"}}}};};
+  const Json bom_item_schema=object({{"input",id},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
+    {"part_number",bom_text(64)},{"description",bom_text(120)},{"material",bom_text(64)}},{"input"});
+  const Json mate_schema = object({{"id",id},{"type",{{"const","rigid"}}},{"parent",id},{"child",id},
+    {"parent_frame",workplane_schema},{"child_frame",workplane_schema},{"offset",vector_ref},{"angle_deg",scalar_ref}},
+    {"id","type","parent","child","parent_frame","child_frame"});
+  const Json part_schema = object({{"id",id},{"input",id},{"placement",placement_schema}}, {"id","input"});
   features.push_back(object({{"id",id},{"type",{{"const","sketch"}}},{"workplane",workplane_schema},{"profile",profile_schema}}, {"id","type","workplane","profile"}));
   features.push_back(object({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar_ref}}, {"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
@@ -47,6 +55,10 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"const","pattern"}}},{"input",id},{"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"step",vector_ref}}, {"id","type","input","count","step"}));
   features.push_back(object({{"id",id},{"type",{{"const","hole"}}},{"input",id},{"origin",vector_ref},{"axis",vector_ref},{"radius",scalar_ref},{"depth",scalar_ref}}, {"id","type","input","origin","axis","radius","depth"}));
   features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1},{"maxLength",524288}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"id","type","content","sha256"}));
+  features.push_back(object({{"id",id},{"type",{{"const","assembly"}}},
+    {"parts",{{"type","array"},{"items",part_schema},{"minItems",1},{"maxItems",64}}},
+    {"mates",{{"type","array"},{"items",mate_schema},{"maxItems",63}}},
+    {"bom",{{"type","array"},{"items",bom_item_schema},{"maxItems",64}}}}, {"id","type","parts"}));
   const Json expression = object({{"expression", object({
     {"op",{{"enum",{"add","subtract","multiply","divide"}}}},
     {"args",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}},
@@ -57,10 +69,16 @@ Json model_definitions() {
     object({{"op", {{"const", "add_feature"}}}, {"feature", feature_ref}}, {"op", "feature"}),
     object({{"op", {{"const", "replace_feature"}}}, {"id", id}, {"feature", feature_ref}}, {"op", "id", "feature"}),
     object({{"op", {{"const", "remove_feature"}}}, {"id", id}}, {"op", "id"}),
-    object({{"op", {{"const", "set_output"}}}, {"feature_id", id}}, {"op", "feature_id"})
+    object({{"op", {{"const", "set_output"}}}, {"feature_id", id}}, {"op", "feature_id"}),
+    object({{"op",{{"const","set_part_placement"}}},{"assembly_id",id},{"part_id",id},{"placement",placement_schema}}, {"op","assembly_id","part_id","placement"}),
+    object({{"op",{{"const","set_mate"}}},{"assembly_id",id},{"mate",mate_schema}}, {"op","assembly_id","mate"}),
+    object({{"op",{{"const","remove_mate"}}},{"assembly_id",id},{"mate_id",id}}, {"op","assembly_id","mate_id"}),
+    object({{"op",{{"const","set_bom_item"}}},{"assembly_id",id},{"item",bom_item_schema}}, {"op","assembly_id","item"}),
+    object({{"op",{{"const","remove_bom_item"}}},{"assembly_id",id},{"input",id}}, {"op","assembly_id","input"})
   });
   Json definitions = {
     {"selector", selector},
+    {"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},
     {"scalar", {{"oneOf", Json::array({numeric, object({{"parameter", id}}, {"parameter"}), expression})}}},
     {"vector3", {{"type", "array"}, {"items", scalar_ref}, {"minItems", 3}, {"maxItems", 3}}},
     {"feature", {{"oneOf", features}}},
@@ -70,10 +88,23 @@ Json model_definitions() {
       {"features", {{"type", "array"}, {"items", feature_ref}, {"minItems", 1}, {"maxItems", 256}}},
       {"output", id}}, {"schema_version", "units", "parameters", "features", "output"})}
   };
+  auto bom_output_item=bom_item_schema;
+  bom_output_item["properties"]["quantity"]={{"type","integer"},{"minimum",1},{"maximum",64}};
+  bom_output_item["properties"]["part_ids"]={{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}};
+  bom_output_item["required"]={"item_number","input","quantity","part_ids"};
+  definitions["bom"]=object({{"assembly_id",id},
+    {"items",{{"type","array"},{"items",bom_output_item},{"minItems",1},{"maxItems",64}}},
+    {"total_quantity",{{"type","integer"},{"minimum",1},{"maximum",64}}}},{"assembly_id","items","total_quantity"});
   const Json real = {{"type","number"}};
   const Json nonnegative = {{"type","number"},{"minimum",0}};
   const Json point_output = {{"type","array"},{"items",real},{"minItems",3},{"maxItems",3}};
   const Json bounds_output = object({{"min",point_output},{"max",point_output}}, {"min","max"});
+  definitions["assembly_summary"] = object({
+    {"parts",{{"type","array"},{"minItems",1},{"maxItems",64},{"items",object({
+      {"id",id},{"input",id},{"transform",{{"type","array"},{"items",real},{"minItems",16},{"maxItems",16}}},
+      {"bounds_mm",bounds_output},{"volume_mm3",nonnegative}}, {"id","input","transform","bounds_mm","volume_mm3"})}}},
+    {"mates",{{"type","array"},{"maxItems",63},{"items",object({{"id",id},{"type",{{"const","rigid"}}},{"parent",id},{"child",id}}, {"id","type","parent","child"})}}}
+  }, {"parts","mates"});
   const Json face_id = {{"type","string"},{"pattern","^face-[1-9][0-9]*$"}};
   const Json edge_id = {{"type","string"},{"pattern","^edge-[1-9][0-9]*$"}};
   const Json local_id = {{"type","string"},{"pattern","^(face|edge)-[1-9][0-9]*$"}};
@@ -81,22 +112,22 @@ Json model_definitions() {
     {"source_feature_id",id},{"source_kind",{{"enum",{"face","edge"}}}},{"source_id",local_id},
     {"relation",{{"enum",{"unchanged","modified","generated","deleted"}}}},
     {"result_kind",{{"enum",{"face","edge"}}}},{"result_id",local_id},
-    {"instance_index",{{"type","integer"},{"minimum",0},{"maximum",63}}}
+    {"instance_index",{{"type","integer"},{"minimum",0},{"maximum",63}}},{"part_id",id}
   }, {"source_feature_id","source_kind","source_id","relation"});
   const Json provenance = object({
     {"feature_id",id},{"feature_type",{{"type","string"}}},{"content_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
-    {"dependencies",{{"type","array"},{"items",id},{"maxItems",32}}},
+    {"dependencies",{{"type","array"},{"items",id},{"maxItems",64}}},
     {"reference_policy",{{"const","geometric_replay"}}},{"history_lifetime",{{"const","evaluation"}}},
     {"history",{{"type","array"},{"items",history_entry},{"maxItems",10000}}},{"history_truncated",{{"type","boolean"}}}
   }, {"feature_id","feature_type","dependencies","reference_policy","history_lifetime","history","history_truncated"});
   const Json face_output = object({
     {"id",face_id},{"surface_kind",{{"enum",{"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"}}}},
-    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output}
+    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",id}
   }, {"id","surface_kind","area_mm2","center_mm","bounds_mm"});
   const Json edge_output = object({
     {"id",edge_id},{"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},
     {"length_mm",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"direction",point_output},
-    {"degenerate",{{"type","boolean"}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}}
+    {"degenerate",{{"type","boolean"}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",id}
   }, {"id","curve_kind","length_mm","center_mm","bounds_mm","degenerate"});
   definitions["face"]=face_output; definitions["edge"]=edge_output;
   definitions["topology"]=object({
@@ -110,7 +141,7 @@ Json model_definitions() {
     {"positions",{{"type","array"},{"items",point_output},{"maxItems",200000}}},
     {"triangles",{{"type","array"},{"items",{{"type","array"},{"items",{{"type","integer"},{"minimum",0},{"maximum",199999}}},{"minItems",3},{"maxItems",3}}},{"maxItems",200000}}},
     {"triangle_faces",{{"type","array"},{"items",face_id},{"maxItems",200000}}},
-    {"edges",{{"type","array"},{"items",object({{"id",edge_id},{"points",{{"type","array"},{"items",point_output},{"maxItems",200000}}}}, {"id","points"})},{"maxItems",10000}}}
+    {"edges",{{"type","array"},{"items",object({{"id",edge_id},{"part_id",id},{"points",{{"type","array"},{"items",point_output},{"maxItems",200000}}}}, {"id","points"})},{"maxItems",10000}}}
   }, {"schema_version","units","feature_id","selection_lifetime","linear_deflection_mm","angular_deflection_rad","positions","triangles","triangle_faces","edges"});
   return definitions;
 }
@@ -207,6 +238,96 @@ void axis(const Json& value, const Json& parameters, const char* direction_field
   vector3(value.at("origin"), parameters);
   unit_vector(value.at(direction_field), parameters);
 }
+void placement(const Json& value, const Json& parameters) {
+  fields(value, {}, {"translation", "rotation"});
+  if (value.contains("translation")) vector3(value.at("translation"), parameters);
+  if (value.contains("rotation")) {
+    const auto& rotation = value.at("rotation");
+    fields(rotation, {"origin", "axis", "angle_deg"});
+    vector3(rotation.at("origin"), parameters);
+    unit_vector(rotation.at("axis"), parameters);
+    scalar(rotation.at("angle_deg"), parameters, "deg");
+  }
+}
+void assembly(const Json& feature, const Json& parameters, const std::map<std::string,std::string>& types) {
+  fields(feature, {"id", "type", "parts"}, {"mates","bom"});
+  const auto& parts = feature.at("parts");
+  if (!parts.is_array() || parts.empty() || parts.size() > 64)
+    throw Error("invalid_model", "An assembly needs 1 to 64 parts");
+  std::set<std::string> part_ids, placed, source_inputs;
+  for (const auto& part : parts) {
+    const auto part_id = text_field(part,"id");
+    try {
+      fields(part, {"id", "input"}, {"placement"});
+      identifier(part_id);
+      if (!part_ids.insert(part_id).second) throw Error("invalid_model", "Duplicate assembly part: " + part_id);
+      const auto input = text_field(part,"input");
+      if (!types.contains(input) || types.at(input) == "sketch" || types.at(input) == "assembly")
+        throw Error("invalid_model", "Assembly part input must name an earlier solid feature, not a sketch or assembly", {{"source_feature_id",input}});
+      source_inputs.insert(input);
+      if (part.contains("placement")) { placement(part.at("placement"),parameters); placed.insert(part_id); }
+    } catch (const Error& e) {
+      auto details=e.details; details["part_id"]=part_id;
+      throw Error(e.code,e.what(),details);
+    }
+  }
+  if (feature.contains("bom")) {
+    const auto& bom=feature.at("bom");
+    if (!bom.is_array() || bom.size()>64) throw Error("invalid_model","Assembly BOM metadata permits at most 64 items");
+    std::set<std::string> inputs;std::set<int> numbers;
+    for (const auto& item:bom) {
+      fields(item,{"input"},{"item_number","part_number","description","material"});
+      const auto input=text_field(item,"input");
+      if (!source_inputs.contains(input)) throw Error("invalid_model","BOM metadata input must be used by an assembly part",{{"source_feature_id",input}});
+      if (!inputs.insert(input).second) throw Error("invalid_model","Duplicate BOM metadata source input",{{"source_feature_id",input}});
+      if (item.contains("item_number")) {
+        const auto& number=item.at("item_number");
+        if (!number.is_number_integer() || number<1 || number>999) throw Error("invalid_model","BOM item_number must be an integer from 1 to 999",{{"source_feature_id",input}});
+        if (!numbers.insert(number.get<int>()).second) throw Error("invalid_model","BOM item numbers must be unique",{{"source_feature_id",input}});
+      }
+      for (const auto* key:{"part_number","description","material"}) if (item.contains(key)) {
+        const auto value=text_field(item,key);const std::size_t maximum=std::string(key)=="description"?120:64;
+        if (value.size()>maximum) throw Error("invalid_model",std::string("BOM ")+key+" exceeds its text limit",{{"source_feature_id",input}});
+        for (const unsigned char c:value) if (c<32 || c>126)
+          throw Error("invalid_model","BOM metadata must contain only printable ASCII",{{"source_feature_id",input}});
+      }
+    }
+  }
+  if (!feature.contains("mates")) return;
+  const auto& mates = feature.at("mates");
+  if (!mates.is_array() || mates.size() > 63) throw Error("invalid_model", "An assembly permits at most 63 mates");
+  std::set<std::string> mate_ids;
+  std::map<std::string,std::string> parents;
+  for (const auto& mate : mates) {
+    const auto mate_id = text_field(mate,"id");
+    try {
+      fields(mate, {"id","type","parent","child","parent_frame","child_frame"}, {"offset","angle_deg"});
+      identifier(mate_id);
+      if (!mate_ids.insert(mate_id).second) throw Error("invalid_model", "Duplicate assembly mate: " + mate_id);
+      if (text_field(mate,"type") != "rigid") throw Error("invalid_model", "Only rigid assembly mates are supported");
+      const auto parent=text_field(mate,"parent"), child=text_field(mate,"child");
+      if (!part_ids.contains(parent) || !part_ids.contains(child)) throw Error("invalid_model", "Mate must name existing assembly parts");
+      if (parent == child) throw Error("invalid_model", "A part cannot mate to itself");
+      if (!parents.emplace(child,parent).second) throw Error("invalid_model", "A part permits only one incoming rigid mate", {{"part_id",child}});
+      if (placed.contains(child)) throw Error("invalid_model", "A mated child cannot have an explicit placement", {{"part_id",child}});
+      workplane(mate.at("parent_frame"),parameters);
+      workplane(mate.at("child_frame"),parameters);
+      if (mate.contains("offset")) vector3(mate.at("offset"),parameters);
+      if (mate.contains("angle_deg")) scalar(mate.at("angle_deg"),parameters,"deg");
+    } catch (const Error& e) {
+      auto details=e.details; details["mate_id"]=mate_id;
+      throw Error(e.code,e.what(),details);
+    }
+  }
+  for (const auto& part_id : part_ids) {
+    std::set<std::string> path;
+    auto current=part_id;
+    while (parents.contains(current)) {
+      if (!path.insert(current).second) throw Error("invalid_model", "Assembly mate graph contains a cycle", {{"part_id",current}});
+      current=parents.at(current);
+    }
+  }
+}
 }
 
 void validate_model(const Json& model) {
@@ -223,6 +344,7 @@ void validate_model(const Json& model) {
     throw Error("invalid_model", "A model needs 1–256 features");
   std::set<std::string> prior;
   std::map<std::string,std::string> types;
+  std::size_t assembly_parts = 0;
   for (const auto& feature : features) {
     const auto id = text_field(feature, "id");
     try {
@@ -236,6 +358,7 @@ void validate_model(const Json& model) {
       const auto target = text_field(feature, key);
       if (!prior.contains(target)) throw Error("invalid_model", "Feature must refer to an earlier feature: " + target, {{"feature_id", id}});
       if (types.at(target) == "sketch") throw Error("invalid_model", "This operation requires a solid input, not an intermediate sketch", {{"feature_id", id}});
+      if (types.at(target) == "assembly") throw Error("invalid_model", "Edit assembly source parts before assembling; solid operations cannot consume assemblies", {{"feature_id", id}});
     };
     auto sketch_dependency = [&](const std::string& target) {
       if (!prior.contains(target) || types.at(target) != "sketch")
@@ -334,6 +457,10 @@ void validate_model(const Json& model) {
       fields(feature, {"id", "type", "input", "origin", "axis", "radius", "depth"}); dependency("input");
       vector3(feature.at("origin"),parameters); unit_vector(feature.at("axis"),parameters);
       positive(feature.at("radius")); positive(feature.at("depth"));
+    } else if (type == "assembly") {
+      assembly(feature,parameters,types);
+      assembly_parts += feature.at("parts").size();
+      if (assembly_parts > 256) throw Error("limit_exceeded", "A model permits at most 256 assembly parts across all assembly features");
     } else if (type == "import_step") {
       fields(feature, {"id", "type", "content", "sha256"});
       const auto content = text_field(feature,"content");
@@ -386,6 +513,50 @@ Json apply_operations(const Json& model, const Json& operations) {
     } else if (op == "set_output") {
       fields(operation, {"op", "feature_id"});
       candidate["output"] = text_field(operation, "feature_id");
+    } else if (op == "set_part_placement" || op == "set_mate" || op == "remove_mate" || op == "set_bom_item" || op == "remove_bom_item") {
+      if (op == "set_part_placement") fields(operation, {"op","assembly_id","part_id","placement"});
+      else if (op == "set_mate") fields(operation, {"op","assembly_id","mate"});
+      else if (op == "remove_mate") fields(operation, {"op","assembly_id","mate_id"});
+      else if (op == "set_bom_item") fields(operation, {"op","assembly_id","item"});
+      else fields(operation, {"op","assembly_id","input"});
+      const auto assembly_id=text_field(operation,"assembly_id");
+      auto found=features.end();
+      for (auto it=features.begin(); it!=features.end(); ++it)
+        if (it->at("id") == assembly_id) { found=it; break; }
+      if (found == features.end() || text_field(*found,"type") != "assembly")
+        throw Error("invalid_argument", "assembly_id must name an assembly feature", {{"feature_id",assembly_id}});
+      if (op == "set_part_placement") {
+        const auto part_id=text_field(operation,"part_id");
+        auto& parts=found->at("parts");
+        auto part=parts.end();
+        for (auto it=parts.begin(); it!=parts.end(); ++it)
+          if (it->at("id") == part_id) { part=it; break; }
+        if (part == parts.end()) throw Error("invalid_argument", "Unknown assembly part: " + part_id, {{"feature_id",assembly_id},{"part_id",part_id}});
+        (*part)["placement"]=operation.at("placement");
+      } else if (op == "set_bom_item" || op == "remove_bom_item") {
+        if (!found->contains("bom")) (*found)["bom"]=Json::array();
+        auto& bom=found->at("bom");
+        const auto input=op == "set_bom_item" ? text_field(operation.at("item"),"input") : text_field(operation,"input");
+        auto item=bom.end();
+        for (auto it=bom.begin();it!=bom.end();++it) if (it->at("input")==input) {item=it;break;}
+        if (op == "remove_bom_item") {
+          if (item==bom.end()) throw Error("invalid_argument","Unknown assembly BOM input: "+input,{{"feature_id",assembly_id},{"source_feature_id",input}});
+          bom.erase(item);
+        } else if (item==bom.end()) bom.push_back(operation.at("item"));
+        else *item=operation.at("item");
+      } else {
+        if (!found->contains("mates")) (*found)["mates"]=Json::array();
+        auto& mates=found->at("mates");
+        const auto mate_id=op == "set_mate" ? text_field(operation.at("mate"),"id") : text_field(operation,"mate_id");
+        auto mate=mates.end();
+        for (auto it=mates.begin(); it!=mates.end(); ++it)
+          if (it->at("id") == mate_id) { mate=it; break; }
+        if (op == "remove_mate") {
+          if (mate == mates.end()) throw Error("invalid_argument", "Unknown assembly mate: " + mate_id, {{"feature_id",assembly_id},{"mate_id",mate_id}});
+          mates.erase(mate);
+        } else if (mate == mates.end()) mates.push_back(operation.at("mate"));
+        else *mate=operation.at("mate");
+      }
     } else throw Error("invalid_argument", "Unknown edit operation: " + op);
   }
   validate_model(candidate);

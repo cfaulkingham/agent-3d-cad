@@ -1,5 +1,6 @@
 #include "agentcad/drawing.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/bom.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -149,6 +150,30 @@ struct View {
   std::string id,orientation; std::array<double,4> bounds{}; std::vector<Entity> entities;
   std::vector<std::vector<Entity>> regions;
 };
+struct Balloon {
+  std::string view,part_id;
+  int item_number{};
+  Point anchor,center;
+};
+std::vector<Balloon> drawing_balloons(const Json& projected,const Json& normalized) {
+  std::vector<Balloon> result;
+  if(!normalized.contains("balloons")) return result;
+  std::map<std::string,int> items;
+  for(const auto& item:normalized.at("bom_data").at("items"))
+    for(const auto& id:item.at("part_ids")) items.emplace(id.get<std::string>(),item.at("item_number").get<int>());
+  for(const auto& requested:normalized.at("balloons")) {
+    const auto view=text_field(requested,"view"),part=text_field(requested,"part_id");
+    const Json* anchor=nullptr;
+    for(const auto& v:projected.at("views")) if(v.at("id")==view && v.contains("balloon_anchors"))
+      for(const auto& candidate:v.at("balloon_anchors")) if(candidate.at("part_id")==part) {
+        if(anchor) invalid("Kernel returned duplicate balloon anchors",{{"view",view},{"part_id",part}});
+        anchor=&candidate;
+      }
+    if(!anchor || !items.contains(part)) invalid("Kernel omitted a requested balloon anchor",{{"view",view},{"part_id",part}});
+    result.push_back({view,part,items.at(part),point(anchor->at("point")),point(requested.at("label"))});
+  }
+  return result;
+}
 Point circle_point(Point c,double r,double degrees) {
   const auto a=std::fmod(degrees,360.0)*pi/180; return c+Point{r*std::cos(a),r*std::sin(a)};
 }
@@ -373,6 +398,113 @@ struct Placement { double x,y,width,height,gx,gy,gw,gh,scale; Point origin;
   Point map(Point p) const { return {origin.x+p.x*scale,origin.y-p.y*scale}; }
   Point unmap(Point p) const { return {(p.x-origin.x)/scale,(origin.y-p.y)/scale}; }
 };
+struct BomTable {
+  std::array<double,6> widths{};
+  std::vector<std::array<std::vector<std::string>,6>> rows;
+  std::vector<double> heights;
+  double height=0;
+};
+BomTable prepare_bom_table(const Json& bom,double width) {
+  BomTable table;
+  table.widths={12,12,width*.16,width*.17,width*.50-24,width*.17};
+  table.height=12;
+  for(const auto& item:bom.at("items")) {
+    const std::array<std::string,6> values={std::to_string(item.at("item_number").get<int>()),
+      std::to_string(item.at("quantity").get<int>()),text_field(item,"input"),item.value("part_number",std::string()),
+      item.value("description",std::string()),item.value("material",std::string())};
+    std::array<std::vector<std::string>,6> row;std::size_t lines=1;
+    for(std::size_t i=0;i<values.size();++i) {row[i]=wrap(values[i],2.4,table.widths[i]-4);lines=std::max(lines,row[i].size());}
+    const double height=lines*3.3+2;
+    table.rows.push_back(std::move(row));table.heights.push_back(height);table.height+=height;
+  }
+  return table;
+}
+void draw_bom_table(Scene& scene,const BomTable& table,double x,double y,double width) {
+  const auto start=scene.size();
+  rectangle(scene,x,y,width,table.height);
+  label(scene,{x+2,y+4},"BILL OF MATERIALS",3);
+  line(scene,{x,y+6},{x+width,y+6});line(scene,{x,y+12},{x+width,y+12});
+  const std::array<std::string,6> titles={"ITEM","QTY","SOURCE","PART NUMBER","DESCRIPTION","MATERIAL"};
+  double at=x;
+  for(std::size_t c=0;c<titles.size();++c) {
+    label(scene,{at+2,y+10},titles[c],2.4);
+    at+=table.widths[c];if(c+1<titles.size()) line(scene,{at,y+6},{at,y+table.height});
+  }
+  double top=y+12;
+  for(std::size_t r=0;r<table.rows.size();++r) {
+    at=x;
+    for(std::size_t c=0;c<titles.size();++c) {
+      double baseline=top+3.6;
+      for(const auto& text:table.rows[r][c]) {label(scene,{at+2,baseline},text,2.4);baseline+=3.3;}
+      at+=table.widths[c];
+    }
+    top+=table.heights[r];line(scene,{x,top},{x+width,top});
+  }
+  for(std::size_t i=start;i<scene.size();++i) scene[i].layer="BOM";
+}
+double annotation_distance(Point point,const Primitive& item) {
+  if(item.kind=="line" || item.kind=="polyline") {
+    double nearest=std::numeric_limits<double>::infinity();
+    for(std::size_t i=1;i<item.points.size();++i) {
+      const auto a=item.points[i-1],delta=item.points[i]-a;const auto length2=dot(delta,delta);
+      nearest=std::min(nearest,distance(point,a+delta*(length2>0?std::clamp(dot(point-a,delta)/length2,0.0,1.0):0)));
+    }
+    return nearest;
+  }
+  if(item.kind=="circle" || item.kind=="arc") {
+    const auto delta=point-item.center;
+    double angle=std::atan2(-delta.y,delta.x)*180/pi;
+    while(angle<item.start) angle+=360;
+    while(angle>=item.start+360) angle-=360;
+    if(item.kind=="circle" || angle<=item.end) return std::abs(distance(point,item.center)-item.radius);
+    const auto at=[&](double a){return Point{item.center.x+item.radius*std::cos(a*pi/180),item.center.y-item.radius*std::sin(a*pi/180)};};
+    return std::min(distance(point,at(item.start)),distance(point,at(item.end)));
+  }
+  if(item.kind=="text") {
+    // Work in the label's local frame, including rotated vertical dimensions.
+    const double angle=item.angle*pi/180;const auto delta=point-item.center;
+    const Point local{delta.x*std::cos(angle)+delta.y*std::sin(angle),-delta.x*std::sin(angle)+delta.y*std::cos(angle)};
+    const Point nearest{std::clamp(local.x,0.0,text_width(item.text,item.font)),std::clamp(local.y,-item.font,item.font*.25)};
+    return distance(local,nearest);
+  }
+  return std::numeric_limits<double>::infinity();
+}
+void annotate_balloons(Scene& scene,const View& view,const Placement& p,const std::vector<Balloon>& balloons,const Scene& dimensions) {
+  constexpr double radius=3.5;
+  std::vector<std::pair<Point,Point>> placed;
+  for(const auto& b:balloons) if(b.view==view.id) {
+    const auto center=p.map(b.center),anchor=p.map(b.anchor);
+    const auto lower=p.map({view.bounds[0],view.bounds[1]}),upper=p.map({view.bounds[2],view.bounds[3]});
+    if(center.x-radius<p.x+1 || center.x+radius>p.x+p.width-1 || center.y-radius<p.y+7 || center.y+radius>p.y+p.height-1)
+      invalid("Balloon cannot fit inside its view cell",{{"view",view.id},{"part_id",b.part_id}});
+    const Point nearest{std::clamp(center.x,lower.x,upper.x),std::clamp(center.y,upper.y,lower.y)};
+    if(distance(center,nearest)<radius+1)
+      invalid("Balloon label must clear the projected geometry bounds",{{"view",view.id},{"part_id",b.part_id}});
+    for(const auto& annotation:dimensions) if(annotation_distance(center,annotation)<radius+0.5)
+      invalid("Balloon label overlaps a dimension annotation",{{"view",view.id},{"part_id",b.part_id}});
+    const double length=distance(center,anchor);
+    if(length<radius+2) invalid("Balloon leader is too short",{{"view",view.id},{"part_id",b.part_id}});
+    for(const auto& old:placed) if(distance(center,old.first)<2*radius+1)
+      invalid("Balloon labels overlap; move their label coordinates apart",{{"view",view.id},{"part_id",b.part_id}});
+    placed.push_back({center,anchor});
+  }
+  // A leader may not pass through another balloon's number.
+  for(std::size_t i=0;i<placed.size();++i) for(std::size_t j=0;j<placed.size();++j) if(i!=j) {
+    const auto a=placed[i].second,delta=placed[i].first-a;
+    const auto t=std::clamp(dot(placed[j].first-a,delta)/dot(delta,delta),0.0,1.0);
+    if(distance(placed[j].first,a+delta*t)<radius+0.5) invalid("Balloon leader crosses another label",{{"view",view.id}});
+  }
+  std::size_t at=0;
+  for(const auto& b:balloons) if(b.view==view.id) {
+    const auto [center,anchor]=placed[at++];const auto start=scene.size();
+    const auto end=center+(anchor-center)*(radius/distance(center,anchor));
+    line(scene,anchor,end);arrow(scene,anchor,end);
+    Primitive circle;circle.kind="circle";circle.center=center;circle.radius=radius;scene.push_back(std::move(circle));
+    const auto number=std::to_string(b.item_number);constexpr double font=2.5;
+    label(scene,{center.x-text_width(number,font)/2,center.y+font*.35},number,font);
+    for(std::size_t i=start;i<scene.size();++i) scene[i].layer="BALLOONS";
+  }
+}
 // Scan material faces independently, then union their intervals. Half-open
 // crossings retain holes and islands without double-counting shared vertices.
 // Circular intersections stay analytic; other curves use the kernel's bounded
@@ -438,8 +570,10 @@ void hatch(Scene& scene,const View& view,const Placement& placement,std::size_t&
   }
 }
 void geometry(Scene& scene,const View& v,const Placement& layout,bool hidden) {
-  for(const auto& e:v.entities) {
-    if(e.hidden && !hidden) continue;
+  // Distinct exact edges may project onto the same curve. Paint visible strokes
+  // last so hidden dashes cannot obscure them; retain order within each group.
+  for(const bool hidden_pass:{true,false}) for(const auto& e:v.entities) {
+    if(e.hidden!=hidden_pass || (e.hidden && !hidden)) continue;
     Primitive p;p.kind=e.kind;p.layer=e.hidden?"HIDDEN":"VISIBLE";
     for(auto q:e.points) p.points.push_back(layout.map(q));
     if(e.kind=="circle" || e.kind=="arc") { p.center=layout.map(e.center);p.radius=e.radius*layout.scale;p.start=e.start;p.end=e.end; }
@@ -509,6 +643,7 @@ std::string svg(const Scene& scene,double width,double height) {
     if(p.kind=="text") {
       out<<"<text x=\""<<numeric(p.center.x)<<"\" y=\""<<numeric(p.center.y)<<"\" font-family=\"Helvetica,Arial,sans-serif\" font-size=\""<<numeric(p.font)<<"\"";
       if(p.angle) out<<" transform=\"rotate("<<numeric(p.angle)<<' '<<numeric(p.center.x)<<' '<<numeric(p.center.y)<<")\"";
+      if(p.layer=="BOM" || p.layer=="BALLOONS") out<<" data-layer=\""<<p.layer<<"\"";
       out<<" fill=\"#111\">"<<xml(p.text)<<"</text>\n";continue;
     }
     std::string attrs=" data-layer=\""+p.layer+"\" fill=\"none\" stroke=\""+std::string(p.layer=="VISIBLE"?"#111":"#555")+"\" stroke-width=\""+(p.layer=="VISIBLE"?"0.3":p.layer=="HATCH"?"0.13":"0.18")+"\"";
@@ -584,8 +719,8 @@ std::string dxf(const View& view,const Scene& annotations,const Placement& place
     else if(type=="HIDDEN") {pair(73,2);pair(40,3);pair(49,2);pair(74,0);pair(49,-1);pair(74,0);}
     else {pair(73,4);pair(40,5);pair(49,3);pair(74,0);pair(49,-.75);pair(74,0);pair(49,.5);pair(74,0);pair(49,-.75);pair(74,0);}
   }
-  pair(0,"ENDTAB");table("LAYER","11",6);
-  for(const auto& layer:std::vector<std::string>{"0","VISIBLE","HIDDEN","CENTER","DIMENSIONS","HATCH"}) {pair(0,"LAYER");record("11");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbLayerTableRecord");pair(2,layer);pair(70,0);pair(62,(layer=="HIDDEN" || layer=="HATCH")?8:7);pair(6,layer=="HIDDEN"?"HIDDEN":layer=="CENTER"?"CENTER":"CONTINUOUS");}
+  pair(0,"ENDTAB");table("LAYER","11",7);
+  for(const auto& layer:std::vector<std::string>{"0","VISIBLE","HIDDEN","CENTER","DIMENSIONS","HATCH","BALLOONS"}) {pair(0,"LAYER");record("11");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbLayerTableRecord");pair(2,layer);pair(70,0);pair(62,(layer=="HIDDEN" || layer=="HATCH")?8:7);pair(6,layer=="HIDDEN"?"HIDDEN":layer=="CENTER"?"CENTER":"CONTINUOUS");}
   pair(0,"ENDTAB");table("STYLE","12",1);pair(0,"STYLE");record("12");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbTextStyleTableRecord");pair(2,"STANDARD");pair(70,0);pair(40,0);pair(41,1);pair(50,0);pair(71,0);pair(42,2.5);pair(3,"txt");pair(4,"");pair(0,"ENDTAB");
   table("BLOCK_RECORD","13",2);
   for(const auto& space:std::vector<std::pair<std::string,std::string>>{{"*Model_Space","14"},{"*Paper_Space","15"}}) {
@@ -599,8 +734,8 @@ std::string dxf(const View& view,const Scene& annotations,const Placement& place
   pair(0,"ENDSEC");pair(0,"SECTION");pair(2,"ENTITIES");
   auto entity_start=[&](const std::string& kind,const std::string& layer){pair(0,kind);record("14");pair(100,"AcDbEntity");pair(8,layer);};
   auto dxf_line=[&](Point a,Point b,const std::string& layer){entity_start("LINE",layer);pair(100,"AcDbLine");number_pair(10,a.x);number_pair(20,a.y);pair(30,0);number_pair(11,b.x);number_pair(21,b.y);pair(31,0);};
-  for(const auto& e:view.entities) {
-    if(e.hidden && !hidden) continue;const auto layer=e.hidden?"HIDDEN":"VISIBLE";
+  for(const bool hidden_pass:{true,false}) for(const auto& e:view.entities) {
+    if(e.hidden!=hidden_pass || (e.hidden && !hidden)) continue;const auto layer=e.hidden?"HIDDEN":"VISIBLE";
     if(e.kind=="line") dxf_line(e.points[0],e.points[1],layer);
     else if(e.kind=="polyline") {entity_start("LWPOLYLINE",layer);pair(100,"AcDbPolyline");pair(90,e.points.size());pair(70,0);for(const auto& p:e.points){number_pair(10,p.x);number_pair(20,p.y);}}
     else {
@@ -611,13 +746,13 @@ std::string dxf(const View& view,const Scene& annotations,const Placement& place
   }
   for(const auto& p:annotations) {
     if(p.kind=="line") dxf_line(placement.unmap(p.points[0]),placement.unmap(p.points[1]),p.layer);
-    else if(p.kind=="arc") {
-      entity_start("ARC",p.layer);pair(100,"AcDbCircle");const auto center=placement.unmap(p.center);
+    else if(p.kind=="arc" || p.kind=="circle") {
+      entity_start(p.kind=="circle"?"CIRCLE":"ARC",p.layer);pair(100,"AcDbCircle");const auto center=placement.unmap(p.center);
       number_pair(10,center.x);number_pair(20,center.y);pair(30,0);number_pair(40,p.radius/placement.scale);
       auto angle=[](double a){a=std::fmod(a,360);return a<0?a+360:a;};
-      pair(100,"AcDbArc");number_pair(50,angle(p.start));number_pair(51,angle(p.end));
+      if(p.kind=="arc") {pair(100,"AcDbArc");number_pair(50,angle(p.start));number_pair(51,angle(p.end));}
     }
-    else if(p.kind=="text") {entity_start("TEXT","DIMENSIONS");pair(100,"AcDbText");const auto at=placement.unmap(p.center);number_pair(10,at.x);number_pair(20,at.y);pair(30,0);number_pair(40,p.font/placement.scale);pair(1,p.text);number_pair(50,-p.angle);pair(7,"STANDARD");pair(100,"AcDbText");}
+    else if(p.kind=="text") {entity_start("TEXT",p.layer);pair(100,"AcDbText");const auto at=placement.unmap(p.center);number_pair(10,at.x);number_pair(20,at.y);pair(30,0);number_pair(40,p.font/placement.scale);pair(1,p.text);number_pair(50,-p.angle);pair(7,"STANDARD");pair(100,"AcDbText");}
   }
   pair(0,"ENDSEC");pair(0,"EOF");return out.str();
 }
@@ -626,12 +761,15 @@ std::string dxf(const View& view,const Scene& annotations,const Placement& place
 Json drawing_schema() {
   const Json scalar_ref={{"$ref","#/$defs/scalar"}};
   const Json point_schema={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}};
+  const Json translation_schema={{"type","array"},{"items",scalar_ref},{"minItems",3},{"maxItems",3}};
   const Json id={{"type","string"},{"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
   auto text=[](int max){return Json{{"type","string"},{"pattern","^[ -~]+$"},{"minLength",1},{"maxLength",max}};};
   const auto section=closed({{"axis",{{"enum",{"x","y","z"}}}},{"offset",scalar_ref}},{"axis","offset"});
+  const Json explode={{"type","array"},{"minItems",1},{"maxItems",64},
+    {"items",closed({{"part_id",id},{"translation",translation_schema}},{"part_id","translation"})}};
   const Json view={{"oneOf",Json::array({
-    closed({{"id",id},{"orientation",{{"enum",{"top","front","right","isometric"}}}}},{"id","orientation"}),
-    closed({{"id",id},{"orientation",{{"const","section"}}},{"section",section},{"hatch",{{"type","boolean"}}}},{"id","orientation","section"})})}};
+    closed({{"id",id},{"orientation",{{"enum",{"top","front","right","isometric"}}}},{"explode",explode}},{"id","orientation"}),
+    closed({{"id",id},{"orientation",{{"const","section"}}},{"section",section},{"hatch",{{"type","boolean"}}},{"explode",explode}},{"id","orientation","section"})})}};
   const Json dimension={{"oneOf",Json::array({
     closed({{"view",id},{"kind",{{"enum",{"width","height"}}}},{"manufacturing_tolerance",tolerance_schema()}},{"view","kind"}),
     closed({{"view",id},{"kind",{{"enum",{"radius","diameter"}}}},{"center",point_schema},{"radius",scalar_ref},{"tolerance",{{"type","number"},{"exclusiveMinimum",0},{"maximum",0.1}}},{"manufacturing_tolerance",tolerance_schema()}},{"view","kind","center","radius"}),
@@ -644,6 +782,8 @@ Json drawing_schema() {
     {"layout",{{"enum",{"grid","first_angle","third_angle"}}}},
     {"hidden_lines",{{"type","boolean"}}},{"formats",{{"type","array"},{"minItems",1},{"maxItems",3},{"uniqueItems",true},{"items",{{"enum",{"svg","pdf","dxf"}}}}}},
     {"views",{{"type","array"},{"minItems",1},{"maxItems",6},{"items",view}}},{"dimensions",{{"type","array"},{"maxItems",32},{"items",dimension}}},
+    {"bom",{{"type","boolean"}}},
+    {"balloons",{{"type","array"},{"maxItems",64},{"items",closed({{"view",id},{"part_id",id},{"anchor",translation_schema},{"label",point_schema}}, {"view","part_id","anchor","label"})}}},
     {"general_tolerances",general},
     {"material",text(80)},{"notes",{{"type","array"},{"maxItems",6},{"items",text(120)}}}});
 }
@@ -669,7 +809,7 @@ Json drawing_dimension_result_schema() {
 }
 
 Json normalize_drawing(const Json& spec,const Json& model) {
-  fields(spec,{}, {"title","sheet","scale","layout","hidden_lines","formats","views","dimensions","material","notes","general_tolerances"});
+  fields(spec,{}, {"title","sheet","scale","layout","hidden_lines","formats","views","dimensions","material","notes","general_tolerances","bom","balloons"});
   const auto& parameters=model.at("parameters");
   Json result={{"sheet",spec.value("sheet",Json("A4"))},{"hidden_lines",spec.value("hidden_lines",Json(true))},
     {"formats",spec.value("formats",Json::array({"svg","pdf","dxf"}))},{"views",Json::array()},{"dimensions",Json::array()},{"notes",Json::array()}};
@@ -679,6 +819,13 @@ Json normalize_drawing(const Json& spec,const Json& model) {
   if(result["layout"]!="grid" && result["layout"]!="first_angle" && result["layout"]!="third_angle") invalid("Layout must be grid, first_angle or third_angle");
   if(!result["sheet"].is_string() || (result["sheet"]!="A4" && result["sheet"]!="A3")) invalid("Sheet must be A4 or A3 landscape");
   if(!result["hidden_lines"].is_boolean()) throw Error("invalid_argument","hidden_lines must be boolean");
+  if(spec.contains("bom")) {
+    if(!spec.at("bom").is_boolean()) invalid("bom must be boolean");
+    if(spec.at("bom").get<bool>()) {
+      try {result["bom_data"]=build_bom(model);}
+      catch(const Error& error) {if(error.code=="invalid_argument") invalid("A drawing BOM requires an assembly output");throw;}
+    }
+  }
   if(spec.contains("general_tolerances")) {
     const auto& general=spec.at("general_tolerances");fields(general,{}, {"linear","angular"});
     if(general.empty()) invalid("General tolerances must specify linear or angular allowance");
@@ -699,7 +846,7 @@ Json normalize_drawing(const Json& spec,const Json& model) {
   if(!views.is_array() || views.empty() || views.size()>6) invalid("Request one to six drawing views");
   std::set<std::string> ids,portable_ids;
   for(const auto& view:views) {
-    fields(view,{"id","orientation"},{"section","hatch"});const auto id=text_field(view,"id"),orientation=text_field(view,"orientation");view_identifier(id);
+    fields(view,{"id","orientation"},{"section","hatch","explode"});const auto id=text_field(view,"id"),orientation=text_field(view,"orientation");view_identifier(id);
     auto portable=id;for(auto& c:portable) if(c>='A' && c<='Z') c=static_cast<char>(c-'A'+'a');
     if(!ids.insert(id).second || !portable_ids.insert(portable).second) invalid("View IDs must be unique, including case-insensitive filesystems");
     Json normalized={{"id",id},{"orientation",orientation}};
@@ -712,6 +859,22 @@ Json normalize_drawing(const Json& spec,const Json& model) {
     } else {
       if(view.contains("section") || view.contains("hatch")) invalid("Only section views accept a section plane or hatch flag");
       if(orientation!="top" && orientation!="front" && orientation!="right" && orientation!="isometric") invalid("Unsupported drawing orientation");
+    }
+    if(view.contains("explode")) {
+      const Json* assembly=nullptr;
+      for(const auto& feature:model.at("features")) if(feature.at("id")==model.at("output") && feature.at("type")=="assembly") assembly=&feature;
+      if(!assembly) invalid("Exploded views require an assembly output",{{"view",id}});
+      const auto& moves=view.at("explode");
+      if(!moves.is_array() || moves.empty() || moves.size()>64) invalid("Exploded views require one to 64 part translations",{{"view",id}});
+      std::set<std::string> part_ids,moved;
+      for(const auto& part:assembly->at("parts")) part_ids.insert(text_field(part,"id"));
+      normalized["explode"]=Json::array();
+      for(const auto& move:moves) {
+        fields(move,{"part_id","translation"});const auto part_id=text_field(move,"part_id");identifier(part_id);
+        if(!part_ids.contains(part_id)) invalid("Exploded view references an unknown assembly part",{{"view",id},{"part_id",part_id}});
+        if(!moved.insert(part_id).second) invalid("Exploded view repeats an assembly part",{{"view",id},{"part_id",part_id}});
+        normalized["explode"].push_back({{"part_id",part_id},{"translation",vector3(move.at("translation"),parameters)}});
+      }
     }
     result["views"].push_back(std::move(normalized));
   }
@@ -750,12 +913,36 @@ Json normalize_drawing(const Json& spec,const Json& model) {
     if(dimension.contains("manufacturing_tolerance")) d["manufacturing_tolerance"]=normalize_tolerance(dimension.at("manufacturing_tolerance"),parameters,kind=="angular"?"deg":"mm");
     result["dimensions"].push_back(std::move(d));
   }
+  if(spec.contains("balloons")) {
+    const auto& balloons=spec.at("balloons");
+    if(!balloons.is_array() || balloons.size()>64) invalid("Request at most 64 balloons");
+    if(!result.contains("bom_data")) invalid("Balloons require bom: true");
+    std::set<std::string> parts;
+    for(const auto& item:result.at("bom_data").at("items")) for(const auto& part:item.at("part_ids")) parts.insert(part.get<std::string>());
+    std::set<std::pair<std::string,std::string>> used;
+    result["balloons"]=Json::array();
+    for(const auto& balloon:balloons) {
+      fields(balloon,{"view","part_id","anchor","label"});
+      const auto view=text_field(balloon,"view"),part=text_field(balloon,"part_id");
+      if(!parts.contains(part)) invalid("Balloon names an unknown assembly part",{{"view",view},{"part_id",part}});
+      if(!used.emplace(view,part).second) invalid("Only one balloon per part in a view is allowed",{{"view",view},{"part_id",part}});
+      Json* target=nullptr;
+      for(auto& candidate:result["views"]) if(candidate.at("id")==view) target=&candidate;
+      if(!target || target->at("orientation")=="section") invalid("Balloon requires a non-section drawing view",{{"view",view},{"part_id",part}});
+      const auto anchor=vector3(balloon.at("anchor"),parameters);
+      const auto center=resolved_point(balloon.at("label"),parameters);
+      if(!target->contains("balloon_anchors")) (*target)["balloon_anchors"]=Json::array();
+      (*target)["balloon_anchors"].push_back({{"part_id",part},{"point",anchor}});
+      result["balloons"].push_back({{"view",view},{"part_id",part},{"anchor",anchor},{"label",center}});
+    }
+  }
   if(spec.contains("notes")) {if(!spec["notes"].is_array() || spec["notes"].size()>6) invalid("Request at most six drawing notes");for(const auto& note:spec["notes"]) result["notes"].push_back(printable(note,"note",120));}
   return result;
 }
 
 Json render_drawing(const Json& projected,const Json& normalized,const Json& identity) {
   const auto views=projections(projected,normalized);const auto dims=dimensions(views,normalized);
+  const auto balloons=drawing_balloons(projected,normalized);
   // Angular arcs and virtual intersections participate in fitting without
   // changing the geometry extents measured by width/height dimensions.
   std::vector<std::array<double,4>> layout_bounds;
@@ -766,6 +953,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
       include(d.center);include(circle_point(d.center,d.radius,d.angle));include(circle_point(d.center,d.radius,d.angle+d.sweep));
       for(int quadrant=0;quadrant<=8;++quadrant) if(quadrant*90>=d.angle && quadrant*90<=d.angle+d.sweep) include(circle_point(d.center,d.radius,quadrant*90));
     }
+    for(const auto& balloon:balloons) if(balloon.view==v.id) {include(balloon.anchor);include(balloon.center);}
     layout_bounds.push_back(bounds);
   }
   const double sheet_w=normalized["sheet"]=="A3"?420:297,sheet_h=normalized["sheet"]=="A3"?297:210,margin=8,gap=7;
@@ -788,6 +976,9 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
   }
   const double footer_h=std::max(27.0,7+title_lines.size()*4.7+note_lines.size()*3.7);
   const double footer_y=sheet_h-margin-footer_h;
+  const auto bom_table=normalized.contains("bom_data")?prepare_bom_table(normalized.at("bom_data"),sheet_w-2*margin):BomTable{};
+  const double views_bottom=footer_y-(bom_table.height>0?bom_table.height+gap:0);
+  if(views_bottom-margin<30) invalid("Complete BOM and views cannot fit on this sheet; use A3 or export the BOM separately");
   const auto layout=normalized.at("layout").get<std::string>();
   const bool standard=layout!="grid",third=layout=="third_angle";
   const auto auxiliary=std::count_if(views.begin(),views.end(),[](const auto& v){return v.orientation=="section" || v.orientation=="isometric";});
@@ -806,7 +997,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     else if(orientation=="isometric") slots[i]=extra[0];
     else slots[i]=extra.at(next_extra++);
   }
-  const double cell_w=(sheet_w-2*margin-(cols-1)*gap)/cols,cell_h=(footer_y-margin-gap-(rows-1)*gap)/rows;
+  const double cell_w=(sheet_w-2*margin-(cols-1)*gap)/cols,cell_h=(views_bottom-margin-gap-(rows-1)*gap)/rows;
   std::vector<Placement> placements;double fit=std::numeric_limits<double>::infinity();
   for(std::size_t i=0;i<views.size();++i) {
     int horizontal=0,vertical=0,radial=0;
@@ -820,6 +1011,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     }
     Placement p{};p.x=margin+slots[i].first*(cell_w+gap);p.y=margin+slots[i].second*(cell_h+gap);p.width=cell_w;p.height=cell_h;
     p.gx=p.x+5;p.gy=p.y+9+radial*5;p.gw=cell_w-10-(vertical?4+vertical*6.5:0);p.gh=cell_h-14-radial*5-(horizontal?4+horizontal*6.5:0);
+    if(std::any_of(balloons.begin(),balloons.end(),[&](const auto& b){return b.view==views[i].id;})) {p.gx+=4;p.gy+=4;p.gw-=8;p.gh-=8;}
     if(p.gw<10 || p.gh<10) invalid("Annotations cannot fit the selected sheet; use fewer views/dimensions or A3",{{"view",views[i].id}});
     const auto& b=layout_bounds[i];const auto width=b[2]-b[0],height=b[3]-b[1];
     if(width<1e-9 && height<1e-9) invalid("Drawing view has no measurable extents",{{"view",views[i].id}});
@@ -848,6 +1040,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
   double scale=normalized.contains("scale")?number(normalized["scale"]):automatic;
   if(!std::isfinite(scale) || scale<=0 || scale>fit*(1+1e-10)) invalid("Requested scale does not fit the sheet",{{"maximum_scale",fit},{"requested_scale",scale}});
   Scene sheet;rectangle(sheet,margin-2,margin-2,sheet_w-2*margin+4,sheet_h-2*margin+4);
+  if(bom_table.height>0) draw_bom_table(sheet,bom_table,margin,views_bottom,sheet_w-2*margin);
   rectangle(sheet,margin,footer_y,sheet_w-2*margin,footer_h);line(sheet,{margin+left_width,footer_y},{margin+left_width,sheet_h-margin});
   double text_y=footer_y+5;
   for(const auto& s:title_lines){label(sheet,{margin+3,text_y},s,3.7);text_y+=4.7;}
@@ -884,6 +1077,8 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     view_layouts.push_back({{"view",v.id},{"origin_mm",point_json(p.origin)},{"cell_mm",{p.x,p.y,p.width,p.height}}});
     std::string view_label=v.id+" - "+v.orientation;
     if(v.orientation=="section") {const auto& section=normalized["views"][i]["section"];view_label=v.id+" - SECTION "+section["axis"].get<std::string>()+"="+numeric(section["offset"].get<double>())+" mm (plane only)";}
+    const bool exploded=normalized["views"][i].contains("explode");
+    if(exploded) view_label+=" - EXPLODED";
     const auto label_size=std::min(3.0,3.0*(p.width-4)/std::max(text_width(view_label,3.0),1.0));
     if(label_size<1.8) invalid("View label is too long for the selected sheet",{{"view",v.id}});
     label(sheet,{p.x+2,p.y+4},view_label,label_size);
@@ -891,10 +1086,14 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     geometry(sheet,v,p,normalized["hidden_lines"].get<bool>());
     Scene dimensions_scene;annotate(dimensions_scene,v,p,dims);sheet.insert(sheet.end(),dimensions_scene.begin(),dimensions_scene.end());
     annotations.insert(annotations.end(),dimensions_scene.begin(),dimensions_scene.end());
+    Scene balloon_scene;annotate_balloons(balloon_scene,v,p,balloons,dimensions_scene);
+    sheet.insert(sheet.end(),balloon_scene.begin(),balloon_scene.end());
+    annotations.insert(annotations.end(),balloon_scene.begin(),balloon_scene.end());
     if(std::find(normalized["formats"].begin(),normalized["formats"].end(),Json("dxf"))!=normalized["formats"].end()) {
       // Center marks and dimensions use the same view transform, reversed back
       // into model mm; exact projection circles/arcs are serialized directly.
       for(const auto& c:circles(v,true)) {const auto at=p.map(c.center);const auto r=std::clamp(c.radius*scale*.18,1.0,2.5);line(annotations,{at.x-r,at.y},{at.x+r,at.y},"CENTER");line(annotations,{at.x,at.y-r},{at.x,at.y+r},"CENTER");}
+      if(exploded) label(annotations,{p.x+2,p.y+4},"EXPLODED - dimensions include offsets",2.7);
       if(normalized.contains("general_tolerances")) {
         double y=p.y-4;
         for(const auto& key:{"linear","angular"}) if(normalized.at("general_tolerances").contains(key)) {
@@ -910,8 +1109,20 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     if(format=="svg") files.push_back({{"name","drawing.svg"},{"format","svg"},{"content",svg(sheet,sheet_w,sheet_h)}});
     if(format=="pdf") files.push_back({{"name","drawing.pdf"},{"format","pdf"},{"content",pdf(sheet,sheet_w,sheet_h)}});
   }
+  Json result={{"dimensions",measured},{"scale",scale},{"sheet_mm",Json::array({sheet_w,sheet_h})},{"layout",layout},{"view_layouts",view_layouts}};
+  if(normalized.contains("bom_data")) {
+    result["bom"]=normalized.at("bom_data");
+    auto bom_document=identity;bom_document["schema_version"]=1;bom_document["units"]="mm";bom_document["bom"]=result.at("bom");
+    files.push_back({{"name","bom.json"},{"format","json"},{"content",bom_document.dump(2)+"\n"}});
+    files.push_back({{"name","bom.csv"},{"format","csv"},{"content",bom_csv(result.at("bom"))}});
+  }
+  if(normalized.contains("balloons")) {
+    result["balloons"]=Json::array();
+    for(const auto& balloon:balloons) result["balloons"].push_back({{"view",balloon.view},{"part_id",balloon.part_id},{"item_number",balloon.item_number},
+      {"anchor_mm",point_json(balloon.anchor)},{"label_mm",point_json(balloon.center)}});
+  }
   std::size_t size=0;for(const auto& file:files) size+=file["content"].get_ref<const std::string&>().size();
   if(size>32*1024*1024) throw Error("limit_exceeded","Drawing artifacts exceed 32 MiB");
-  return {{"files",files},{"dimensions",measured},{"scale",scale},{"sheet_mm",Json::array({sheet_w,sheet_h})},{"layout",layout},{"view_layouts",view_layouts}};
+  result["files"]=std::move(files);return result;
 }
 }

@@ -1,0 +1,38 @@
+{
+  "document_id": "spacer_assembly",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "plate_width": 60, "plate_depth": 30, "plate_thickness": 4,
+      "spacer_height": 16, "spacer_radius": 5, "bore_radius": 2.5,
+      "explode_gap": 12
+    },
+    "features": [
+      {"id":"plate_blank", "type":"box", "size":[{"parameter":"plate_width"},{"parameter":"plate_depth"},{"parameter":"plate_thickness"}]},
+      {"id":"plate_hole_a", "type":"hole", "input":"plate_blank", "origin":[10,10,0], "axis":[0,0,1], "radius":{"parameter":"bore_radius"}, "depth":{"parameter":"plate_thickness"}},
+      {"id":"plate", "type":"hole", "input":"plate_hole_a", "origin":[50,20,0], "axis":[0,0,1], "radius":{"parameter":"bore_radius"}, "depth":{"parameter":"plate_thickness"}},
+      {"id":"spacer_blank", "type":"cylinder", "radius":{"parameter":"spacer_radius"}, "height":{"parameter":"spacer_height"}},
+      {"id":"spacer", "type":"hole", "input":"spacer_blank", "origin":[0,0,0], "axis":[0,0,1], "radius":{"parameter":"bore_radius"}, "depth":{"parameter":"spacer_height"}},
+      {"id":"assembly", "type":"assembly",
+       "parts":[
+         {"id":"base", "input":"plate", "placement":{"translation":[0,0,0]}},
+         {"id":"spacer_a", "input":"spacer"},
+         {"id":"spacer_b", "input":"spacer"},
+         {"id":"cover", "input":"plate"}
+       ],
+       "mates":[
+         {"id":"base_spacer_a", "type":"rigid", "parent":"base", "child":"spacer_a",
+          "parent_frame":{"origin":[10,10,{"parameter":"plate_thickness"}],"normal":[0,0,1],"x_direction":[1,0,0]},
+          "child_frame":{"origin":[0,0,0],"normal":[0,0,1],"x_direction":[1,0,0]}},
+         {"id":"base_spacer_b", "type":"rigid", "parent":"base", "child":"spacer_b",
+          "parent_frame":{"origin":[50,20,{"parameter":"plate_thickness"}],"normal":[0,0,1],"x_direction":[1,0,0]},
+          "child_frame":{"origin":[0,0,0],"normal":[0,0,1],"x_direction":[1,0,0]}},
+         {"id":"spacer_cover", "type":"rigid", "parent":"spacer_a", "child":"cover",
+          "parent_frame":{"origin":[0,0,{"parameter":"spacer_height"}],"normal":[0,0,1],"x_direction":[1,0,0]},
+          "child_frame":{"origin":[10,10,0],"normal":[0,0,1],"x_direction":[1,0,0]}}
+       ]}
+    ],
+    "output":"assembly"
+  }
+}

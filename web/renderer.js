@@ -22,16 +22,26 @@
     if(!Array.isArray(m.triangles)||!m.triangles.length||m.triangles.length>MAX_TRIANGLES||!m.triangles.every(v=>Array.isArray(v)&&v.length===3&&v.every(i=>Number.isInteger(i)&&i>=0&&i<m.positions.length)))fail('Invalid or oversized triangle payload.');
     if(!Array.isArray(t.faces)||!Array.isArray(t.edges)||t.faces.length+t.edges.length>MAX_ENTITIES)fail('Topology exceeds its entity limit.');
     const faces=new Set(),edges=new Set();
+    const parts=d.summary.assembly?.parts,partIds=new Set();
+    if(parts!==undefined) {
+      if(!Array.isArray(parts)||!parts.length||parts.length>64)fail('Invalid assembly parts.');
+      for(const part of parts) {
+        if(!part||typeof part.id!=='string'||!/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(part.id)||partIds.has(part.id)||!part.bounds_mm||!inside(part.bounds_mm.min)||!inside(part.bounds_mm.max)||part.bounds_mm.min.some((v,i)=>v>part.bounds_mm.max[i]))fail('Invalid assembly part bounds or identity.');
+        partIds.add(part.id);
+      }
+    }
     for(const [entities,ids,prefix] of [[t.faces,faces,'face'],[t.edges,edges,'edge']])
       for(const entity of entities) {
         if(!entity||typeof entity.id!=='string'||entity.id.length>32||!new RegExp('^'+prefix+'-[1-9][0-9]*$').test(entity.id)||ids.has(entity.id))fail('Invalid or duplicate topology identity.');
+        if(parts&&!partIds.has(entity.part_id))fail('Assembly topology must identify its owning part.');
         ids.add(entity.id);
       }
     if(!Array.isArray(m.triangle_faces)||m.triangle_faces.length!==m.triangles.length||!m.triangle_faces.every(id=>faces.has(id))||new Set(m.triangle_faces).size!==faces.size)fail('Triangle mapping does not cover the displayed faces.');
     if(!Array.isArray(m.edges)||m.edges.length!==edges.size)fail('Polyline mapping does not cover the displayed edges.');
-    let count=0;const seen=new Set();
+    let count=0;const seen=new Set(),edgeOwners=new Map(t.edges.map(edge=>[edge.id,edge.part_id]));
     for(const edge of m.edges) {
       if(!edge||!edges.has(edge.id)||seen.has(edge.id)||!Array.isArray(edge.points))fail('Invalid edge mapping.');
+      if(parts&&edge.part_id!==edgeOwners.get(edge.id))fail('Assembly edge ownership does not match topology.');
       count+=edge.points.length;if(count>MAX_EDGE_POINTS)fail('Edge payload exceeds its point limit.');
       if(!edge.points.every(inside))fail('Invalid edge coordinates.');
       seen.add(edge.id);
@@ -89,7 +99,22 @@
     const edges=d.mesh.edges.map(e=>({id:e.id,points:Float64Array.from(e.points.flatMap(normalized))}));
     const geometries={face:new Map(d.topology.faces.map(f=>[f.id,f])),edge:new Map(d.topology.edges.map(e=>[e.id,e]))};
     const identity={document_id:d.document_id,revision:d.revision,evaluation_id:d.evaluation_id,feature_id:d.feature_id};
-    return {identity,positions,indices,faces,faceNumbers,triangleFaces:[...d.mesh.triangle_faces],edges,geometries,tree:buildTree(positions,indices)};
+    const partBounds=new Map((d.summary.assembly?.parts||[]).map(part=>[part.id,{min:normalized(part.bounds_mm.min),max:normalized(part.bounds_mm.max)}]));
+    return {identity,positions,indices,faces,faceNumbers,triangleFaces:[...d.mesh.triangle_faces],edges,geometries,tree:buildTree(positions,indices),partBounds,
+      bounds:{min:normalized(bounds.min),max:normalized(bounds.max)},hiddenPartIds:[]};
+  }
+  // Derived draw/pick data retains full evaluation identity and normalization.
+  // Build only on a visibility change, never on a camera/context poll.
+  function visibleModel(source,ids) {
+    if(!Array.isArray(ids)||ids.length>64||new Set(ids).size!==ids.length||ids.some(id=>!source.partBounds.has(id)))fail('Visibility must name unique current assembly parts.');
+    if(!ids.length)return source;
+    const hidden=new Set(ids),visible=entity=>!hidden.has(entity.part_id),geometries={face:new Map([...source.geometries.face].filter(([,e])=>visible(e))),edge:new Map([...source.geometries.edge].filter(([,e])=>visible(e)))};
+    const triangles=[];for(let i=0;i<source.triangleFaces.length;i++)if(geometries.face.has(source.triangleFaces[i]))triangles.push(i);
+    const indices=new Uint32Array(triangles.length*3),triangleFaces=[];
+    triangles.forEach((index,i)=>{indices.set(source.indices.subarray(index*3,index*3+3),i*3);triangleFaces.push(source.triangleFaces[index]);});
+    const edges=source.edges.filter(edge=>geometries.edge.has(edge.id)),bounds={min:[Infinity,Infinity,Infinity],max:[-Infinity,-Infinity,-Infinity]};
+    let count=0;for(const [id,box] of source.partBounds)if(!hidden.has(id)){count++;for(let i=0;i<3;i++){bounds.min[i]=Math.min(bounds.min[i],box.min[i]);bounds.max[i]=Math.max(bounds.max[i],box.max[i]);}}
+    return {...source,indices,triangleFaces,edges,geometries,faces:source.faces.filter(id=>geometries.face.has(id)),tree:buildTree(source.positions,indices),bounds:count?bounds:null,hiddenPartIds:[...ids]};
   }
   function boxEntry(node,ray,limit) {
     let lo=0,hi=limit;
@@ -112,6 +137,7 @@
     const t=dot(f,q)/det;return t>=0&&t<=4 ? t : Infinity;
   }
   function trace(model,ray,budget={remaining:PICK_BUDGET}) {
+    if(!model.indices.length)return {depth:Infinity,ids:new Set()};
     let depth=Infinity;const hits=new Map(),stack=[0],{nodes,order}=model.tree;
     while(stack.length) {
       if(--budget.remaining<0)fail('Selection exceeds its work limit. Inspect a smaller feature.');
@@ -225,7 +251,7 @@
   class CadRenderer {
     constructor(canvas,{onPick=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{}}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
-      this.canvas=canvas;this.callbacks={onPick,onCamera,onError,onReady};this.camera=cloneCamera(DEFAULT_CAMERA);this.mode='face';this.model=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
+      this.canvas=canvas;this.callbacks={onPick,onCamera,onError,onReady};this.camera=cloneCamera(DEFAULT_CAMERA);this.mode='face';this.model=null;this.fullModel=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
       this._controls();
@@ -314,7 +340,7 @@
           if(event.shiftKey){this.camera.pan[0]+=.05*dx;this.camera.pan[1]+=.05*dy;}else{this.camera.yaw+=dx*.1;this.camera.pitch-=dy*.1;}
         } else if(event.key==='+'||event.key==='=')this.camera.zoom*=1.15;
         else if(event.key==='-')this.camera.zoom/=1.15;
-        else if(event.key==='Home'||event.key==='0')this.camera=cloneCamera(DEFAULT_CAMERA);
+        else if(event.key==='Home'||event.key==='0'){event.preventDefault();this.reset();return;}
         else if(event.key==='Escape'){this.selection=null;this.callbacks.onPick(null,{ambiguous:false,message:''});}
         else handled=false;
         if(handled){event.preventDefault();this.camera=camera(this.camera);this._cameraChanged();}
@@ -329,22 +355,44 @@
         this.callbacks.onPick(selection,{ambiguous:result.ambiguous,message:result.ambiguous?'Geometry overlaps here. Rotate the view or inspect a specific feature.':''});
       }catch(error){this.selection=null;this._schedule();this.callbacks.onPick(null,{ambiguous:false,message:error.message});this._error(error);}
     }
-    load(evaluation,{preserveCamera=true}={}) {return this._checked(()=>{const model=prepare(evaluation);this.model=model;this.selection=null;this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);this._upload();this._schedule();});}
+    load(evaluation,{preserveCamera=true,hiddenPartIds=[]}={}) {return this._checked(()=>{const full=prepare(evaluation),model=visibleModel(full,hiddenPartIds);this.fullModel=full;this.model=model;this.selection=null;this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);this._upload();this._schedule();});}
+    setHiddenParts(ids){return this._checked(()=>{
+      if(!Array.isArray(ids))fail('Visibility must be an array of part IDs.');
+      if(!this.fullModel){if(ids.length)fail('Load an assembly before hiding parts.');return;}
+      const canonical=[...ids].sort();
+      if(JSON.stringify(canonical)===JSON.stringify([...this.model.hiddenPartIds].sort()))return;
+      const model=visibleModel(this.fullModel,ids);this.model=model;
+      if(this.selection&&!model.geometries[this.selection.kind].has(this.selection.entity_id))this.selection=null;
+      this._upload();this._schedule();
+    });}
     setMode(mode){return this._checked(()=>{if(mode!=='face'&&mode!=='edge')fail('Selection mode must be face or edge.');this.mode=mode;this.selection=null;this._schedule();});}
     setCamera(value){return this._checked(()=>{this.camera=camera(value);this._cameraChanged();});}
     getCamera(){return cloneCamera(this.camera);}
-    reset(){return this.setCamera(DEFAULT_CAMERA);}
+    reset(){return this._checked(()=>{
+      this.camera=cloneCamera(DEFAULT_CAMERA);const bounds=this.model?.bounds;
+      if(bounds){
+        const {width,height}=this._size(),b=basis(this.camera),corners=[];
+        for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
+        const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
+        const zoom=Math.min(width*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),height*.72/(Math.max(1e-12,high[1]-low[1])*.68*size));
+        this.camera.zoom=Math.max(.05,Math.min(50,zoom));
+        this.camera.pan=[-(low[0]+high[0])/2*.68*this.camera.zoom,(low[1]+high[1])/2*.68*this.camera.zoom];
+        this.camera=camera(this.camera);
+      }
+      this._cameraChanged();
+    });}
     setView(view){return this._checked(()=>{const views={iso:[-.65,.6],top:[0,Math.PI/2],front:[0,0],right:[-Math.PI/2,0]};if(!Object.hasOwn(views,view))fail('Unknown camera view.');[this.camera.yaw,this.camera.pitch]=views[view];this._cameraChanged();});}
     setSelection(reference){return this._checked(()=>{
       if(reference!==null) {
         if(!this.model||!reference||!['face','edge'].includes(reference.kind)||!this.model.geometries[reference.kind].has(reference.entity_id)||Object.entries(this.model.identity).some(([key,value])=>reference[key]!==value))fail('Selection belongs to another evaluation or unknown entity.');
+        if(this.selection?.kind===reference.kind&&this.selection.entity_id===reference.entity_id)return;
         this.selection={...this.model.identity,kind:reference.kind,entity_id:reference.entity_id};
-      }else this.selection=null;
+      }else {if(this.selection===null)return;this.selection=null;}
       this._schedule();
     });}
     capture(){return this._checked(()=>{if(!this.gl||this.lost||!this.resources)fail('WebGL is unavailable for capture.');this._draw();return this.canvas.toDataURL('image/png');});}
-    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources)this.gl.deleteProgram(this.resources.program);this.resources=null;this.model=null;this.selection=null;this.gl=null;}
+    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources)this.gl.deleteProgram(this.resources.program);this.resources=null;this.model=null;this.fullModel=null;this.selection=null;this.gl=null;}
   }
-  CadRenderer.math=Object.freeze({validate,camera,basis,project,screenRay,prepare,trace,pick,nearestSegment,gpuData});
+  CadRenderer.math=Object.freeze({validate,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData});
   globalThis.CadRenderer=CadRenderer;
 })();

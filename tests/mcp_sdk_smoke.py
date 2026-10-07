@@ -16,6 +16,8 @@ https://py.sdk.modelcontextprotocol.io/protocol-versions/
 """
 
 import asyncio
+import csv
+import io
 import importlib.metadata
 import json
 import math
@@ -73,7 +75,7 @@ async def discover(client):
     require(client.server_capabilities.resources is not None, "Server did not advertise app resources")
     result = await client.list_tools()
     definitions = {tool.name: tool for tool in result.tools}
-    require({"cad_create", "cad_read", "cad_apply", "cad_export", "cad_drawing", "cad_job", "cad_open", "cad_show", "cad_context", "cad_list", "cad_viewer"} <= definitions.keys(),
+    require({"cad_create", "cad_read", "cad_apply", "cad_export", "cad_bom", "cad_drawing", "cad_job", "cad_open", "cad_show", "cad_context", "cad_list", "cad_viewer"} <= definitions.keys(),
             "Required editable CAD tools were not discovered")
     require(result.next_cursor is None, "Unexpected unhandled tool pagination")
     for tool in definitions.values():
@@ -156,6 +158,114 @@ async def smoke(executable, workspace):
     # the legacy lifecycle; the test never manufactures those protocol frames.
     async with Client(params, read_timeout_seconds=15) as client:
         definitions = await discover(client)
+        example_dir = Path(__file__).resolve().parents[1] / "examples"
+        assembly_args = json.loads((example_dir / "assembly.create.json").read_text())
+        assembly = await call(client, definitions, "cad_create", assembly_args)
+        require(len(assembly["summary"]["assembly"]["parts"]) >= 2, "SDK assembly inventory is missing")
+        assembly_mesh = await call(client, definitions, "cad_query", {
+            "document_id": assembly_args["document_id"], "revision": 1, "kind": "mesh"})
+        require(all("part_id" in f for f in assembly_mesh["topology"]["faces"]), "SDK assembly faces lost part identity")
+        assembly_recipe = json.loads((example_dir / "assembly.drawing.json").read_text())
+        assembly_job = await call(client, definitions, "cad_job", {
+            "action": "submit", "request_id": "sdk_assembly_drawing", "tool": "cad_drawing", "arguments": assembly_recipe})
+        assembly_done = await poll(client, definitions, assembly_job["job_id"])
+        require(assembly_done["state"] == "succeeded", "SDK exploded drawing job failed")
+        require(json.loads(Path(assembly_done["result"]["recipe_path"]).read_text())["drawing"] == assembly_recipe["drawing"],
+                "SDK exploded recipe did not round trip")
+        aid = assembly_args["document_id"]
+        bom_job = await call(client, definitions, "cad_job", {
+            "action": "submit", "request_id": "sdk_assembly_bom", "tool": "cad_bom",
+            "arguments": {"document_id": aid, "revision": 1}})
+        bom_done = await poll(client, definitions, bom_job["job_id"])
+        require(bom_done["state"] == "succeeded", f"SDK asynchronous BOM export failed: {bom_done}")
+        bom = bom_done["result"]
+        require(bom["bom"]["total_quantity"] == 4 and
+                [(i["input"], i["quantity"], i["item_number"]) for i in bom["bom"]["items"]] ==
+                [("plate", 2, 1), ("spacer", 2, 2)], "SDK BOM did not group source instances deterministically")
+        require(json.loads(Path(bom["path"]).read_text()) == bom, "SDK BOM manifest does not match its result")
+        for artifact in bom["artifacts"]:
+            data = Path(artifact["path"]).read_bytes()
+            require(len(data) == artifact["bytes"] > 0, "SDK BOM artifact size differs from its manifest")
+            if artifact["format"] == "json":
+                saved = json.loads(data)
+                require(saved["bom"] == bom["bom"] and saved["revision"] == 1,
+                        "SDK BOM JSON lost revision-qualified inventory")
+            else:
+                rows = list(csv.DictReader(io.StringIO(data.decode("ascii"))))
+                require([(r["input"], r["quantity"], r["part_ids"]) for r in rows] ==
+                        [("plate", "2", "base;cover"), ("spacer", "2", "spacer_a;spacer_b")],
+                        "SDK BOM CSV did not round trip through the independent CSV parser")
+        metadata = {"input": "plate", "item_number": 9, "part_number": "P-01",
+                    "description": 'Plate, "checked"', "material": "Aluminum"}
+        metadata_edit = await call(client, definitions, "cad_apply", {
+            "document_id": aid, "expected_revision": 1, "operations": [
+                {"op": "set_bom_item", "assembly_id": "assembly", "item": metadata}]})
+        require(metadata_edit["revision"] == 2 and math.isclose(metadata_edit["summary"]["volume_mm3"], assembly["summary"]["volume_mm3"], abs_tol=1e-6),
+                "SDK BOM metadata edit changed geometry or failed to commit")
+        balloon_recipe = json.loads((example_dir / "assembly-bom.drawing.json").read_text())
+        balloon_recipe["revision"] = 2
+        balloon_recipe["drawing"]["notes"] = []
+        balloon_drawing = await call(client, definitions, "cad_drawing", balloon_recipe)
+        require({b["part_id"]: b["item_number"] for b in balloon_drawing["balloons"]} ==
+                {"base": 9, "cover": 9, "spacer_a": 1, "spacer_b": 1},
+                "SDK balloons did not use the edited shared BOM item numbers")
+        files = {a["format"]: Path(a["path"]).read_bytes() for a in balloon_drawing["artifacts"]}
+        require(set(files) == {"svg", "pdf", "dxf", "json", "csv"}, "BOM drawing omitted sidecars or requested formats")
+        require(json.loads(files["json"])["bom"] == balloon_drawing["bom"], "Drawing BOM JSON differs from response")
+        require(list(csv.DictReader(io.StringIO(files["csv"].decode("ascii"))))[-1]["description"] == metadata["description"],
+                "Quoted drawing BOM metadata did not survive independent CSV parsing")
+        require(b"BILL OF MATERIALS" in files["pdf"] and b"BALLOONS" in files["dxf"],
+                "SDK drawing files omitted rendered tables or balloons")
+        require((await call(client, definitions, "cad_bom", {"document_id": aid, "revision": 1}))["bom"] == bom["bom"],
+                "Historical BOM changed after metadata edit")
+        await call(client, definitions, "cad_apply", {"document_id": aid, "expected_revision": 2, "operations": [
+            {"op": "remove_bom_item", "assembly_id": "assembly", "input": "plate"}]})
+        require((await call(client, definitions, "cad_bom", {"document_id": aid, "revision": 3}))["bom"] == bom["bom"],
+                "BOM metadata removal did not restore automatic rows")
+        await call(client, definitions, "cad_bom", {"document_id": aid, "revision": 3, "feature_id": "plate"},
+                   expected_error="invalid_argument")
+        await call(client, definitions, "cad_open", {"document_id": aid, "view_id": "sdk_visibility"})
+        for _ in range(500):
+            display = await call(client, definitions, "cad_viewer", {"action": "sync", "view_id": "sdk_visibility"})
+            if display["state"] != "loading":
+                break
+            await asyncio.sleep(.01)
+        require(display["state"] == "ready" and display["hidden_part_ids"] == [], "SDK assembly visibility does not default to show all")
+        mesh_parts, offset = [], 0
+        while offset is not None:
+            chunk = await call(client, definitions, "cad_viewer", {"action": "mesh", "view_id": "sdk_visibility",
+                "evaluation_id": display["evaluation_id"], "offset": offset})
+            mesh_parts.append(chunk["data"])
+            offset = chunk["next_offset"]
+        frozen = json.loads("".join(mesh_parts))
+        hidden_face = next(face for face in frozen["topology"]["faces"] if face["part_id"] == "cover")
+        hidden_pick = {"document_id": aid, "revision": 3, "evaluation_id": display["evaluation_id"],
+                       "feature_id": display["feature_id"], "kind": "face", "entity_id": hidden_face["id"]}
+        visibility_args = {"action": "context", "view_id": "sdk_visibility", "evaluation_id": display["evaluation_id"],
+                           "selection": None, "hidden_part_ids": ["cover", "spacer_b"]}
+        hidden_context = await call(client, definitions, "cad_viewer", visibility_args)
+        require(hidden_context["hidden_part_ids"] == ["cover", "spacer_b"], "SDK context omitted hidden assembly IDs")
+        hidden_sync = await call(client, definitions, "cad_viewer", {"action": "sync", "view_id": "sdk_visibility",
+            "known_evaluation_id": display["evaluation_id"]})
+        require(hidden_sync["changed"] is False and hidden_sync["hidden_part_ids"] == ["cover", "spacer_b"],
+                "SDK same-evaluation sync lost presentation state")
+        await call(client, definitions, "cad_viewer", {**visibility_args, "selection": hidden_pick}, expected_error="invalid_argument")
+        require((await call(client, definitions, "cad_context", {"view_id": "sdk_visibility"})) == hidden_context,
+                "SDK hidden-part selection changed saved presentation state")
+        omitted_visibility = {key: value for key, value in visibility_args.items() if key != "hidden_part_ids"}
+        require((await call(client, definitions, "cad_viewer", omitted_visibility))["hidden_part_ids"] == ["cover", "spacer_b"],
+                "SDK context update without visibility cleared hidden parts")
+        require((await call(client, definitions, "cad_viewer", {**visibility_args, "hidden_part_ids": [], "selection": hidden_pick}))["hidden_part_ids"] == [],
+                "SDK show-all did not permit selecting the revealed part")
+        await call(client, definitions, "cad_viewer", visibility_args)
+        for invalid_hidden in ["cover", ["cover", "cover"], [1], ["cover"] * 65]:
+            require(not Draft202012Validator(definitions["cad_viewer"].input_schema).is_valid(
+                {**visibility_args, "hidden_part_ids": invalid_hidden}), "SDK schema accepted malformed hidden-part IDs")
+        for bad in [{"op": "set_bom_item", "assembly_id": "assembly", "item": {"input": "plate", "item_number": 1000}},
+                    {"op": "set_bom_item", "assembly_id": "assembly", "item": {"input": "plate", "description": "line\n"}}]:
+            require(not Draft202012Validator(definitions["cad_apply"].input_schema).is_valid(
+                {"document_id": aid, "expected_revision": 3, "operations": [bad]}),
+                "SDK advertised schema accepts invalid BOM metadata")
         arguments = {"document_id": "part", "model": box_model(), "request_id": "sdk_create"}
         created = await call(client, definitions, "cad_create", arguments)
         require(created["revision"] == 1, "Initial native revision is not one")
@@ -266,6 +376,14 @@ async def smoke(executable, workspace):
                 "Durable mutation deduplication failed across SDK sessions")
         persisted = await call(reopened, definitions, "cad_job", {"action": "get", "job_id": "sdk_query"})
         require(persisted["state"] == "succeeded", "Job result was not durable across SDK sessions")
+        persisted_bom = await call(reopened, definitions, "cad_job", {"action": "get", "job_id": "sdk_assembly_bom"})
+        require(persisted_bom["state"] == "succeeded" and persisted_bom["result"]["bom"] == bom["bom"],
+                "Asynchronous BOM result changed across SDK sessions")
+        require((await call(reopened, definitions, "cad_context", {"view_id": "sdk_visibility"}))["hidden_part_ids"] == ["cover", "spacer_b"],
+                "Assembly visibility did not persist across SDK sessions")
+        await call(reopened, definitions, "cad_show", {"view_id": "sdk_visibility", "document_id": "part"})
+        require((await call(reopened, definitions, "cad_context", {"view_id": "sdk_visibility"}))["hidden_part_ids"] == [],
+                "SDK retargeting did not clear assembly visibility")
 
 
 def main():

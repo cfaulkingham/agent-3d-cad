@@ -1,5 +1,6 @@
 """Developer-only, isolated CLI benchmark; no Python dependency for the service."""
 import argparse
+import hashlib
 import json
 import math
 import pathlib
@@ -15,14 +16,24 @@ parser.add_argument("executable", type=pathlib.Path)
 parser.add_argument("output", type=pathlib.Path)
 parser.add_argument("--resume", type=pathlib.Path)
 parser.add_argument("--views", choices=("section", "standard"), default="section")
+parser.add_argument("--cold-only", action="store_true", help="Measure creation and the first drawing, without warm/style/edit scenarios")
+parser.add_argument("--timeout-ms", type=int, default=240000, help="Per-job budget, 1–300000 ms (default 240000)")
 args = parser.parse_args()
+if not 1 <= args.timeout_ms <= 300000:
+    parser.error("--timeout-ms must be between 1 and 300000")
 exe = args.executable.resolve()
+executable_digest = hashlib.sha256(exe.read_bytes()).hexdigest()
 args.output.mkdir(parents=True, exist_ok=True)
 root = args.resume.resolve() if args.resume else pathlib.Path(tempfile.mkdtemp(prefix="cache-benchmark-", dir=args.output.resolve()))
 workspace = root / "workspace"
 source = pathlib.Path(__file__).resolve().parents[1] / "examples/m20-knob.create.json"
 create = json.loads(source.read_text())
-report = json.loads((root / "report.json").read_text()) if args.resume else {"platform": platform.platform(), "executable": str(exe), "workspace": str(workspace), "views": args.views, "scenarios": []}
+report = json.loads((root / "report.json").read_text()) if args.resume else {"platform": platform.platform(), "executable": str(exe), "executable_sha256": executable_digest,
+    "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(), "workspace": str(workspace), "views": args.views, "timeout_ms": args.timeout_ms, "scenarios": []}
+if args.resume and report["views"] != args.views:
+    parser.error("--views must match the resumed benchmark")
+if args.resume and report.get("executable_sha256", executable_digest) != executable_digest:
+    parser.error("The executable changed; start a fresh benchmark instead of combining results from different builds")
 
 
 def call(tool, request):
@@ -41,25 +52,26 @@ def call(tool, request):
 
 def job(label, tool, request):
     call("cad_job", {"action": "submit", "request_id": label, "tool": tool, "arguments": request,
-                     "budget": {"timeout_ms": 240000, "memory_mb": 2048}})
+                     "budget": {"timeout_ms": args.timeout_ms, "memory_mb": 2048}})
     while True:
         state = call("cad_job", {"action": "get", "job_id": label})
-        if state["state"] in ("failed", "cancelled", "interrupted"):
-            raise RuntimeError(json.dumps(state))
-        if state["state"] == "succeeded":
+        if state["state"] in ("succeeded", "failed", "cancelled", "interrupted"):
             break
         time.sleep(0.02)
     # Durable coordinator times also allow resuming an interrupted benchmark.
     durable = json.loads((workspace / "jobs" / label / "state.json").read_text())
     elapsed = (durable["updated_at_unix_ms"] - durable["submitted_at_unix_ms"]) / 1000
-    result = state["result"]
-    (root / (label + ".json")).write_text(json.dumps(result, indent=2) + "\n")
+    result = state.get("result")
+    (root / (label + ".json")).write_text(json.dumps(result if result is not None else state, indent=2) + "\n")
     cache = list((workspace / ".cache").glob("*.json"))
     report["scenarios"] = [s for s in report["scenarios"] if s["name"] != label]
-    report["scenarios"].append({"name": label, "seconds": elapsed, "cache_entries": len(cache),
-                                "cache_bytes": sum(p.stat().st_size for p in cache)})
+    report["scenarios"].append({"name": label, "state": state["state"], "seconds": elapsed, "cache_entries": len(cache),
+                                "cache_bytes": sum(p.stat().st_size for p in cache),
+                                **({"error": state["error"]} if "error" in state else {})})
     (root / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-    print(f"{label}: {elapsed:.3f}s ({len(cache)} entries)", flush=True)
+    print(f"{label}: {state['state']} in {elapsed:.3f}s ({len(cache)} entries)", flush=True)
+    if state["state"] != "succeeded":
+        raise RuntimeError(f"{label} {state['state']}: {state.get('error')}; report: {root / 'report.json'}")
     return result
 
 
@@ -73,6 +85,9 @@ if args.views == "section":
                                     {"id": "grip", "orientation": "section", "section": {"axis": "z", "offset": 9}}]
     request["drawing"]["dimensions"] = [{"view": "longitudinal", "kind": "height"}, {"view": "grip", "kind": "width"}]
 cold = job("cold_drawing", "cad_drawing", request)
+if args.cold_only:
+    print(f"Report: {root / 'report.json'}", flush=True)
+    raise SystemExit(0)
 for i in range(3):
     warm = job(f"warm_drawing_{i}", "cad_drawing", request)
     assert warm["dimensions"] == cold["dimensions"]

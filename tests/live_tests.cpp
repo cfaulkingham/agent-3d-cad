@@ -6,6 +6,7 @@
 #include <functional>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 using namespace agentcad;
 namespace {
@@ -55,6 +56,81 @@ Json chunks(Service& service,const std::string& view,const Json& evaluation,std:
 Json edit(Service& service,int revision,int height) {
   return call(service,"cad_apply",{{"document_id","part"},{"expected_revision",revision},
     {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",height}}})}});
+}
+void visibility_tests() {
+  Temporary temporary;Service service(temporary.path);auto model=box();
+  const Json assembly={{"id","assembly"},{"type","assembly"},{"parts",Json::array({
+    {{"id","alpha"},{"input","base"}},
+    {{"id","beta"},{"input","base"},{"placement",{{"translation",{30,0,0}}}}},
+    {{"id","gamma"},{"input","base"},{"placement",{{"translation",{60,0,0}}}}}
+  })}};
+  model["features"].push_back(assembly);model["output"]="assembly";
+  call(service,"cad_create",{{"document_id","assembly"},{"model",model}});
+  call(service,"cad_create",{{"document_id","other"},{"model",box()}});
+  call(service,"cad_open",{{"document_id","assembly"},{"view_id","visibility"}});
+  auto shown=ready(service,"visibility");const auto initial=shown.at("evaluation_id");
+  const auto full=chunks(service,"visibility",initial);
+  require(shown.at("hidden_part_ids").empty(),"Assembly starts with all parts visible");
+  auto pick_for=[&](const std::string& part) {
+    for (const auto& face:full.at("topology").at("faces")) if(face.at("part_id")==part)
+      return Json{{"document_id","assembly"},{"revision",1},{"evaluation_id",initial},{"feature_id","assembly"},{"kind","face"},{"entity_id",face.at("id")}};
+    throw std::runtime_error("Missing fixture part face");
+  };
+  const auto alpha=pick_for("alpha"),beta=pick_for("beta");
+  auto context_args=[&](Json selection,Json hidden) {return Json{{"action","context"},{"view_id","visibility"},{"evaluation_id",initial},{"selection",selection},{"hidden_part_ids",hidden}};};
+  auto saved=call(service,"cad_viewer",context_args(nullptr,Json::array({"beta","gamma"})));
+  require(saved.at("hidden_part_ids")==Json::array({"beta","gamma"}),"Hide and isolate state reports exact part IDs");
+  require(call(service,"cad_read",{{"document_id","assembly"}}).at("model")==model,"Visibility never edits source intent");
+  Service reopened(temporary.path);
+  require(call(reopened,"cad_context",{{"view_id","visibility"}})==saved,"Hidden parts persist across service restart");
+  auto unchanged=ready(reopened,"visibility",initial.get<std::string>());
+  require(!unchanged.at("changed").get<bool>()&&unchanged.at("hidden_part_ids")==saved.at("hidden_part_ids"),"Known ready sync still carries visibility state");
+  auto omitted=context_args(alpha,Json::array());omitted.erase("hidden_part_ids");
+  saved=call(reopened,"cad_viewer",omitted);
+  require(saved.at("hidden_part_ids")==Json::array({"beta","gamma"})&&saved.at("selection")==alpha,"Omitted visibility retains mask and allows visible-part selection");
+  for (const Json invalid:Json::array({Json("beta"),Json::array({"beta","beta"}),Json::array({"missing"}),Json::array({4}),Json::array({"../bad"})}))
+    fails("invalid_argument",[&]{call(reopened,"cad_viewer",context_args(nullptr,invalid));});
+  fails("invalid_argument",[&]{call(reopened,"cad_viewer",context_args(nullptr,Json(std::vector<std::string>(65,"beta"))));});
+  fails("invalid_argument",[&]{call(reopened,"cad_viewer",context_args(beta,Json::array({"beta"})));});
+  auto omitted_hidden=context_args(beta,Json::array());omitted_hidden.erase("hidden_part_ids");
+  fails("invalid_argument",[&]{call(reopened,"cad_viewer",omitted_hidden);});
+  fails("invalid_argument",[&]{call(reopened,"cad_viewer",context_args(alpha,Json::array({"alpha"})));});
+  require(call(reopened,"cad_context",{{"view_id","visibility"}})==saved,"Invalid masks and hidden selections roll back context and presentation together");
+  auto visible=call(reopened,"cad_viewer",context_args(beta,Json::array()));
+  require(visible.at("hidden_part_ids").empty()&&visible.at("selection")==beta,"Show all and select formerly hidden part atomically");
+  call(reopened,"cad_viewer",context_args(nullptr,Json::array({"alpha","beta","gamma"})));
+  require(chunks(reopened,"visibility",initial)==full,"Hiding all parts does not rewrite frozen geometry or topology");
+  call(reopened,"cad_viewer",context_args(alpha,Json::array({"beta","gamma"})));
+  call(reopened,"cad_show",{{"document_id","assembly"},{"view_id","visibility"}});
+  require(call(reopened,"cad_context",{{"view_id","visibility"}}).at("hidden_part_ids")==Json::array({"beta","gamma"}),"Showing the same document retains hidden parts");
+  fails("invalid_model",[&]{call(reopened,"cad_apply",{{"document_id","assembly"},{"expected_revision",1},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",-1}}})}});});
+  require(ready(reopened,"visibility").at("hidden_part_ids")==Json::array({"beta","gamma"}),"Rejected model edit preserves visibility");
+  call(reopened,"cad_apply",{{"document_id","assembly"},{"expected_revision",1},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",8}}})}});
+  auto stale=call(reopened,"cad_context",{{"view_id","visibility"}});
+  require(stale.at("stale").get<bool>()&&stale.at("hidden_part_ids")==Json::array({"beta","gamma"}),"Stale saved pick retains current displayed presentation state");
+  fails("stale_selection",[&]{call(reopened,"cad_viewer",context_args(nullptr,Json::array()));});
+  shown=ready(reopened,"visibility");
+  require(shown.at("revision")==2&&shown.at("hidden_part_ids")==Json::array({"beta","gamma"}),"Same-document revision preserves existing part visibility");
+  auto reduced=assembly;reduced["parts"].erase(2);
+  call(reopened,"cad_apply",{{"document_id","assembly"},{"expected_revision",2},
+    {"operations",Json::array({{{"op","replace_feature"},{"id","assembly"},{"feature",reduced}}})}});
+  require(call(reopened,"cad_context",{{"view_id","visibility"}}).at("hidden_part_ids")==Json::array({"beta","gamma"}),"Removed part remains masked until new display publishes");
+  shown=ready(reopened,"visibility");
+  require(shown.at("revision")==3&&shown.at("hidden_part_ids")==Json::array({"beta"}),"New display prunes only disappeared part IDs");
+  stale=call(reopened,"cad_context",{{"view_id","visibility"}});
+  require(stale.at("stale").get<bool>()&&stale.at("revision")==1&&stale.at("hidden_part_ids")==Json::array({"beta"}),"Old pick cannot overwrite current display visibility");
+  call(reopened,"cad_show",{{"document_id","other"},{"view_id","visibility"}});
+  require(call(reopened,"cad_context",{{"view_id","visibility"}}).at("hidden_part_ids").empty(),"Retargeting a document clears visibility immediately");
+  require(ready(reopened,"visibility").at("hidden_part_ids").empty(),"Single-part view has empty hidden-part state");
+  call(reopened,"cad_show",{{"document_id","assembly"},{"view_id","visibility"}});
+  shown=ready(reopened,"visibility");require(shown.at("hidden_part_ids").empty(),"Returning to document does not revive prior view masks");
+  call(reopened,"cad_viewer",{{"action","context"},{"view_id","visibility"},{"evaluation_id",shown.at("evaluation_id")},{"selection",nullptr},{"hidden_part_ids",Json::array({"beta"})}});
+  call(reopened,"cad_apply",{{"document_id","assembly"},{"expected_revision",3},
+    {"operations",Json::array({{{"op","set_output"},{"feature_id","base"}}})}});
+  shown=ready(reopened,"visibility");require(shown.at("hidden_part_ids").empty(),"Switching output to a solid prunes assembly visibility");
+  fails("invalid_argument",[&]{call(reopened,"cad_viewer",{{"action","context"},{"view_id","visibility"},{"evaluation_id",shown.at("evaluation_id")},{"selection",nullptr},{"hidden_part_ids",Json::array({"beta"})}});});
 }
 }
 int main() {try {
@@ -145,11 +221,12 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==18,"legacy, drawing and five live tools remain published");
+  require(definitions.size()==19,"legacy, drawing, BOM and five live tools remain published");
   for(const auto& tool:definitions) {
     if(tool.at("name")=="cad_open")require(tool.at("_meta").at("ui").at("resourceUri")==viewer_app_uri,"open tool advertises MCP App resource");
     if(tool.at("name")=="cad_show")require(!tool.contains("_meta"),"show updates existing view without opening another app");
     if(tool.at("name")=="cad_viewer")require(tool.at("_meta").at("ui").at("visibility")==Json::array({"app"}),"viewer plumbing advertises app-only visibility");
   }
+  visibility_tests();
   std::cout<<"live: "<<checks<<" checks passed\n";return 0;
 }catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

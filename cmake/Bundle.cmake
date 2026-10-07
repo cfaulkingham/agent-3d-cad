@@ -1,5 +1,6 @@
-# Portable archives deliberately contain no SDK headers, compiler or scripts
-# needed to execute a model. All dependency inspection happens while installing.
+# Portable archives need no developer SDK, compiler or scripts to execute a
+# model. Modified dependency sources accompany the notices; dependency inspection
+# happens while installing.
 set(AGENTCAD_NOTICE_DIRECTORY "${OpenCASCADE_INSTALL_PREFIX}/share/agentcad-dependency-notices" CACHE PATH
   "Notices installed by the pinned dependency recipe")
 set(AGENTCAD_JSON_LICENSE "" CACHE FILEPATH "nlohmann JSON 3.12.0 LICENSE.MIT (for external SDK builds)")
@@ -24,7 +25,7 @@ file(SHA256 "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" AGENTCAD_APP_SHA
 install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/occt)
 install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples)
 install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
-install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/DRAWINGS.md DESTINATION share/agent-3d-cad)
+install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/DRAWINGS.md docs/ASSEMBLIES.md DESTINATION share/agent-3d-cad)
 install(FILES packaging/THIRD_PARTY.md DESTINATION share/agent-3d-cad/notices)
 configure_file(cmake/InstallBundle.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle.cmake" @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle-$<CONFIG>.cmake"

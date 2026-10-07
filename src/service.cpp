@@ -6,6 +6,7 @@
 #include "agentcad/hash.hpp"
 #include "agentcad/live.hpp"
 #include "agentcad/drawing.hpp"
+#include "agentcad/bom.hpp"
 #include <fstream>
 #include <random>
 #include <set>
@@ -21,7 +22,8 @@ Json summary_schema() {
   const Json point={{"type","array"},{"items",number},{"minItems",3},{"maxItems",3}};
   return object({{"valid",{{"const",true}}},{"units",{{"const","mm"}}},{"volume_mm3",number},{"area_mm2",number},
     {"center_of_mass_mm",point},{"bounds_mm",object({{"min",point},{"max",point}},{"min","max"})},
-    {"solid_count",integer},{"face_count",integer},{"edge_count",integer}},
+    {"solid_count",integer},{"face_count",integer},{"edge_count",integer},
+    {"assembly",{{"$ref","#/$defs/assembly_summary"}}}},
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
 }
 std::string evaluation_id() {
@@ -86,7 +88,7 @@ Json tool_definitions() {
       {"annotations",{{"readOnlyHint",read_only},{"destructiveHint",false},{"openWorldHint",false}}}};
   };
   Json tools=Json::array({
-    tool("cad_create","Build a structured model and commit revision 1. Optional request_id deduplicates retries.",
+    tool("cad_create","Build editable parts or an assembly with rigid placements and frame mates, and commit revision 1. Optional request_id deduplicates retries.",
       {{"document_id",id},{"model",{{"$ref","#/$defs/model"}}},{"request_id",id}}, {"document_id","model"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_read","Read saved editable intent. Omit revision to read HEAD.",
@@ -108,7 +110,13 @@ Json tool_definitions() {
       {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}}},{"document_id","revision","format"},
       object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}}},
         {"document_id","revision","format","path","bytes","units"}),false),
-    tool("cad_drawing","Generate a vector drawing of a committed revision. Measured linear/angular dimensions, explicit manufacturing tolerances, aligned first/third-angle layouts, hidden-line views, hatched sections, PDF/SVG sheets and per-view 1:1 mm DXF. Save the recipe to regenerate after edits; never changes the model.",
+    tool("cad_bom","Export a committed assembly bill of materials as JSON and CSV. Group named part instances by source feature, preserve explicit metadata and item numbers, and never infer material.",
+      {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
+      object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
+        {"bom",{{"$ref","#/$defs/bom"}}},{"path",text},
+        {"artifacts",{{"type","array"},{"minItems",2},{"maxItems",2},{"items",object({{"format",{{"enum",{"json","csv"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}}}, {"format","path","bytes"})}}}},
+        {"document_id","revision","kernel_version","units","bom","artifacts","path"}),false),
+    tool("cad_drawing","Generate a vector drawing of a committed revision, including exploded assembly views, bills of materials and geometry-checked numbered balloons. Measured dimensions, explicit tolerances, aligned layouts, hidden-line views, hatched sections, PDF/SVG sheets and per-view 1:1 mm DXF. Save the recipe to regenerate after edits; never changes the model.",
       {{"document_id",id},{"revision",revision},{"drawing",drawing_schema()}},{"document_id","revision"},
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
         {"scale",{{"type","number"},{"exclusiveMinimum",0}}},
@@ -119,9 +127,14 @@ Json tool_definitions() {
           {"cell_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",4},{"maxItems",4}}}},
           {"view","origin_mm","cell_mm"}),6)},
         {"path",text},{"recipe_path",text},{"projection_tolerance_mm",{{"const",0.02}}},
-        {"artifacts",array(object({{"format",{{"enum",{"svg","pdf","dxf"}}}},{"path",text},
-          {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),8)},
-        {"dimensions",array(drawing_dimension_result_schema(),32)}},
+        {"artifacts",array(object({{"format",{{"enum",{"svg","pdf","dxf","json","csv"}}}},{"path",text},
+          {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),10)},
+        {"dimensions",array(drawing_dimension_result_schema(),32)},
+        {"bom",{{"$ref","#/$defs/bom"}}},
+        {"balloons",array(object({{"view",id},{"part_id",id},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
+          {"anchor_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}},
+          {"label_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}}},
+          {"view","part_id","item_number","anchor_mm","label_mm"}),64)}},
         {"document_id","revision","kernel_version","units","scale","sheet_mm","layout","view_layouts","path","recipe_path","artifacts","dimensions","projection_tolerance_mm"}),false),
     tool("cad_view","Save an offline interactive HTML viewer and .view.json. Pick a face or edge and copy/save its revision-qualified reference.",
       {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
@@ -144,7 +157,7 @@ Json tool_definitions() {
   });
   const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},
     {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array());
-  const std::set<std::string> job_tools={"cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_drawing","cad_preview","cad_view"};
+  const std::set<std::string> job_tools={"cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   for(const auto& definition:tools) {
     const auto name=definition.at("name").get<std::string>();if(!job_tools.contains(name))continue;
@@ -171,7 +184,7 @@ Json Service::call(const std::string& tool,const Json& args) {
   if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
     return live_call(*this,store_,tool,args);
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
-  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
+  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
   if(!known.contains(tool)) throw Error("unknown_tool","Unknown tool: "+tool);
   if(tool=="cad_create") fields(args,{"document_id","model"},{"request_id"});
   else if(tool=="cad_read") fields(args,{"document_id"},{"revision"});
@@ -179,6 +192,7 @@ Json Service::call(const std::string& tool,const Json& args) {
   else if(tool=="cad_restore") fields(args,{"document_id","expected_revision","source_revision"},{"request_id"});
   else if(tool=="cad_import") fields(args,{"document_id","path"},{"request_id"});
   else if(tool=="cad_export") fields(args,{"document_id","revision","format"});
+  else if(tool=="cad_bom") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_drawing") fields(args,{"document_id","revision"},{"drawing"});
   else if(tool=="cad_query") fields(args,{"document_id","revision"},{"kind","feature_id"});
   else if(tool=="cad_view") fields(args,{"document_id","revision"},{"feature_id"});
@@ -271,6 +285,26 @@ Json Service::call(const std::string& tool,const Json& args) {
     return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,true);
   }
   const auto revision=revision_number(args.at("revision"));const auto record=store_.read(id,revision);
+  if(tool=="cad_bom") {
+    const auto bom=build_bom(record.at("model"),args.value("feature_id",std::string()));
+    const Json identity={{"document_id",id},{"revision",revision},{"kernel_version",record.at("kernel_version")},{"units","mm"}};
+    auto exported=identity;exported["schema_version"]=1;exported["bom"]=bom;
+    const auto exports=store_.root()/"exports";directory(exports);
+    const auto destination=exports/(id+"-r"+std::to_string(revision)+"-bom-"+evaluation_id());
+    directory(destination);
+    try {
+      auto result=identity;result["bom"]=bom;result["artifacts"]=Json::array();result["path"]=path_to_utf8(destination/"manifest.json");
+      for(const auto* format:{"json","csv"}) {
+        const auto content=std::string(format)=="json"?exported.dump(2)+"\n":bom_csv(bom);
+        const auto target=destination/(std::string("bom.")+format);
+        check_job_cancelled();write_artifact(target,content);
+        result["artifacts"].push_back({{"format",format},{"path",path_to_utf8(target)},{"bytes",content.size()}});
+      }
+      DocumentLock lock(store_.root(),id);check_job_cancelled();
+      write_artifact(destination/"manifest.json",result.dump(2)+"\n");
+      return result;
+    } catch(...) {std::error_code ignored;fs::remove_all(destination,ignored);throw;}
+  }
   if(tool=="cad_drawing") {
     const auto recipe=args.value("drawing",Json::object());
     const auto spec=normalize_drawing(recipe,record.at("model"));
@@ -286,6 +320,7 @@ Json Service::call(const std::string& tool,const Json& args) {
       Json result=identity;result["units"]="mm";result["scale"]=evaluated.at("scale");
       result["sheet_mm"]=evaluated.at("sheet_mm");result["dimensions"]=evaluated.at("dimensions");
       result["layout"]=evaluated.at("layout");result["view_layouts"]=evaluated.at("view_layouts");
+      for(const auto* field:{"bom","balloons"}) if(evaluated.contains(field)) result[field]=evaluated.at(field);
       result["projection_tolerance_mm"]=0.02;
       result["path"]=path_to_utf8(destination/"manifest.json");
       result["recipe_path"]=path_to_utf8(destination/"drawing.json");
@@ -296,10 +331,11 @@ Json Service::call(const std::string& tool,const Json& args) {
         const auto content=text_field(file,"content");
         const auto path=path_from_utf8(name);
         if(path.filename()!=path||name.empty()||name=="."||name==".."||!names.insert(name).second||
-           (format!="svg"&&format!="pdf"&&format!="dxf")||path.extension()!=path_from_utf8("."+format))
+           (format!="svg"&&format!="pdf"&&format!="dxf"&&format!="json"&&format!="csv")||path.extension()!=path_from_utf8("."+format)||
+           ((format=="json"||format=="csv")&&name!="bom."+format))
           throw Error("internal_error","Invalid drawing artifact filename");
         total+=content.size();
-        if(content.empty()||total>64*1024*1024||names.size()>8)throw Error("limit_exceeded","Drawing artifacts exceed output limits");
+        if(content.empty()||total>64*1024*1024||names.size()>10)throw Error("limit_exceeded","Drawing artifacts exceed output limits");
         check_job_cancelled();write_artifact(destination/path,content);
         Json artifact={{"format",format},{"path",path_to_utf8(destination/path)},{"bytes",content.size()}};
         if(format=="dxf")artifact["view_id"]=path_to_utf8(path.stem());

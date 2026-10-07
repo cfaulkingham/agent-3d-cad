@@ -152,6 +152,77 @@ std::string artifact(const Json& drawing,const std::string& name) {
   for(const auto& f:drawing.at("files")) if(f.at("name")==name) return f.at("content");
   throw std::runtime_error("Missing rendered artifact");
 }
+void paint_order_tests() {
+  // Different 3D edges can have coincident projections. Exercise the renderer
+  // directly so the kernel's exact-edge deduplication cannot remove this case.
+  Json entities=Json::array({
+    {{"kind","circle"},{"hidden",false},{"center",{5,5}},{"radius",2}},
+    {{"kind","arc"},{"hidden",false},{"center",{12,5}},{"radius",3},{"start_deg",30},{"end_deg",210}}});
+  for(std::size_t i=0;i<2;++i) {auto duplicate=entities[i];duplicate["hidden"]=true;entities.push_back(std::move(duplicate));}
+  const Json projected={{"views",Json::array({{{"id","front"},{"orientation","front"},{"bounds_mm",{0,0,20,10}},{"entities",entities}}})}};
+  for(const bool hidden:{true,false}) {
+    const auto spec=normalize_drawing({{"views",Json::array({{{"id","front"},{"orientation","front"}}})},
+      {"formats",{"svg","pdf","dxf"}},{"dimensions",Json::array()},{"scale",1},{"hidden_lines",hidden}},box());
+    const auto drawing=render_drawing(projected,spec,{{"document_id","paint_order"},{"revision",1},{"kernel_version",kernel_version()}});
+    const std::size_t expected=hidden?4:2;
+    auto expected_hidden=[&](std::size_t i){return hidden && i<2;};
+
+    const auto svg=artifact(drawing,"drawing.svg");
+    std::istringstream svg_input(svg);std::string line;
+    std::vector<std::pair<std::string,std::string>> svg_curves;
+    bool seen_center=false;
+    while(std::getline(svg_input,line)) {
+      if(line.find("data-layer=\"CENTER\"")!=std::string::npos) seen_center=true;
+      if(!line.starts_with("<circle ") && !line.starts_with("<path ")) continue;
+      require(!seen_center,"SVG center annotations follow geometry");
+      const auto layer=line.find(" data-layer=");require(layer!=std::string::npos,"SVG curve declares its layer");
+      svg_curves.emplace_back(line.substr(layer),line.substr(0,layer));
+    }
+    require(seen_center && svg_curves.size()==expected,"SVG preserves curved geometry and center annotations");
+    for(std::size_t i=0;i<svg_curves.size();++i) {
+      const auto& style=svg_curves[i].first;
+      require(style.find(expected_hidden(i)?"data-layer=\"HIDDEN\"":"data-layer=\"VISIBLE\"")!=std::string::npos,"SVG paints hidden curves before visible curves");
+      require((style.find("stroke-dasharray=")!=std::string::npos)==expected_hidden(i),"SVG visible curves paint continuously over hidden dashes");
+    }
+    if(hidden) for(std::size_t i=0;i<2;++i) require(svg_curves[i].second==svg_curves[i+2].second,"SVG visible strokes exactly coincide with the earlier hidden curves");
+
+    const auto pdf=artifact(drawing,"drawing.pdf");
+    const auto start=pdf.find("stream\n"),end=pdf.find("endstream",start);
+    require(start!=std::string::npos && end!=std::string::npos,"PDF drawing stream is present");
+    std::istringstream pdf_input(pdf.substr(start+7,end-start-7));
+    std::vector<std::pair<std::string,std::string>> pdf_curves;std::string style,path;
+    while(std::getline(pdf_input,line)) {
+      if(line.find(" G ")!=std::string::npos) {style=line;path.clear();}
+      else if(line=="S") {if(path.find(" c\n")!=std::string::npos) pdf_curves.emplace_back(style,path);path.clear();}
+      else path+=line+'\n';
+    }
+    require(pdf_curves.size()==expected,"PDF preserves every requested curved stroke");
+    for(std::size_t i=0;i<pdf_curves.size();++i) {
+      const auto& stroke=pdf_curves[i].first;
+      require(stroke.starts_with(expected_hidden(i)?"0.3 G ":"0 G "),"PDF paints gray hidden curves before black visible curves");
+      require((stroke.find("[] 0 d")!=std::string::npos)!=expected_hidden(i),"PDF visible strokes reset the hidden dash pattern");
+    }
+    if(hidden) for(std::size_t i=0;i<2;++i) require(pdf_curves[i].second==pdf_curves[i+2].second,"PDF visible paths exactly cover coincident hidden curves");
+
+    const auto pairs=dxf_pairs(artifact(drawing,"front.dxf"));
+    std::vector<std::pair<std::string,Dxf>> dxf_curves;seen_center=false;
+    for(std::size_t i=0;i<pairs.size();++i) if(pairs[i].first==0) {
+      std::string layer;Dxf coordinates;
+      for(std::size_t j=i+1;j<pairs.size() && pairs[j].first!=0;++j) {
+        if(pairs[j].first==8) layer=pairs[j].second;
+        if(pairs[j].first==10 || pairs[j].first==20 || pairs[j].first==30 || pairs[j].first==40 || pairs[j].first==50 || pairs[j].first==51) coordinates.push_back(pairs[j]);
+      }
+      if(layer=="CENTER") seen_center=true;
+      if(pairs[i].second!="CIRCLE" && pairs[i].second!="ARC") continue;
+      require(!seen_center,"DXF center annotations follow geometry");
+      coordinates.insert(coordinates.begin(),pairs[i]);dxf_curves.emplace_back(layer,std::move(coordinates));
+    }
+    require(seen_center && dxf_curves.size()==expected,"DXF retains analytic curves and center annotations");
+    for(std::size_t i=0;i<dxf_curves.size();++i) require(dxf_curves[i].first==(expected_hidden(i)?"HIDDEN":"VISIBLE"),"DXF emits hidden curves before visible curves");
+    if(hidden) for(std::size_t i=0;i<2;++i) require(dxf_curves[i].second==dxf_curves[i+2].second,"DXF coincident curves retain identical analytic geometry and stable order");
+  }
+  require(projected.at("views")[0].at("entities")==entities,"Paint ordering leaves the cached projection unchanged");
+}
 std::vector<std::array<double,4>> hatch_lines(const std::string& content) {
   const auto pairs=dxf_pairs(content);std::vector<std::array<double,4>> result;
   for(std::size_t i=0;i<pairs.size();++i) if(pairs[i]==std::pair<int,std::string>{0,"LINE"}) {
@@ -445,4 +516,4 @@ void service_tests() {
     {"dimensions",Json::array({{{"view","top"},{"kind","horizontal"},{"from",{1.012,0}},{"to",{-1.03,0}}}})}}}});});
 }
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));geometry_tests();layout_hatch_tests();angular_tolerance_tests();angular_service_tests();service_tests();std::cout<<"drawing: "<<checks<<" checks passed\n";return 0;}catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));geometry_tests();paint_order_tests();layout_hatch_tests();angular_tolerance_tests();angular_service_tests();service_tests();std::cout<<"drawing: "<<checks<<" checks passed\n";return 0;}catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

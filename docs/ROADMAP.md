@@ -127,6 +127,35 @@ regeneration without changing historical source/drawing revisions; native CLI,
 MCP, schema and job tests; visually inspected representative PDFs; relocated
 bundle generation with empty PATH. HANDOFF.md records executed evidence.
 
+## M6 — editable assemblies (authorized 2026-10-06)
+
+- Named part instances of earlier solid features, with editable source geometry
+  and parameterized placements. Distinct instances remain separate exact solids.
+- Deterministic rigid datum mates: explicit parent/child frames, offsets and
+  angles, grounded roots, single-parent acyclic graphs and explicit conflicts.
+- Atomic placement/mate edits through existing apply/preview/jobs workflows.
+- Per-part world transforms, measurements and evaluated topology ownership.
+- Exploded drawing views with parameterized part offsets, independent of saved
+  assembled geometry. Native PDF/SVG/DXF output and projection-cache separation.
+- Source-grouped BOM quantities and editable metadata, deterministic item numbers,
+  native JSON/CSV exports, sheet tables and geometry-checked part balloons.
+- Live per-part hide/show/isolate with persisted view context, visible-only
+  rendering and picking, selection clearing and recovery through Show all.
+
+Acceptance: known rigid transforms, independent/duplicate instances, chained and
+rotated mates, source parameter edits and historical revision preservation;
+invalid/cyclic/conflicting mates must preserve HEAD. Verify topology ownership,
+STEP/STL geometry, cold/warm caches, preview/live paths, schema and MCP contracts,
+native and asynchronous drawings, and visually inspected exploded sheets.
+BOM acceptance additionally covers grouping/numbering, metadata and membership
+edits, independent CSV/JSON readers, surface visibility and ambiguous balloon
+rejection, table/label fitting, cache attachment invalidation, historical recipes
+and asynchronous exports.
+Visibility acceptance covers hidden occluders and highlights, all-hidden views,
+reopen/revision/retarget behavior, pending context races and unchanged model/BOM.
+See `ASSEMBLIES.md` for the implemented subset and `HANDOFF.md` for executed
+evidence; no additional platform acceptance is implied by source implementation.
+
 ## Later, only when driven by actual workflows
 
 Geometry/projection caching is implemented: bounded, checksummed exact feature
@@ -135,9 +164,7 @@ evaluation identity, corruption/deletion fallback, and coordinator publication.
 Native regression tests and a reproducible threaded-part benchmark are provided;
 executed local results are recorded in HANDOFF.md. No public cache API is needed.
 
-Next: editable assemblies with placements, mates and exploded drawings. These
-remain planned, with no assembly API advertised yet.
-
-Further work: kinematics, full drafting/GD&T, multi-sheet drawings, manufacturing
+Further work: nested assemblies, general mate constraint solving, kinematics,
+hierarchical BOMs, full drafting/GD&T, multi-sheet drawings, manufacturing
 checks, distributed execution, remote collaborative editing, and additional
 authoring frontends. Python/build123d API parity remains outside the product.
