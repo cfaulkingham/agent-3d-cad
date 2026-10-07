@@ -149,3 +149,8 @@ are still present. Public release still requires actual platform-run evidence,
 an original-code license decision, applicable source/relinking obligations,
 and release signing/notarization where appropriate. No archive is uploaded
 or published by local packaging, and no license for original code is inferred.
+CI uploads preview archives and test evidence as workflow artifacts with a
+14-day retention; they are not releases. `tests/notice_consistency.cmake`
+(CTest `notices`) fails if the shipped third-party notice, the OCCT patch
+description and the installer's recorded modification identifier disagree, or
+if the notice stops stating the pinned OCCT source hash and relink instructions.

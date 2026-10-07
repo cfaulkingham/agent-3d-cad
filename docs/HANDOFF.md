@@ -6,6 +6,22 @@ arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. Public release preparation remains separate.
 
+## README marketing banner — 2026-10-07
+
+Added `docs/assets/readme-banner.png` above the README title. The 2120 × 742
+banner pairs the project name and native/editable CAD tagline with a cyan
+blueprint-to-metal bracket illustration. It was generated with the built-in
+image generation tool; the exact prompt is saved in
+`docs/assets/readme-banner.prompt.txt`. The bracket is illustrative, inspired by
+the example model, and is not a service-rendered geometry or UI acceptance image.
+
+Validation: visually inspected the generated banner for spelling, readable
+typography, composition and geometry; verified PNG dimensions and the README's
+relative asset path; `git diff --check` passed. Documentation/assets only;
+native CTest suites were not rerun. Next: review the banner in the GitHub README
+when these local changes are published. Native implementation and release gates
+below are unchanged.
+
 ## Intel regression resolved and current native matrix validated — 2026-10-07
 
 Native source commit `541e3bf7f68224dfd8512ff49cda88ec85932469` passed the
