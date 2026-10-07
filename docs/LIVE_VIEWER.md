@@ -97,6 +97,32 @@ evaluation superseded during transfer. While waiting, the last rendered solid
 remains visible and old picks are disabled. Persistent failures stay explicit.
 Polling recovery never automatically resends a Quick Edit request.
 
+## Disk retention
+
+Each displayed revision is evaluated once into `views/<view_id>/evaluations/`
+(the frozen mesh, up to 64 MiB) and `evaluations/<evaluation_id>.json` (its
+metadata, used to resolve picks). Retention keeps both bounded:
+
+- A view keeps exactly one frozen evaluation: the one it displays. Publishing a
+  new revision deletes the others under the view lock, and a result that can no
+  longer publish (HEAD or the view moved on) is deleted at once. Switching the
+  view to another document, or retrying a failed show, deletes them immediately.
+- Publishing a new revision also deletes the previous display's metadata: that
+  revision is superseded, so its picks already fail as stale.
+- After a publication, at most once per 60 seconds per workspace, a sweep of up
+  to 4,096 entries in `evaluations/` deletes metadata that is at least 60
+  seconds old, displayed by no view, and whose document HEAD has moved past its
+  revision. This includes `cad_query`, `cad_view` and `cad_preview` metadata.
+  Metadata for a current HEAD revision is never deleted by age, so offline
+  `cad_view` picks stay resolvable until the document changes.
+
+Five successive revisions in one view leave one frozen file and one metadata
+file for it (plus one metadata file per other view still displaying an older
+revision). Readers that lose a deleted evaluation get an explicit
+`stale_selection`; the viewer treats that as a temporary wait and re-syncs.
+Completed live jobs under `jobs/` keep their full result and are not yet
+pruned by this policy.
+
 ## Verification
 
 ```sh

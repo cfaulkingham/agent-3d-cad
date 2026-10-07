@@ -80,7 +80,11 @@
         const text = result?.content?.find(item => item.type === 'text')?.text;
         if (text) { try { value = JSON.parse(text); } catch { /* Report below. */ } }
       }
-      if (result?.isError || value?.error) {
+      // Tool failure is isError. A successful payload may describe an error
+      // state (sync `state: "error"` with `error`) and must reach the caller.
+      // A bare {error} envelope is also a failure if a host dropped isError.
+      const envelope = value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 1 && value.error;
+      if (result?.isError || envelope) {
         const problem = value?.error;
         const error = Error(problem?.message || 'The CAD service could not complete the request.');
         error.code = problem?.code; error.details = problem?.details; throw error;

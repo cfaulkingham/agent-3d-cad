@@ -177,6 +177,8 @@ Json tool_definitions() {
     {"job_id","request_id","tool","budget","state","progress","submitted_at_unix_ms"});
   tools.back()["outputSchema"]={{"type","object"},{"oneOf",Json::array({job,object({{"jobs",array(job,1000)},{"limit",{{"const",1000}}}},{"jobs","limit"})})},{"$defs",definitions}};
   for (auto& definition : live_tool_definitions()) tools.push_back(std::move(definition));
+  // Each standalone schema keeps only the model definitions it references.
+  for (auto& definition : tools) for (const auto* key : {"inputSchema","outputSchema"}) prune_definitions(definition[key]);
   return tools;
 }
 

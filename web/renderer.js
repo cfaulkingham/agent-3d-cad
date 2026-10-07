@@ -14,6 +14,7 @@
     if(!Number.isSafeInteger(d.revision)||d.revision<0)fail('Invalid revision identity.');
     const m=d.mesh,t=d.topology,b=d.summary.bounds_mm;
     if(!b||!finitePoint(b.min)||!finitePoint(b.max)||b.min.some((v,i)=>v>b.max[i])||Math.max(...b.max.map((v,i)=>v-b.min[i]))<=0)fail('Invalid model bounds.');
+    if(m.linear_deflection_mm!==undefined&&!(typeof m.linear_deflection_mm==='number'&&Number.isFinite(m.linear_deflection_mm)&&m.linear_deflection_mm>=0&&m.linear_deflection_mm<=1e6))fail('Invalid mesh deflection.');
     for(const section of [m,t]) {
       if(section.schema_version!==1||section.feature_id!==d.feature_id||section.selection_lifetime!=='evaluation')fail('Mesh and topology must share the displayed feature and evaluation.');
     }
@@ -100,8 +101,14 @@
     const geometries={face:new Map(d.topology.faces.map(f=>[f.id,f])),edge:new Map(d.topology.edges.map(e=>[e.id,e]))};
     const identity={document_id:d.document_id,revision:d.revision,evaluation_id:d.evaluation_id,feature_id:d.feature_id};
     const partBounds=new Map((d.summary.assembly?.parts||[]).map(part=>[part.id,{min:normalized(part.bounds_mm.min),max:normalized(part.bounds_mm.max)}]));
+    // Edge polylines and face triangulations are sampled independently, each
+    // within the kernel's linear deflection of the exact geometry. A visible edge
+    // sample may therefore sit up to twice that distance behind its own faces.
+    // Pick depth is in model units over the bounds span (orthographic: zoom and
+    // pan scale only the screen), so the conversion to ray depth is 1/span.
+    const edgeAllowance=2*(d.mesh.linear_deflection_mm??0)/span;
     return {identity,positions,indices,faces,faceNumbers,triangleFaces:[...d.mesh.triangle_faces],edges,geometries,tree:buildTree(positions,indices),partBounds,
-      bounds:{min:normalized(bounds.min),max:normalized(bounds.max)},hiddenPartIds:[]};
+      bounds:{min:normalized(bounds.min),max:normalized(bounds.max)},hiddenPartIds:[],edgeAllowance};
   }
   // Derived draw/pick data retains full evaluation identity and normalization.
   // Build only on a visibility change, never on a camera/context poll.
@@ -136,9 +143,15 @@
     if(v< -1e-9||u+v>1+1e-9)return Infinity;
     const t=dot(f,q)/det;return t>=0&&t<=4 ? t : Infinity;
   }
+  // |cos| between a triangle's normal and the view ray.
+  function facing(model,index,direction) {
+    const a=vertex(model.positions,model.indices[3*index]),b=vertex(model.positions,model.indices[3*index+1]),c=vertex(model.positions,model.indices[3*index+2]);
+    const e=b.map((v,i)=>v-a[i]),f=c.map((v,i)=>v-a[i]),n=[e[1]*f[2]-e[2]*f[1],e[2]*f[0]-e[0]*f[2],e[0]*f[1]-e[1]*f[0]],length=Math.hypot(...n);
+    return length>0?Math.abs(dot(n,direction))/length:1;
+  }
   function trace(model,ray,budget={remaining:PICK_BUDGET}) {
-    if(!model.indices.length)return {depth:Infinity,ids:new Set()};
-    let depth=Infinity;const hits=new Map(),stack=[0],{nodes,order}=model.tree;
+    if(!model.indices.length)return {depth:Infinity,ids:new Set(),facing:1};
+    let depth=Infinity,cosine=1;const hits=new Map(),stack=[0],{nodes,order}=model.tree;
     while(stack.length) {
       if(--budget.remaining<0)fail('Selection exceeds its work limit. Inspect a smaller feature.');
       const node=nodes[stack.pop()];if(boxEntry(node,ray,Math.min(4,depth+DEPTH_EPS))===Infinity)continue;
@@ -148,11 +161,11 @@
       } else for(let i=node.start;i<node.start+node.count;i++) {
         if(--budget.remaining<0)fail('Selection exceeds its work limit. Inspect a smaller feature.');
         const index=order[i],t=triangleHit(model,index,ray);if(t===Infinity)continue;
-        if(t<depth){depth=t;for(const [id,distance] of hits)if(distance>depth+DEPTH_EPS)hits.delete(id);}
+        if(t<depth){depth=t;cosine=facing(model,index,ray.direction);for(const [id,distance] of hits)if(distance>depth+DEPTH_EPS)hits.delete(id);}
         if(t<=depth+DEPTH_EPS){const id=model.triangleFaces[index];hits.set(id,Math.min(t,hits.get(id)??Infinity));}
       }
     }
-    return {depth,ids:new Set(hits.keys())};
+    return {depth,ids:new Set(hits.keys()),facing:cosine};
   }
   function nearestSegment(p,a,b) {
     const dx=b[0]-a[0],dy=b[1]-a[1],length=dx*dx+dy*dy;
@@ -180,7 +193,9 @@
     for(const candidate of candidates) {
       if(candidate.distance>best+.25)break;
       const q=candidate.point,hit=trace(model,screenRay(q[0],q[1],c,width,height),budget),z=q[2]+2;
-      if(z>hit.depth+DEPTH_EPS*4)continue;
+      // The deflection offset is normal to the surface; along the ray it grows
+      // as 1/cos against the occluding triangle, capped at 4x for grazing views.
+      if(z>hit.depth+DEPTH_EPS*4+(model.edgeAllowance||0)/Math.max(hit.facing,.25))continue;
       if(best===Infinity){best=candidate.distance;depth=z;ids.add(candidate.id);}
       else if(z<depth-DEPTH_EPS) {depth=z;ids.clear();ids.add(candidate.id);}
       else if(Math.abs(candidate.distance-best)<=.25&&Math.abs(z-depth)<=DEPTH_EPS)ids.add(candidate.id);

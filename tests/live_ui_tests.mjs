@@ -199,6 +199,77 @@ for (const code of ['workspace_busy', 'queue_full', 'stale_selection']) {
   await m.state.pollOnce();
   check(m.state.value.status === 'loading' && m.state.value.error === null, 'native loading response does not display a transient error alert');
 }
+// The tests above mock bridge.tool. These drive CadLiveState through the real
+// CadBridge request/receive/value path with MCP CallToolResult replies.
+const toolResult = (value, isError = false) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value, isError });
+function nativeBridge(respond) {
+  let listener; const calls = [];
+  const parent = { postMessage(message) {
+    if (message.method !== 'tools/call') return;
+    calls.push(message.params);
+    queueMicrotask(() => listener?.({ source: parent, origin: 'https://host.example',
+      data: { jsonrpc: '2.0', id: message.id, result: respond(message.params.name, message.params.arguments) } }));
+  } };
+  const self = { parent, addEventListener(_, fn) { listener = fn; }, removeEventListener() { listener = null; } };
+  return { bridge: new CadBridge(self), calls };
+}
+{
+  const syncError = { view_id: 'main', document_id: 'broken', revision: 1, state: 'error', changed: false,
+    error: { code: 'kernel_failure', message: 'Feature taper failed to build', details: { feature_id: 'taper' } } };
+  assert.deepEqual(CadBridge.value(toolResult(syncError)), syncError); checks++;
+  assert.deepEqual(CadBridge.value({ content: [{ type: 'text', text: JSON.stringify(syncError) }] }), syncError); checks++;
+  assert.throws(() => CadBridge.value(toolResult({ error: syncError.error }, true)), error => error.code === 'kernel_failure' && error.details.feature_id === 'taper'); checks++;
+  assert.throws(() => CadBridge.value({ structuredContent: { error: syncError.error } }), error => error.code === 'kernel_failure'); checks++;
+}
+{
+  let head = { document_id: 'part', revision: 1, failing: false }, meshFailure = null;
+  const evaluation = () => `eval_${head.document_id}_${head.revision}`;
+  const { bridge, calls } = nativeBridge((name, args) => {
+    if (name === 'cad_context') return toolResult({ view_id: 'main', document_id: head.document_id, revision: head.revision, evaluation_id: evaluation(),
+      head_revision: head.revision, stale: false, selection: null, hidden_part_ids: [] });
+    if (args.action === 'sync') {
+      const identity = { view_id: 'main', document_id: head.document_id, revision: head.revision, changed: true };
+      if (head.failing) return toolResult({ ...identity, changed: false, state: 'error',
+        error: { code: 'kernel_failure', message: `Feature taper failed in ${head.document_id}`, details: { feature_id: 'taper' } } });
+      return toolResult({ ...identity, state: 'ready', evaluation_id: evaluation(), feature_id: 'base', summary: {}, hidden_part_ids: [],
+        model: { features: [{ id: 'base', type: 'box' }], parameters: {} } });
+    }
+    if (args.action === 'mesh') {
+      if (meshFailure) { const failure = meshFailure; meshFailure = null; return toolResult({ error: failure }, true); }
+      const data = JSON.stringify({ ...payload(head.revision), document_id: head.document_id, evaluation_id: evaluation() });
+      return toolResult({ data, offset: 0, next_offset: null, total_bytes: data.length });
+    }
+    if (args.action === 'context') return toolResult({ view_id: 'main', document_id: head.document_id, stale: false, selection: args.selection, hidden_part_ids: args.hidden_part_ids });
+    return toolResult({ error: { code: 'invalid_argument', message: 'Unexpected tool', details: {} } }, true);
+  });
+  const state = new CadLiveState(bridge); state.attach('main');
+  await state.pollOnce(); await state.deliveryQueue;
+  check(state.value.status === 'ready' && state.value.payload.document_id === 'part', 'real bridge loads the first document');
+  state.value.camera = { yaw: 1, pitch: .5, zoom: 2, pan: [0, 0] };
+  state.value.selection = { reference: { entity_id: 'edge-1' }, geometry: {} };
+  head = { document_id: 'broken', revision: 1, failing: true };
+  await state.pollOnce();
+  check(state.value.status === 'error' && state.value.error === 'Feature taper failed in broken', 'native sync error state reaches the controller with its message');
+  check(state.value.document_id === 'broken' && state.value.payload === null && state.value.model === null && state.value.camera === null,
+    'switching to a failing document clears the previous model instead of labelling it as the new one');
+  check(state.value.selection === null && state.value.hidden_part_ids.length === 0, 'failed retarget clears picks and visibility');
+  head = { document_id: 'other', revision: 1, failing: false };
+  await state.pollOnce(); await state.deliveryQueue;
+  check(state.value.status === 'ready' && state.value.error === null && state.value.payload.document_id === 'other' && state.value.document_id === 'other',
+    'retargeting after an error loads the next document');
+  const loaded = state.value.payload;
+  head = { document_id: 'other', revision: 2, failing: true };
+  await state.pollOnce();
+  check(state.value.status === 'error' && state.value.payload === loaded && state.value.selection === null && state.value.revision === 2,
+    'same-document evaluation failure keeps the last solid visible with picks disabled');
+  head = { document_id: 'other', revision: 3, failing: false }; meshFailure = { code: 'stale_selection', message: 'Superseded during transfer', details: {} };
+  await state.pollOnce();
+  check(state.value.status === 'loading' && state.value.error === null && state.value.payload === loaded, 'tool-level isError still rejects through the real bridge');
+  await state.pollOnce(); await state.deliveryQueue;
+  check(state.value.status === 'ready' && state.value.payload.revision === 3, 'polling recovers after errors without resending edits');
+  check(calls.every(call => call.name === 'cad_viewer' || call.name === 'cad_context'), 'recovery only issues read-only view calls');
+  state.dispose(); bridge.dispose();
+}
 function visibilityMock(initial = []) {
   const m = mock(), tool = m.bridge.tool; let hidden = initial, ids = ['base', 'cover'];
   m.bridge.tool = async (name, args) => {

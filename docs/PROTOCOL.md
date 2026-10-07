@@ -2,7 +2,10 @@
 
 Implemented contracts for the native preview. Runtime discovery (`tools` or MCP
 `tools/list`) publishes input and output JSON Schemas. Model definitions live in
-`model_definitions()`; service contracts live in `tool_definitions()`.
+`model_definitions()`; service contracts live in `tool_definitions()`. Each
+published schema is standalone: its `$defs` contains exactly the model
+definitions its `#/$defs/<name>` references reach, transitively, and is omitted
+when it has none. The MCP server builds this catalog once per process.
 
 ## Document and scalar values
 
@@ -158,7 +161,9 @@ Evaluated picks instead contain `document_id`, `revision`, `evaluation_id`,
 only within that stored evaluation. They are never persistent design references.
 Rebuilding the same revision creates a new evaluation identity. Stored evaluation
 metadata remains resolvable after restart; resolving a pick requires current HEAD
-to still equal its revision. Draft picks, missing evaluations and identity
+to still equal its revision. Metadata of superseded revisions may be deleted by
+live-view retention (see LIVE_VIEWER.md); such picks are stale either way. Draft
+picks, missing evaluations and identity
 mismatches fail explicitly. Geometry selectors can be suggested for unique edges;
 faces return measurements but have no face-based editing operation yet.
 
@@ -345,7 +350,10 @@ until replaced; never interpret it as a reference to the new revision.
 
 The UI verifies the full transfer identity and rechecks sync before displaying
 it. Same-document changes preserve the camera and clear old picks; switching
-documents clears the old mesh while loading. Reopening restores a saved camera
+documents clears the old mesh while loading. A sync `error` state is a successful
+tool result (only `isError` marks a failed call): for a different document it
+clears the old mesh, model, camera and hidden parts; for the same document it
+keeps the last solid with picks disabled. Reopening restores a saved camera
 and selection only when context still matches the current evaluation. Assembly
 part controls hide individual instances, isolate one instance, or show all.
 Isolating uses the same hidden-ID array for the other displayed parts.
@@ -369,7 +377,11 @@ block revision polling. The app never directly calls modeling mutations.
 The bridge accepts messages only from its parent window, pins the responding
 origin, bounds pending requests with timeouts, and disposes them on teardown.
 WebGL2/WebGL1 rendering and CPU ray picking use the exact evaluation mapping,
-depth-tested occlusion and explicit overlap ambiguity. GPU work is bounded to
+depth-tested occlusion and explicit overlap ambiguity. Edge polylines and face
+triangulations are sampled independently within `mesh.linear_deflection_mm`, so
+edge picking treats an edge sample up to twice that deflection behind the
+occluding triangle as visible, divided by the cosine between that triangle's
+normal and the view ray (at most 4×). GPU work is bounded to
 four million framebuffer pixels; pick traversal has a two-million-work budget.
 Native geometry/payload limits continue to apply. Tests exercise math and mocked
 GPU lifecycle. Real Codex-host rendering, a human edge pick, selective edit,
@@ -480,7 +492,8 @@ workspace/
   jobs/<request_id>/.lock           # coordinator ownership
   jobs/<request_id>/cancel          # cancellation request
   views/<view_id>/state.json        # workspace-scoped association and context
-  views/<view_id>/evaluations/      # frozen mesh JSON for live transfer
+  views/<view_id>/evaluations/      # frozen mesh JSON of the displayed evaluation only
+  evaluations/.retention            # last superseded-metadata sweep (LIVE_VIEWER.md)
   .workers/                         # bounded worker slots and temporary files
   .cache/<content-key>.json          # disposable exact geometry / view-set projections
 ```
@@ -519,7 +532,11 @@ Baseline `2025-11-25`; initialize then notifications/initialized. `ping`, tools/
 and tools/call are supported. Input is newline-delimited UTF-8 JSON, ≤1 MiB and
 64 nesting levels; no JSON-RPC batches. String/integer request IDs are preserved.
 Notifications have no reply, and tools/call notifications never execute tools.
-Malformed messages do not end the stream; a final complete frame at EOF is accepted.
+LF or CRLF delimiters are accepted. Blank or whitespace-only lines are ignored, and
+client JSON-RPC responses (objects with `result` or `error` but no `method`) are
+dropped without a reply. Malformed JSON gets one `-32700` reply, an invalid request
+or a line over 1 MiB gets one `-32600` reply; none ends the stream. A final
+complete frame at EOF is accepted without a trailing newline.
 All stdout lines are protocol JSON; diagnostics use stderr.
 
 Tool replies contain JSON text and structuredContent; domain failures set isError.

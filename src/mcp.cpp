@@ -1,6 +1,6 @@
 #include "agentcad/mcp.hpp"
 #include "agentcad/app.hpp"
-#include <algorithm>
+#include <set>
 
 namespace agentcad {
 namespace {
@@ -22,9 +22,26 @@ Json app_resource() {
           {"description", "Interactive CAD workspace with durable model state and selections"},
           {"mimeType", viewer_app_mime}, {"_meta", app_metadata()}};
 }
+// The catalog is constant for the process: build it once, not per tools/call.
+const Json& published_tools() {
+  static const Json tools = tool_definitions();
+  return tools;
+}
+const std::set<std::string>& published_tool_names() {
+  static const auto names = [] {
+    std::set<std::string> result;
+    for (const auto& tool : published_tools()) result.insert(tool.at("name").get<std::string>());
+    return result;
+  }();
+  return names;
+}
 }
 
 std::optional<Json> McpSession::handle(const Json& request) {
+  // JSON-RPC forbids replying to a response. This server sends no requests, so
+  // a client result/error object is unsolicited and is dropped silently.
+  if (request.is_object() && !request.contains("method") && (request.contains("result") || request.contains("error")))
+    return std::nullopt;
   if (!request.is_object() || request.value("jsonrpc", Json()) != "2.0" || !request.contains("method") || !request.at("method").is_string())
     return rpc_error(nullptr, -32600, "Invalid JSON-RPC request");
   const auto method = request.at("method").get<std::string>();
@@ -76,13 +93,12 @@ std::optional<Json> McpSession::handle(const Json& request) {
     if (method == "tools/list") {
       fields(params, {}, {"cursor", "_meta"});
       if (params.contains("cursor")) return rpc_error(id, -32602, "This server has no pagination cursor");
-      return response({{"tools", tool_definitions()}});
+      return response({{"tools", published_tools()}});
     }
     if (method == "tools/call") {
       fields(params, {"name"}, {"arguments", "_meta"});
       const auto name = text_field(params, "name");
-      const auto definitions = tool_definitions();
-      if (std::none_of(definitions.begin(), definitions.end(), [&](const Json& t) { return t.at("name") == name; }))
+      if (!published_tool_names().contains(name))
         return rpc_error(id, -32602, "Unknown tool: " + name);
       try {
         return response(tool_result(service_.call(name, params.value("arguments", Json::object()))));
@@ -103,21 +119,26 @@ void serve(Service& service, std::istream& input, std::ostream& output) {
   McpSession session(service);
   std::string line;
   bool oversized = false;
+  auto reply = [&](const Json& message) { output << message.dump() << '\n'; output.flush(); };
   auto dispatch = [&] {
-    if (oversized) output << rpc_error(nullptr, -32600, "Message exceeds 1 MiB").dump() << '\n';
-    else {
+    // A CRLF delimiter's carriage return is framing, not message content.
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (oversized || line.size() > max_json_bytes) reply(rpc_error(nullptr, -32600, "Message exceeds 1 MiB"));
+    // Blank keep-alive lines carry no message, so they never get an error reply.
+    else if (line.find_first_not_of(" \t\r") != std::string::npos) {
       try {
-        if (auto response = session.handle(parse_json(line))) output << response->dump() << '\n';
-      } catch (const Error& e) { output << rpc_error(nullptr, -32700, e.what()).dump() << '\n'; }
-      catch (const std::exception& e) { output << rpc_error(nullptr, -32603, e.what()).dump() << '\n'; }
+        if (auto response = session.handle(parse_json(line))) reply(*response);
+      } catch (const Error& e) { reply(rpc_error(nullptr, -32700, e.what())); }
+      catch (const std::exception& e) { reply(rpc_error(nullptr, -32603, e.what())); }
     }
-    output.flush(); line.clear(); oversized = false;
+    line.clear(); oversized = false;
   };
   char c;
   while (input.get(c)) {
     if (c == '\n') dispatch();
     else if (!oversized) {
-      if (line.size() == max_json_bytes) { oversized = true; line.clear(); }
+      // One extra byte leaves room for a CRLF carriage return on a maximal frame.
+      if (line.size() > max_json_bytes) { oversized = true; line.clear(); line.shrink_to_fit(); }
       else line.push_back(c);
     }
   }

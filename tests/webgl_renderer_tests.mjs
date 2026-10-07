@@ -88,6 +88,30 @@ test('duplicate segments of one edge do not create ambiguity',()=>{
   const edges=[{id:'edge-1',points:[[-.8,-.4,.5],[.2,-.4,.5],[-.8,-.4,.5]]}],result=at(prepare(evaluation(flat,[[0,1,2]],['face-1'],edges)),[-.1,-.1,0],'edge');
   assert.equal(result.id,'edge-1');assert.equal(result.ambiguous,false);
 });
+// Fine side tessellation with a coarse edge polyline: every edge chord lies up
+// to its sagitta inside the solid, behind the side triangles that bound it.
+function cylinder(deflection) {
+  const r=10,h=10,sides=256,edgeSegments=12,positions=[],triangles=[],faces=[],points=[];
+  for(let i=0;i<sides;i++){const a=2*Math.PI*i/sides;positions.push([r*Math.cos(a),r*Math.sin(a),0],[r*Math.cos(a),r*Math.sin(a),h]);}
+  for(let i=0;i<sides;i++){const j=(i+1)%sides;triangles.push([2*i,2*j,2*j+1],[2*i,2*j+1,2*i+1]);faces.push('face-1','face-1');}
+  const top=positions.length,bottom=top+1;positions.push([0,0,h],[0,0,0]);
+  for(let i=0;i<sides;i++){const j=(i+1)%sides;triangles.push([top,2*i+1,2*j+1],[bottom,2*j,2*i]);faces.push('face-2','face-3');}
+  for(let i=0;i<=edgeSegments;i++){const a=2*Math.PI*i/edgeSegments;points.push([r*Math.cos(a),r*Math.sin(a),h]);}
+  const mesh={schema_version:1,feature_id:'part',selection_lifetime:'evaluation',positions,triangles,triangle_faces:faces,edges:[{id:'edge-1',points}]};
+  if(deflection!==undefined)mesh.linear_deflection_mm=deflection;
+  return {schema_version:1,document_id:'test',revision:1,evaluation_id:'evaluation-c',feature_id:'part',summary:{bounds_mm:{min:[-r,-r,0],max:[r,r,h]}},mesh,
+    topology:{schema_version:1,feature_id:'part',selection_lifetime:'evaluation',faces:[{id:'face-1'},{id:'face-2'},{id:'face-3'}],edges:[{id:'edge-1'}]}};
+}
+test('curved edges sampled within the mesh deflection stay pickable without exposing hidden edges',()=>{
+  const below={yaw:0,pitch:-.3,zoom:1,pan:[0,0]},rim=angle=>{const p=[10*Math.cos(angle)*Math.cos(Math.PI/12),10*Math.sin(angle)*Math.cos(Math.PI/12),10];return p.map((v,i)=>(v-[0,0,5][i])/20);};
+  const at=(model,angle)=>{const p=project(rim(angle),below,400,400);return pick(model,below,400,400,p[0],p[1],'edge');};
+  const front=-5*Math.PI/12,back=5*Math.PI/12,sagitta=10*(1-Math.cos(Math.PI/12));
+  const model=prepare(cylinder(sagitta*1.01));
+  assert.equal(at(model,front).id,'edge-1');
+  assert.equal(at(model,back).id,null);
+  assert.equal(at(prepare(cylinder()),front).id,null,'without a declared deflection only the exact epsilon applies');
+  for(const invalid of [-1,NaN,Infinity,'0.1'])assert.throws(()=>validate(cylinder(invalid)),/deflection/);
+});
 test('picking outside the viewport returns no entity',()=>assert.equal(pick(prepare(base),defaultCamera,400,400,-1,200).id,null));
 test('ray traversal fails explicitly when its work budget is exhausted',()=>assert.throws(()=>trace(prepare(base),screenRay(180,220,defaultCamera,400,400),{remaining:0})));
 test('GPU faces and lines retain the exact topology numbers',()=>{
@@ -202,6 +226,24 @@ if(process.argv[2]) {
       let picked=false;
       for(let i=0;i<model.indices.length;i+=3){const centroid=[0,0,0];for(let j=0;j<3;j++)for(let a=0;a<3;a++)centroid[a]+=model.positions[3*model.indices[i+j]+a]/3;const p=project(centroid,defaultCamera,400,400);if(pick(model,defaultCamera,400,400,p[0],p[1],'face').id){picked=true;break;}}
       assert.ok(picked,'native mesh has a selectable visible face');
+    });
+    // Edge polylines and face triangulations are sampled independently within
+    // the kernel's linear deflection, so curved edges can sit slightly behind
+    // their own faces. The nozzle's walls are at least 2 mm thick.
+    test('native nozzle edges offset only by tessellation stay pickable; hidden edges do not',()=>{
+      const evaluation=call('cad_query',{document_id:'nozzle',revision:1,kind:'mesh'}),model=prepare(evaluation);
+      const b=evaluation.summary.bounds_mm,span=Math.max(...b.max.map((v,i)=>v-b.min[i])),deflection=evaluation.mesh.linear_deflection_mm;
+      assert.ok(deflection>0);let offset=0,hidden=0;
+      for(const yaw of [-2.5,-1.3,-.65,0,.9,2.1])for(const pitch of [-1.2,-.6,.3,.6,1.1]) {
+        const view={yaw,pitch,zoom:1,pan:[0,0]};
+        for(const edge of model.edges)for(let i=3;i<edge.points.length;i+=3) {
+          const mid=[0,1,2].map(k=>(edge.points[i-3+k]+edge.points[i+k])/2),p=project(mid,view,800,800);
+          const gap=(p[2]+2-trace(model,screenRay(p[0],p[1],view,800,800)).depth)*span,picked=pick(model,view,800,800,p[0],p[1],'edge').id;
+          if(gap>1e-6&&gap<=deflection){offset++;assert.equal(picked,edge.id,`${edge.id} (yaw ${yaw}, pitch ${pitch}) lies ${gap.toFixed(3)} mm behind its tessellated face`);}
+          if(gap>1){hidden++;assert.notEqual(picked,edge.id,`${edge.id} (yaw ${yaw}, pitch ${pitch}) is hidden ${gap.toFixed(3)} mm behind other geometry`);}
+        }
+      }
+      assert.ok(offset>=20&&hidden>=100,`exercised ${offset} tessellation offsets and ${hidden} hidden samples`);
     });
   }finally{fs.rmSync(workspace,{recursive:true,force:true});}
 }

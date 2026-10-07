@@ -4,6 +4,8 @@
 #include <map>
 #include <cmath>
 #include <numbers>
+#include <stdexcept>
+#include <vector>
 
 namespace agentcad {
 Json model_definitions() {
@@ -144,6 +146,40 @@ Json model_definitions() {
     {"edges",{{"type","array"},{"items",object({{"id",edge_id},{"part_id",id},{"points",{{"type","array"},{"items",point_output},{"maxItems",200000}}}}, {"id","points"})},{"maxItems",10000}}}
   }, {"schema_version","units","feature_id","selection_lifetime","linear_deflection_mm","angular_deflection_rad","positions","triangles","triangle_faces","edges"});
   return definitions;
+}
+
+namespace {
+void collect_references(const Json& value, std::set<std::string>& names, std::vector<std::string>& pending) {
+  static const std::string prefix = "#/$defs/";
+  if (value.is_array()) for (const auto& item : value) collect_references(item, names, pending);
+  if (!value.is_object()) return;
+  for (const auto& [key, item] : value.items()) {
+    if (key == "$ref" && item.is_string()) {
+      const auto& target = item.get_ref<const std::string&>();
+      if (target.rfind(prefix, 0) != 0) throw std::logic_error("Schema reference leaves its document: " + target);
+      const auto name = target.substr(prefix.size(), target.find('/', prefix.size()) - prefix.size());
+      if (names.insert(name).second) pending.push_back(name);
+    } else if (key != "$defs") collect_references(item, names, pending);
+  }
+}
+}
+
+void prune_definitions(Json& schema) {
+  if (!schema.is_object() || !schema.contains("$defs")) return;
+  const auto available = std::move(schema.at("$defs"));
+  schema.erase("$defs");
+  std::set<std::string> names; std::vector<std::string> pending;
+  collect_references(schema, names, pending);
+  // Definitions refer to each other, so close the set transitively.
+  while (!pending.empty()) {
+    const auto name = pending.back(); pending.pop_back();
+    if (!available.contains(name)) throw std::logic_error("Schema references an undefined definition: " + name);
+    collect_references(available.at(name), names, pending);
+  }
+  if (names.empty()) return;
+  Json used = Json::object();
+  for (const auto& name : names) used[name] = available.at(name);
+  schema["$defs"] = std::move(used);
 }
 
 namespace {
