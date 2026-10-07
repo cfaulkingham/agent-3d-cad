@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <string_view>
+#include <system_error>
 #include <vector>
 #ifdef _WIN32
 #define NOMINMAX
@@ -15,25 +17,6 @@
 
 namespace agentcad {
 namespace {
-std::filesystem::path executable_path() {
-#ifdef _WIN32
-  std::vector<wchar_t> buffer(32768);
-  const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-  if (length == 0 || length >= buffer.size()) return {};
-  return std::filesystem::path(std::wstring(buffer.data(), length));
-#elif defined(__APPLE__)
-  std::uint32_t size = 0;
-  _NSGetExecutablePath(nullptr, &size);
-  std::vector<char> buffer(size);
-  if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
-  return std::filesystem::weakly_canonical(buffer.data());
-#else
-  std::vector<char> buffer(32768);
-  const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
-  if (length <= 0 || static_cast<std::size_t>(length) == buffer.size()) return {};
-  return std::string(buffer.data(), static_cast<std::size_t>(length));
-#endif
-}
 void default_environment(const char* name, const std::filesystem::path& path) {
   if (std::getenv(name) || !std::filesystem::exists(path)) return;
 #ifdef _WIN32
@@ -45,8 +28,42 @@ void default_environment(const char* name, const std::filesystem::path& path) {
 #endif
 }
 }
+
+ExecutableLocation resolve_proc_self_exe(const std::string& link) {
+  constexpr std::string_view deleted = " (deleted)";
+  if (link.size() > deleted.size() && link.compare(link.size() - deleted.size(), deleted.size(), deleted) == 0)
+    return {link.substr(0, link.size() - deleted.size()), "/proc/self/exe"};
+  return {link, link};
+}
+
+ExecutableLocation current_executable() {
+#ifdef _WIN32
+  // A running Windows image cannot be deleted or replaced at its path.
+  std::vector<wchar_t> buffer(32768);
+  const auto length = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+  if (length == 0 || length >= buffer.size()) return {};
+  const std::filesystem::path path(std::wstring(buffer.data(), length));
+  return {path, path};
+#elif defined(__APPLE__)
+  std::uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  std::vector<char> buffer(size);
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) return {};
+  std::error_code error;
+  auto path = std::filesystem::weakly_canonical(buffer.data(), error);
+  if (error) path = std::filesystem::absolute(buffer.data(), error);
+  if (error) return {};
+  return {path, path};
+#else
+  std::vector<char> buffer(32768);
+  const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
+  if (length <= 0 || static_cast<std::size_t>(length) == buffer.size()) return {};
+  return resolve_proc_self_exe(std::string(buffer.data(), static_cast<std::size_t>(length)));
+#endif
+}
+
 void configure_runtime() {
-  const auto executable = executable_path();
+  const auto executable = current_executable().path;
   if (executable.empty()) return;
   const auto root = executable.parent_path().parent_path() / "share" / "agent-3d-cad" / "occt";
   if (!std::filesystem::is_directory(root)) return;

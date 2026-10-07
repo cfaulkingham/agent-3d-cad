@@ -5,14 +5,17 @@
 #include "agentcad/drawing.hpp"
 #include "agentcad/cache.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/runtime.hpp"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
+#include <iostream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <thread>
 #include <tuple>
@@ -31,7 +34,6 @@
 #include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
-#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #endif
 extern char** environ;
@@ -40,8 +42,17 @@ extern char** environ;
 namespace agentcad {
 namespace {
 constexpr std::size_t max_result_bytes = 64 * 1024 * 1024;
+// result.json and request.json wrap a bounded payload with the job identity.
+constexpr std::size_t max_result_file_bytes = max_result_bytes + 64 * 1024;
+constexpr std::size_t max_request_file_bytes = max_json_bytes + 64 * 1024;
 constexpr int max_active_jobs = 8;
 constexpr int max_workers = 4;
+constexpr int job_schema_version = 2;
+constexpr std::int64_t recovery_grace_ms = 5000;
+// Terminal job records are collected during submit admission once they are
+// older than seven days or beyond the newest 256 (docs/PROTOCOL.md).
+constexpr std::int64_t terminal_retention_ms = 7LL * 24 * 60 * 60 * 1000;
+constexpr std::size_t max_terminal_jobs = 256;
 fs::path worker_executable;
 fs::path cancellation_file;
 Json request_context = Json::object();
@@ -74,9 +85,12 @@ public:
 private:
   std::jthread thread_;
 };
-bool terminal(const Json& state) {
-  const auto value = state.at("state").get<std::string>();
+bool terminal_name(const std::string& value) {
   return value == "succeeded" || value == "failed" || value == "cancelled" || value == "interrupted";
+}
+bool terminal(const Json& state) { return terminal_name(state.at("state").get<std::string>()); }
+bool mutation(const std::string& tool) {
+  return tool == "cad_create" || tool == "cad_apply" || tool == "cad_restore" || tool == "cad_import";
 }
 Json budget(const Json& value) {
   fields(value, {}, {"timeout_ms", "memory_mb"});
@@ -90,35 +104,20 @@ Json budget(const Json& value) {
   return result;
 }
 fs::path executable_path() {
+  // Test programs name the service executable explicitly. Otherwise workers and
+  // coordinators run the very image of this process, whatever its file name.
   if (!worker_executable.empty()) return worker_executable;
-#ifdef _WIN32
-  std::vector<wchar_t> path(32768);
-  const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-  if (length == 0 || length == path.size()) throw Error("worker_failed", "Cannot find native worker executable");
-  fs::path result(std::wstring(path.data(), length));
-#elif defined(__APPLE__)
-  std::uint32_t size = 0; _NSGetExecutablePath(nullptr, &size);
-  std::vector<char> path(size);
-  if (_NSGetExecutablePath(path.data(), &size) != 0) throw Error("worker_failed", "Cannot find native worker executable");
-  fs::path result = fs::canonical(path.data());
-#else
-  fs::path result = fs::read_symlink("/proc/self/exe");
-#endif
-  // Unit-test executables use the production worker beside themselves.
-  if (result.stem() != "agent-3d-cad") result = result.parent_path() /
-#ifdef _WIN32
-    "agent-3d-cad.exe";
-#else
-    "agent-3d-cad";
-#endif
-  return result;
+  const auto image = current_executable().image;
+  if (image.empty()) throw Error("worker_failed", "Cannot find native worker executable");
+  return image;
 }
 Json read_result(const fs::path& path) {
-  if (!fs::is_regular_file(path) || fs::is_symlink(path) || fs::file_size(path) > max_result_bytes)
+  std::string text;
+  try { text = read_text(path, max_result_bytes); }
+  catch (const Error& e) {
+    if (e.code == "limit_exceeded") throw Error("limit_exceeded", "Worker output exceeds 64 MiB");
     throw Error("worker_failed", "Worker output missing or exceeds 64 MiB");
-  std::ifstream stream(path, std::ios::binary);
-  std::string text((std::istreambuf_iterator<char>(stream)), {});
-  if (text.size() > max_result_bytes) throw Error("limit_exceeded", "Worker output exceeds 64 MiB");
+  }
   try { return Json::parse(text); }
   catch (const Json::exception&) { throw Error("worker_failed", "Worker returned malformed JSON"); }
 }
@@ -133,8 +132,7 @@ struct TemporaryDirectory {
   fs::path path;
   explicit TemporaryDirectory(const fs::path& root) {
     directory(root / ".workers");
-    path = temporary_file(root / ".workers");
-    fs::remove(path); directory(path);
+    path = temporary_directory(root / ".workers");
   }
   ~TemporaryDirectory() { std::error_code ignored; fs::remove_all(path, ignored); }
 };
@@ -182,13 +180,31 @@ Child launch(const std::vector<fs::path>& args, bool bounded, int memory_mb) {
   HANDLE null_handle = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
     &security, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (null_handle == INVALID_HANDLE_VALUE) throw Error("worker_failed", "Cannot open worker standard streams");
-  STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
-  startup.hStdInput = null_handle; startup.hStdOutput = null_handle; startup.hStdError = null_handle;
+  // Inherit only the NUL standard streams, never a caller's pipes or lock
+  // handles; a durable coordinator must not hold a captured caller pipe open
+  // (POSIX likewise detaches the coordinator's stderr).
+  SIZE_T attribute_bytes = 0;
+  InitializeProcThreadAttributeList(nullptr, 1, 0, &attribute_bytes);
+  std::vector<unsigned char> attribute_storage(attribute_bytes);
+  auto attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attribute_storage.data());
+  if (attribute_bytes == 0 || !InitializeProcThreadAttributeList(attributes, 1, 0, &attribute_bytes)) {
+    CloseHandle(null_handle); throw Error("worker_failed", "Cannot prepare worker handle inheritance");
+  }
+  HANDLE inherited[] = {null_handle};
+  if (!UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, inherited, sizeof(inherited), nullptr, nullptr)) {
+    DeleteProcThreadAttributeList(attributes); CloseHandle(null_handle);
+    throw Error("worker_failed", "Cannot restrict worker handle inheritance");
+  }
+  STARTUPINFOEXW startup{}; startup.StartupInfo.cb = sizeof(startup); startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  startup.StartupInfo.hStdInput = null_handle; startup.StartupInfo.hStdOutput = null_handle; startup.StartupInfo.hStdError = null_handle;
+  startup.lpAttributeList = attributes;
   PROCESS_INFORMATION process{};
   const bool created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
-    CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &startup, &process);
+    CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &process);
+  const auto launch_error = GetLastError();
+  DeleteProcThreadAttributeList(attributes);
   CloseHandle(null_handle);
-  if (!created) throw Error("worker_failed", "Cannot launch native worker: " + std::to_string(GetLastError()));
+  if (!created) throw Error("worker_failed", "Cannot launch native worker: " + std::to_string(launch_error));
   child.process = process.hProcess;
   if (bounded && !AssignProcessToJobObject(child.group, child.process)) {
     TerminateProcess(child.process, 1); CloseHandle(process.hThread);
@@ -245,15 +261,160 @@ Child launch(const std::vector<fs::path>& args, bool bounded, int) {
   return child;
 }
 #endif
+// Job directory layout (docs/PROTOCOL.md):
+//   state.json   small commit record: identity, budget, state, timestamps, error
+//                and the SHA-256/size of result.json. Admission and list read only this.
+//   request.json immutable submitted arguments with the job identity.
+//   result.json  the result with the job identity, published before the state
+//                that reports success.
+// Records from the previous format embed `arguments` and `result` in state.json.
+// They are normalized when read and rewritten in this layout once terminal.
+struct JobRecord {
+  Json state;
+  std::optional<Json> arguments;  // previous format only
+  std::optional<Json> result;     // previous format only
+  bool legacy = false;
+};
+struct StoredResult {
+  Json result;
+  std::string sha256;
+  std::size_t bytes = 0;
+};
+Error corrupt(const std::string& message) { return Error("job_record_corrupt", message); }
+std::int64_t file_time_ms(const fs::path& path) {
+  std::error_code error;
+  const auto written = fs::last_write_time(path, error);
+  if (error) return 0;
+  const auto age = fs::file_time_type::clock::now() - written;
+  return now_ms() - std::chrono::duration_cast<std::chrono::milliseconds>(age).count();
+}
+std::optional<std::string> document_of(const Json& arguments) {
+  if (!arguments.is_object() || !arguments.contains("document_id") || !arguments.at("document_id").is_string()) return {};
+  auto id = arguments.at("document_id").get<std::string>();
+  try { identifier(id); } catch (const Error&) { return {}; }
+  return id;
+}
+void check_state(const Json& state, const std::string& id) {
+  if (!state.is_object()) throw corrupt("Job state is not an object");
+  const auto has = [&](const char* key, bool (Json::*kind)() const noexcept) {
+    return state.contains(key) && (state.at(key).*kind)();
+  };
+  if (state.value("schema_version", Json()) != job_schema_version || !has("job_id", &Json::is_string) || state.at("job_id") != id ||
+      !has("request_id", &Json::is_string) || state.at("request_id") != id || !has("tool", &Json::is_string) ||
+      !has("fingerprint", &Json::is_string) || !has("state", &Json::is_string) || !has("budget", &Json::is_object) ||
+      !has("progress", &Json::is_number) || !has("submitted_at_unix_ms", &Json::is_number_integer) ||
+      !has("deadline_unix_ms", &Json::is_number_integer))
+    throw corrupt("Job state record is incomplete or does not match its identity");
+  const auto value = state.at("state").get<std::string>();
+  if (!terminal_name(value) && value != "queued" && value != "running" && value != "cancelling") throw corrupt("Job state is unknown");
+  try { budget(state.at("budget")); } catch (const Error&) { throw corrupt("Job budget is invalid"); }
+  if ((state.contains("updated_at_unix_ms") && !has("updated_at_unix_ms", &Json::is_number_integer)) ||
+      (state.contains("retried") && !has("retried", &Json::is_boolean)) ||
+      (state.contains("error") && !has("error", &Json::is_object)) ||
+      (state.contains("document_id") && !(has("document_id", &Json::is_string) && document_of(state))) ||
+      state.contains("result_sha256") != state.contains("result_bytes") ||
+      (state.contains("result_sha256") && (!has("result_sha256", &Json::is_string) || !has("result_bytes", &Json::is_number_unsigned))))
+    throw corrupt("Job state record has malformed fields");
+}
+// Reads one job record. Missing state is not_found; anything unreadable,
+// malformed or foreign is job_record_corrupt and never another exception type.
+JobRecord load_job(const fs::path& path, const std::string& id) {
+  const auto file = path / "state.json";
+  try {
+    const auto status = fs::symlink_status(file);
+    if (!fs::exists(status)) throw Error("not_found", "Job does not exist: " + id);
+    if (!fs::is_regular_file(status)) throw corrupt("Job state is not a regular file");
+    // Only a previous-format record embeds a result beyond the small-state bound.
+    const bool large = fs::file_size(file) > max_json_bytes;
+    auto raw = parse_json(read_text(file, large ? max_result_file_bytes : max_json_bytes), max_result_file_bytes);
+    JobRecord record;
+    if (raw.is_object() && !raw.contains("schema_version")) {
+      record.legacy = true;
+      if (raw.contains("arguments")) { record.arguments = raw.at("arguments"); raw.erase("arguments"); }
+      if (raw.contains("result")) { record.result = raw.at("result"); raw.erase("result"); }
+      if (record.arguments) if (const auto document = document_of(*record.arguments)) raw["document_id"] = *document;
+      raw["schema_version"] = job_schema_version;
+    } else if (large) throw corrupt("Job state exceeds 1 MiB");
+    record.state = std::move(raw);
+    check_state(record.state, id);
+    return record;
+  } catch (const Error& e) {
+    if (e.code == "not_found" || e.code == "job_record_corrupt") throw;
+    throw corrupt("Job state is unreadable: " + std::string(e.what()));
+  } catch (const std::exception& e) { throw corrupt("Job state is unreadable: " + std::string(e.what())); }
+}
 Json public_job(Json state) {
-  state.erase("arguments"); state.erase("fingerprint"); state.erase("deadline_unix_ms");
+  for (const auto* key : {"arguments", "fingerprint", "deadline_unix_ms", "schema_version", "document_id",
+                          "result_sha256", "result_bytes", "result"})
+    state.erase(key);
   return state;
 }
-void save_job(const fs::path& path, Json& state) {
-  state["updated_at_unix_ms"] = now_ms();
-  const auto temporary = temporary_file(path);
-  try { write_result(temporary, state); publish_file(temporary, path / "state.json"); }
-  catch (...) { std::error_code ignored; fs::remove(temporary, ignored); throw; }
+// A damaged record keeps its identity and reads as a terminal failure. It never
+// blocks admission unless a live coordinator still owns it.
+Json corrupt_view(const std::string& id, std::int64_t timestamp, const Error& error) {
+  return {{"job_id", id}, {"request_id", id}, {"tool", ""}, {"budget", Json::object()}, {"state", "failed"},
+    {"progress", 0.0}, {"submitted_at_unix_ms", 0}, {"updated_at_unix_ms", timestamp}, {"error", error.json()}};
+}
+void write_request(const fs::path& path, const Json& state, const Json& arguments) {
+  atomic_text(path / "request.json", Json{{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
+    {"tool", state.at("tool")}, {"fingerprint", state.at("fingerprint")}, {"arguments", arguments}}.dump(), max_request_file_bytes);
+}
+Json request_arguments(const fs::path& path, const JobRecord& record) {
+  if (record.arguments) {
+    if (!record.arguments->is_object()) throw corrupt("Job arguments are not an object");
+    return *record.arguments;
+  }
+  Json request;
+  try { request = parse_json(read_text(path / "request.json", max_request_file_bytes), max_request_file_bytes); }
+  catch (const Error& e) { throw corrupt("Job request is missing or unreadable: " + std::string(e.what())); }
+  const auto& state = record.state;
+  if (!request.is_object() || request.value("schema_version", Json()) != job_schema_version ||
+      request.value("job_id", Json()) != state.at("job_id") || request.value("tool", Json()) != state.at("tool") ||
+      !request.contains("arguments") || !request.at("arguments").is_object() ||
+      request.value("fingerprint", Json()) != state.at("fingerprint") ||
+      Json(request_fingerprint(state.at("tool").get<std::string>(), request.at("arguments"))) != state.at("fingerprint"))
+    throw corrupt("Job request does not match its state record");
+  return request.at("arguments");
+}
+// Publishes result.json, then records its digest in the (not yet saved) state.
+void attach_result(const fs::path& path, Json& state, const Json& result) {
+  const auto text = Json{{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
+    {"fingerprint", state.at("fingerprint")}, {"result", result}}.dump();
+  if (text.size() > max_result_file_bytes) throw Error("limit_exceeded", "Job result exceeds 64 MiB");
+  atomic_text(path / "result.json", text, max_result_file_bytes);
+  state["result_sha256"] = sha256(text); state["result_bytes"] = text.size();
+}
+// With a recorded digest, result.json must match it exactly. Without one (the
+// coordinator stopped before its state flipped) the file's identity must match.
+StoredResult read_stored_result(const fs::path& path, const Json& state) {
+  const auto text = read_text(path / "result.json", max_result_file_bytes);
+  auto digest = sha256(text);
+  if (state.contains("result_sha256") && (state.at("result_sha256") != digest || state.at("result_bytes") != text.size()))
+    throw corrupt("Job result does not match its recorded digest");
+  Json envelope;
+  try { envelope = Json::parse(text); } catch (const Json::exception&) { throw corrupt("Job result is not valid JSON"); }
+  if (!envelope.is_object() || envelope.value("schema_version", Json()) != job_schema_version ||
+      envelope.value("job_id", Json()) != state.at("job_id") || envelope.value("fingerprint", Json()) != state.at("fingerprint") ||
+      !envelope.contains("result"))
+    throw corrupt("Job result does not belong to this job");
+  return {std::move(envelope.at("result")), std::move(digest), text.size()};
+}
+// Callers hold the admission lock, which serializes every state.json write.
+void save_job(const fs::path& path, JobRecord& record, bool touch = true) {
+  if (record.legacy) {
+    // Request and result are durable before the small record that commits them.
+    if (record.arguments) write_request(path, record.state, *record.arguments);
+    if (record.result) attach_result(path, record.state, *record.result);
+  }
+  if (touch) record.state["updated_at_unix_ms"] = now_ms();
+  atomic_text(path / "state.json", record.state.dump());
+  record.legacy = false; record.arguments.reset(); record.result.reset();
+}
+// Rewrites a terminal previous-format record once, so admission never parses an
+// embedded result again. Failure leaves it readable through the legacy path.
+void migrate_job(const fs::path& path, JobRecord& record) {
+  if (!record.legacy || !terminal(record.state)) return;
+  try { save_job(path, record, false); } catch (const std::exception&) {}
 }
 std::unique_ptr<WorkspaceLock> wait_lock(const fs::path& path) {
   for (int attempt = 0;; ++attempt) {
@@ -265,22 +426,139 @@ std::unique_ptr<WorkspaceLock> wait_lock(const fs::path& path) {
   }
 }
 std::optional<Json> committed_result(const fs::path& workspace, const Json& state) {
-  if (state.at("tool") != "cad_create" && state.at("tool") != "cad_apply" && state.at("tool") != "cad_restore" && state.at("tool") != "cad_import") return {};
-  return Store(workspace).request_replay(state.at("arguments").at("document_id"),
-    state.at("request_id"), state.at("fingerprint"));
+  if (!mutation(state.at("tool").get<std::string>()) || !state.contains("document_id")) return {};
+  return Store(workspace).request_replay(state.at("document_id").get<std::string>(),
+    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());
 }
-void recover_job(const fs::path& workspace, const fs::path& path, Json& state) {
-  if (terminal(state) || now_ms() - state.at("submitted_at_unix_ms").get<std::int64_t>() < 5000) return;
+// Recovery and reporting treat an unreadable receipt as no committed result.
+std::optional<Json> committed_result_or_none(const fs::path& workspace, const Json& state) {
+  try { return committed_result(workspace, state); } catch (const std::exception&) { return {}; }
+}
+bool coordinator_running(const fs::path& path) {
+  try { WorkspaceLock probe(path); return false; }
+  catch (const Error& e) { return e.code == "workspace_busy"; }
+}
+// Called under admission. A nonterminal record whose coordinator no longer owns
+// it is resolved from durable evidence only: result.json, then a committed receipt.
+void recover_job(const fs::path& workspace, const fs::path& path, JobRecord& record) {
+  auto& state = record.state;
+  if (terminal(state) || now_ms() - state.at("submitted_at_unix_ms").get<std::int64_t>() < recovery_grace_ms) return;
   std::unique_ptr<WorkspaceLock> owner;
   try { owner = std::make_unique<WorkspaceLock>(path); }
   catch (const Error& e) { if (e.code == "workspace_busy") return; throw; }
-  if (const auto result = committed_result(workspace, state)) {
-    state["state"] = "succeeded"; state["progress"] = 1.0; state["result"] = *result;
+  std::optional<StoredResult> stored;
+  try { stored = read_stored_result(path, state); } catch (const std::exception&) {}
+  if (stored) {
+    state["result_sha256"] = stored->sha256; state["result_bytes"] = stored->bytes;
+    state["state"] = "succeeded"; state["progress"] = 1.0; state.erase("error");
+  } else if (const auto result = committed_result_or_none(workspace, state)) {
+    state["state"] = "succeeded"; state["progress"] = 1.0; state.erase("error");
+    // Without result.json, reporting rereads the committed receipt.
+    try { attach_result(path, state, *result); } catch (const std::exception&) {}
   } else {
     state["state"] = fs::exists(path / "cancel") ? "cancelled" : "interrupted";
     state["error"] = Error("job_interrupted", "Coordinator stopped before a durable result; resubmit the same request_id to retry safely").json();
   }
-  save_job(path, state);
+  save_job(path, record);
+}
+// The public job, with its result when succeeded. A missing or damaged result is
+// reported explicitly; a committed mutation is reread from its receipt.
+Json job_view(const fs::path& workspace, const fs::path& path, const JobRecord& record) {
+  auto view = public_job(record.state);
+  if (record.state.at("state") != "succeeded") return view;
+  if (record.result) { view["result"] = *record.result; return view; }
+  try { view["result"] = read_stored_result(path, record.state).result; }
+  catch (const std::exception& e) {
+    if (const auto result = committed_result_or_none(workspace, record.state)) view["result"] = *result;
+    else { view["state"] = "failed"; view["error"] = corrupt("Job result is missing or corrupt: " + std::string(e.what())).json(); }
+  }
+  return view;
+}
+struct JobEntry {
+  std::string id;
+  fs::path path;
+  std::optional<JobRecord> record;
+  Json view;                 // null for an incomplete submission (not yet a job)
+  bool active = false;       // counts toward admission
+  bool collectable = false;  // terminal, corrupt or incomplete directory
+  bool removed = false;
+  std::int64_t timestamp = 0;
+};
+// Reads every job's small state record under admission. No record can make this
+// throw: damaged entries are reported, and count as active only while a live
+// coordinator still owns them.
+std::vector<JobEntry> scan_jobs(const fs::path& workspace, const fs::path& root) {
+  std::vector<JobEntry> entries;
+  std::error_code error;
+  fs::directory_iterator iterator(root, error);
+  for (; !error && iterator != fs::directory_iterator(); iterator.increment(error)) {
+    JobEntry entry;
+    entry.id = path_to_utf8(iterator->path().filename()); entry.path = iterator->path();
+    // The admission lock, temporaries and collection leftovers are not jobs.
+    try { identifier(entry.id); } catch (const Error&) { continue; }
+    std::error_code status_error;
+    const auto status = fs::symlink_status(entry.path, status_error);
+    if (status_error || !fs::is_directory(status)) {
+      entry.view = corrupt_view(entry.id, 0, corrupt(fs::is_symlink(status) ?
+        "Managed job directories cannot be symlinks" : "Job record is not a directory"));
+      entries.push_back(std::move(entry)); continue;
+    }
+    if (!fs::exists(fs::symlink_status(entry.path / "state.json", status_error))) {
+      entry.collectable = true; entry.timestamp = file_time_ms(entry.path);
+      entries.push_back(std::move(entry)); continue;
+    }
+    try {
+      auto record = load_job(entry.path, entry.id);
+      // A failed recovery leaves the stored state for a later pass.
+      try { recover_job(workspace, entry.path, record); } catch (const std::exception&) {}
+      entry.active = !terminal(record.state);
+      entry.collectable = !entry.active;
+      entry.timestamp = record.state.value("updated_at_unix_ms", record.state.at("submitted_at_unix_ms").get<std::int64_t>());
+      entry.view = public_job(record.state);
+      entry.record = std::move(record);
+    } catch (const Error& e) {
+      entry.active = coordinator_running(entry.path);
+      entry.collectable = !entry.active;
+      entry.timestamp = file_time_ms(entry.path / "state.json");
+      entry.view = corrupt_view(entry.id, entry.timestamp, e.code == "job_record_corrupt" ? e : corrupt(e.what()));
+    }
+    entries.push_back(std::move(entry));
+  }
+  if (error) throw Error("storage_error", "Cannot list job records: " + error.message());
+  return entries;
+}
+// Collection runs under admission, so no submit can start a coordinator for a
+// candidate; the ownership probe skips a coordinator that is still exiting.
+// Renaming first makes each removal atomic for readers; leftovers are retried.
+bool remove_job(const fs::path& root, const fs::path& path) {
+  if (coordinator_running(path)) return false;
+  std::random_device random;
+  const auto trash = root / (".trash-" + std::to_string(random()) + "-" + std::to_string(random()));
+  std::error_code error;
+  fs::rename(path, trash, error);
+  if (error) return false;
+  fs::remove_all(trash, error);
+  return true;
+}
+void collect_jobs(const fs::path& root, std::vector<JobEntry>& entries, const std::string& keep) {
+  std::vector<fs::path> leftovers;
+  std::error_code error;
+  for (fs::directory_iterator it(root, error); !error && it != fs::directory_iterator(); it.increment(error)) {
+    std::error_code status_error;
+    if (path_to_utf8(it->path().filename()).rfind(".trash-", 0) == 0 && fs::is_directory(fs::symlink_status(it->path(), status_error)))
+      leftovers.push_back(it->path());
+  }
+  for (const auto& leftover : leftovers) fs::remove_all(leftover, error);
+  std::vector<JobEntry*> candidates;
+  for (auto& entry : entries) if (entry.collectable && entry.id != keep) candidates.push_back(&entry);
+  std::sort(candidates.begin(), candidates.end(), [](const JobEntry* a, const JobEntry* b) { return a->timestamp > b->timestamp; });
+  const auto now = now_ms();
+  for (std::size_t rank = 0; rank < candidates.size(); ++rank) {
+    auto& entry = *candidates[rank];
+    if (rank < max_terminal_jobs && now - entry.timestamp <= terminal_retention_ms) continue;
+    entry.removed = remove_job(root, entry.path);
+  }
+  entries.erase(std::remove_if(entries.begin(), entries.end(), [](const JobEntry& entry) { return entry.removed; }), entries.end());
 }
 }
 
@@ -479,13 +757,11 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
   else throw Error("invalid_argument", "Job action must be submit, get, cancel or list");
   directory(workspace / "jobs"); const auto root = workspace / "jobs"; WorkspaceLock admission(root);
   if (action == "list") {
+    auto entries = scan_jobs(workspace, root);
     Json jobs = Json::array();
-    for (const auto& entry : fs::directory_iterator(root)) {
-      if (entry.is_symlink()) throw Error("storage_error", "Managed job directories cannot be symlinks");
-      if (!entry.is_directory() || !fs::exists(entry.path() / "state.json")) continue;
-      auto state = read_result(entry.path() / "state.json"); recover_job(workspace, entry.path(), state);
-      auto item = public_job(state); item.erase("result"); jobs.push_back(item);
-      if (jobs.size() >= 1000) break;
+    for (auto& entry : entries) {
+      if (entry.record) migrate_job(entry.path, *entry.record);
+      if (!entry.view.is_null() && jobs.size() < 1000) jobs.push_back(entry.view);
     }
     return {{"jobs",jobs}, {"limit",1000}};
   }
@@ -493,97 +769,162 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
   const auto path = root / id;
   if (fs::is_symlink(fs::symlink_status(path))) throw Error("storage_error", "Managed job directories cannot be symlinks");
   if (action != "submit") {
-    auto state = read_result(path / "state.json"); recover_job(workspace, path, state);
-    if (action == "cancel" && !terminal(state)) {
+    JobRecord record;
+    try { record = load_job(path, id); }
+    catch (const Error& e) {
+      if (e.code != "job_record_corrupt") throw;
+      return corrupt_view(id, file_time_ms(path / "state.json"), e);
+    }
+    recover_job(workspace, path, record);
+    if (action == "cancel" && !terminal(record.state)) {
       // A cancellation and commit share the document lock. Whichever obtains it
       // first defines whether the durable mutation can publish.
       std::unique_ptr<DocumentLock> publication;
-      if (state.at("arguments").contains("document_id"))
-        publication = std::make_unique<DocumentLock>(workspace, state.at("arguments").at("document_id"));
-      if (const auto result = committed_result(workspace, state)) {
-        state["state"] = "succeeded"; state["result"] = *result; state["progress"] = 1.0;
-      } else { atomic_text(path / "cancel", "cancel\n"); state["state"] = "cancelling"; }
-      save_job(path, state);
+      if (record.state.contains("document_id"))
+        publication = std::make_unique<DocumentLock>(workspace, record.state.at("document_id").get<std::string>());
+      if (const auto result = committed_result(workspace, record.state)) {
+        record.state["state"] = "succeeded"; record.state["progress"] = 1.0;
+        try { attach_result(path, record.state, *result); } catch (const std::exception&) {}
+      } else { atomic_text(path / "cancel", "cancel\n"); record.state["state"] = "cancelling"; }
+      save_job(path, record);
     }
-    return public_job(state);
+    auto view = job_view(workspace, path, record);
+    migrate_job(path, record);
+    return view;
   }
   const auto tool = text_field(arguments, "tool");
-    if (tool != "cad_create" && tool != "cad_apply" && tool != "cad_restore" && tool != "cad_import" && tool != "cad_query" && tool != "cad_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_query" && tool != "cad_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)
     throw Error("invalid_argument", "Nested request_id must match the job request_id");
-  if (tool == "cad_create" || tool == "cad_apply" || tool == "cad_restore" || tool == "cad_import") input["request_id"] = id;
+  if (mutation(tool)) input["request_id"] = id;
+  // Malformed arguments fail now, with the code a direct call would return.
+  validate_tool_arguments(tool, input);
   const auto fingerprint = request_fingerprint(tool, input);
   const auto limits = budget(arguments.value("budget", Json::object()));
   bool retry = false;
-  if (fs::exists(path / "state.json")) {
-    auto state = read_result(path / "state.json");
-    if (state.at("fingerprint") != fingerprint || state.at("budget") != limits)
+  std::error_code status_error;
+  if (fs::exists(fs::symlink_status(path / "state.json", status_error))) {
+    JobRecord record;
+    try { record = load_job(path, id); }
+    catch (const Error& e) {
+      // A damaged record keeps its identity; a deliberate retry uses a new request_id.
+      if (e.code != "job_record_corrupt") throw;
+      return corrupt_view(id, file_time_ms(path / "state.json"), e);
+    }
+    if (record.state.at("fingerprint") != fingerprint || record.state.at("budget") != limits)
       throw Error("request_conflict", "request_id already belongs to a different job request");
-    recover_job(workspace, path, state);
-    if (state.at("state") != "interrupted") return public_job(state);
+    recover_job(workspace, path, record);
+    if (record.state.at("state") != "interrupted") {
+      auto view = job_view(workspace, path, record);
+      migrate_job(path, record);
+      return view;
+    }
     retry = true;
   }
+  auto entries = scan_jobs(workspace, root);
+  collect_jobs(root, entries, id);
   int active = 0;
-  for (const auto& entry : fs::directory_iterator(root)) {
-    if (entry.is_symlink()) throw Error("storage_error", "Managed job directories cannot be symlinks");
-    if (!entry.is_directory() || !fs::exists(entry.path() / "state.json")) continue;
-    auto state = read_result(entry.path() / "state.json"); recover_job(workspace, entry.path(), state);
-    if (!terminal(state)) ++active;
+  for (auto& entry : entries) {
+    if (entry.active) ++active;
+    if (entry.record) migrate_job(entry.path, *entry.record);
   }
   if (active >= max_active_jobs) throw Error("queue_full", "At most eight geometry jobs may be queued or running");
   directory(path);
-  Json state = {{"job_id", id}, {"request_id", id}, {"tool", tool}, {"arguments", input}, {"fingerprint", fingerprint},
-    {"budget", limits}, {"state", "queued"}, {"progress", 0.0}, {"submitted_at_unix_ms", now_ms()},
-    {"deadline_unix_ms", now_ms() + limits.at("timeout_ms").get<int>()}, {"retried", retry}};
-  save_job(path, state);
+  // A retried identity never trusts an earlier attempt's result file.
+  if (retry) { std::error_code ignored; fs::remove(path / "result.json", ignored); }
+  const auto submitted = now_ms();
+  JobRecord record;
+  record.state = {{"schema_version", job_schema_version}, {"job_id", id}, {"request_id", id}, {"tool", tool},
+    {"fingerprint", fingerprint}, {"budget", limits}, {"state", "queued"}, {"progress", 0.0},
+    {"submitted_at_unix_ms", submitted}, {"deadline_unix_ms", submitted + limits.at("timeout_ms").get<int>()}, {"retried", retry}};
+  if (const auto document = document_of(input)) record.state["document_id"] = *document;
+  write_request(path, record.state, input);
+  save_job(path, record);
   try {
     auto child = launch({"--internal-job-worker", workspace, id}, false, 0);
 #ifndef _WIN32
     background_children.push_back(child.pid);
 #endif
-  } catch (const Error& e) { state["state"] = "interrupted"; state["error"] = e.json(); save_job(path, state); throw; }
-  return public_job(state);
+  } catch (const Error& e) { record.state["state"] = "interrupted"; record.state["error"] = e.json(); save_job(path, record); throw; }
+  return public_job(record.state);
 }
 
 int job_worker_main(const fs::path& workspace, const std::string& job_id) {
-  const auto root = workspace / "jobs"; identifier(job_id); const auto path = root / job_id;
+  const auto root = workspace / "jobs"; const auto path = root / job_id;
+  // Stdout is reserved; a detached coordinator's stderr is the null device.
+  const auto log = [&](const std::string& message) {
+    try { std::cerr << Json{{"job_id", job_id}, {"coordinator_error", message}}.dump() << '\n'; } catch (...) {}
+  };
+  std::unique_ptr<WorkspaceLock> owner;
+  try { identifier(job_id); owner = std::make_unique<WorkspaceLock>(path); }
+  catch (const std::exception& e) { log(std::string("Cannot own job: ") + e.what()); return 1; }
+  JobRecord record;
+  bool loaded = false;
   try {
-    WorkspaceLock owner(path);
-    auto state = read_result(path / "state.json");
-    if (terminal(state)) return 0;
-    cancellation_file = path / "cancel"; current_budget = budget(state.at("budget"));
-    job_deadline = state.at("deadline_unix_ms"); request_context = {{"request_id",job_id}, {"fingerprint",state.at("fingerprint")}};
+    Json input;
+    {
+      const auto admission = wait_lock(root);
+      record = load_job(path, job_id); loaded = true;
+      if (terminal(record.state)) return 0;
+      input = request_arguments(path, record);
+    }
+    cancellation_file = path / "cancel"; current_budget = budget(record.state.at("budget"));
+    job_deadline = record.state.at("deadline_unix_ms").get<std::int64_t>();
+    request_context = {{"request_id", job_id}, {"fingerprint", record.state.at("fingerprint")}};
+    const auto tool = record.state.at("tool").get<std::string>();
+    std::optional<Json> result;
     try {
-      if (const auto result = committed_result(workspace, state)) {
-        state["result"] = *result; state["state"] = "succeeded"; state["progress"] = 1.0;
-      } else {
+      if (const auto committed = committed_result(workspace, record.state)) result = *committed;
+      else {
         check_job_cancelled();
         {
           const auto admission = wait_lock(root);
-          state["state"] = "running"; state["progress"] = 0.1; save_job(path, state);
+          record.state["state"] = "running"; record.state["progress"] = 0.1; save_job(path, record);
         }
         Service service(workspace);
-        state["result"] = service.call(state.at("tool"), state.at("arguments"));
-        state["state"] = "succeeded"; state["progress"] = 1.0;
+        result = service.call(tool, input);
       }
     } catch (const Error& e) {
       // Publication may have succeeded before an OS durability/reporting failure.
-      if (const auto result = committed_result(workspace, state)) {
-        state["result"] = *result; state["state"] = "succeeded"; state["progress"] = 1.0;
-      } else { state["state"] = e.code == "job_cancelled" ? "cancelled" : "failed"; state["error"] = e.json(); }
-    } catch (const std::exception& e) { state["state"] = "failed"; state["error"] = Error("internal_error", e.what()).json(); }
-    // A brief contender may hold admission while reading; never lose a completed
-    // result merely because polling overlaps this atomic state write.
-    for (int attempts = 0;; ++attempts) {
-      try { WorkspaceLock admission(root); save_job(path, state); break; }
-      catch (const Error& e) {
-        if (e.code != "workspace_busy" || attempts >= 500) throw;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+      if (const auto committed = committed_result_or_none(workspace, record.state)) result = *committed;
+      else { record.state["state"] = e.code == "job_cancelled" ? "cancelled" : "failed"; record.state["error"] = e.json(); }
+    } catch (const std::exception& e) {
+      record.state["state"] = "failed"; record.state["error"] = Error("internal_error", e.what()).json();
     }
-    return state.at("state") == "succeeded" ? 0 : 1;
-  } catch (const std::exception&) { return 1; }
+    if (result) {
+      // The result is durable before the state that reports it. A committed
+      // mutation stays successful even without the file: its receipt is reread.
+      try { attach_result(path, record.state, *result); }
+      catch (const Error& e) {
+        if (!(mutation(tool) && committed_result_or_none(workspace, record.state))) {
+          result.reset(); record.state["state"] = "failed"; record.state["error"] = e.json();
+        }
+      }
+      if (result) { record.state["state"] = "succeeded"; record.state["progress"] = 1.0; record.state.erase("error"); }
+    }
+    {
+      // A brief contender may hold admission while reading; never lose a
+      // completed result merely because polling overlaps this atomic state write.
+      const auto admission = wait_lock(root);
+      save_job(path, record);
+    }
+    return record.state.at("state") == "succeeded" ? 0 : 1;
+  } catch (const std::exception& e) {
+    log(std::string("Coordinator failed: ") + e.what());
+    if (!loaded) return 1;
+    // A durable result.json or committed receipt is recovered as success.
+    // Anything else is persisted as an explicit failure.
+    if (record.state.at("state") == "succeeded") return 1;
+    if (!terminal(record.state)) {
+      record.state["state"] = "failed";
+      const auto* error = dynamic_cast<const Error*>(&e);
+      record.state["error"] = error ? error->json() : Error("internal_error", e.what()).json();
+    }
+    try { const auto admission = wait_lock(root); save_job(path, record); }
+    catch (const std::exception& again) { log(std::string("Cannot persist coordinator failure: ") + again.what()); }
+    return 1;
+  }
 }
 }

@@ -76,7 +76,9 @@ if(BUILD_TESTING)
   add_executable(cad_tests tests/test_main.cpp)
   target_link_libraries(cad_tests PRIVATE cad_core)
   target_include_directories(cad_tests SYSTEM PRIVATE "${OpenCASCADE_INCLUDE_DIR}")
-  target_compile_definitions(cad_tests PRIVATE CAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  # Test programs name the service executable that runs their geometry workers.
+  target_compile_definitions(cad_tests PRIVATE CAD_SERVICE_EXE="$<TARGET_FILE:agent-3d-cad>" CAD_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+  add_dependencies(cad_tests agent-3d-cad)
   foreach(suite model geometry transactions protocol)
     add_test(NAME ${suite} COMMAND cad_tests ${suite})
     set_tests_properties(${suite} PROPERTIES TIMEOUT 60)
@@ -85,6 +87,10 @@ if(BUILD_TESTING)
     -DCAD_EXE=$<TARGET_FILE:agent-3d-cad> -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
     -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/cli-smoke -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_smoke.cmake)
   set_tests_properties(cli_smoke PROPERTIES TIMEOUT 60)
+  add_test(NAME renamed_worker COMMAND "${CMAKE_COMMAND}"
+    -DCAD_EXE=$<TARGET_FILE:agent-3d-cad> -DSOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+    -DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/renamed-worker -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/renamed_worker_smoke.cmake)
+  set_tests_properties(renamed_worker PROPERTIES TIMEOUT 120)
   foreach(suite topology jobs viewer modeling live app_protocol drawing cache assembly assembly_model assembly_kernel assembly_drawing bom balloon_kernel bom_drawing performance_geometry)
     add_executable(cad_${suite}_tests tests/${suite}_tests.cpp)
     target_link_libraries(cad_${suite}_tests PRIVATE cad_core)

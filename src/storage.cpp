@@ -2,6 +2,7 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <random>
@@ -193,6 +194,23 @@ fs::path temporary_file(const fs::path& parent) {
 #endif
 }
 
+fs::path temporary_directory(const fs::path& parent) {
+#ifdef _WIN32
+  std::random_device random;
+  for (int attempt = 0; attempt < 128; ++attempt) {
+    auto path = parent / (".pending-" + std::to_string(random()) + "-" + std::to_string(random()));
+    if (CreateDirectoryW(path.c_str(), nullptr)) return path;
+    if (GetLastError() != ERROR_ALREADY_EXISTS) win_error("Create temporary directory");
+  }
+  throw Error("storage_error", "Cannot allocate a temporary directory");
+#else
+  std::string pattern = (parent / ".pending-XXXXXX").string();
+  std::vector<char> bytes(pattern.begin(), pattern.end()); bytes.push_back('\0');
+  if (!::mkdtemp(bytes.data())) io_error("Create temporary directory");
+  return fs::path(bytes.data());
+#endif
+}
+
 void publish_file(const fs::path& temporary, const fs::path& target) {
   reject_symlink(target);
 #ifdef _WIN32
@@ -214,8 +232,9 @@ void publish_file(const fs::path& temporary, const fs::path& target) {
 #endif
 }
 
-void atomic_text(const fs::path& path, const std::string& text) {
-  if (text.size() > max_json_bytes) throw Error("limit_exceeded", "Saved JSON exceeds 1 MiB");
+void atomic_text(const fs::path& path, const std::string& text, std::size_t max_bytes) {
+  if (text.size() > max_bytes)
+    throw Error("limit_exceeded", max_bytes == max_json_bytes ? "Saved JSON exceeds 1 MiB" : "Saved file exceeds its byte limit");
   const auto temporary = temporary_file(path.parent_path());
   try {
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);

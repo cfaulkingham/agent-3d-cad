@@ -43,8 +43,10 @@ private:
 
 void directory(const fs::path& path);
 std::string read_text(const fs::path& path, std::size_t max_bytes = max_json_bytes);
-void atomic_text(const fs::path& path, const std::string& text);
+void atomic_text(const fs::path& path, const std::string& text, std::size_t max_bytes = max_json_bytes);
 fs::path temporary_file(const fs::path& directory);
+// Creates a new owner-only directory with a unique name beneath parent.
+fs::path temporary_directory(const fs::path& parent);
 void publish_file(const fs::path& temporary, const fs::path& target);
 
 class Store {
