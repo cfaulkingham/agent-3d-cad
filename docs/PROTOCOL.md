@@ -464,7 +464,11 @@ Baseline `2025-11-25`; initialize then notifications/initialized. `ping`, tools/
 and tools/call are supported. Input is newline-delimited UTF-8 JSON, ≤1 MiB and
 64 nesting levels; no JSON-RPC batches. String/integer request IDs are preserved.
 Notifications have no reply, and tools/call notifications never execute tools.
-Malformed messages do not end the stream; a final complete frame at EOF is accepted.
+LF or CRLF delimiters are accepted. Blank or whitespace-only lines are ignored, and
+client JSON-RPC responses (objects with `result` or `error` but no `method`) are
+dropped without a reply. Malformed JSON gets one `-32700` reply, an invalid request
+or a line over 1 MiB gets one `-32600` reply; none ends the stream. A final
+complete frame at EOF is accepted without a trailing newline.
 All stdout lines are protocol JSON; diagnostics use stderr.
 
 Tool replies contain JSON text and structuredContent; domain failures set isError.
