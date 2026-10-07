@@ -5,6 +5,7 @@
 #include <chrono>
 #include <functional>
 #include <iostream>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -132,6 +133,57 @@ void visibility_tests() {
   shown=ready(reopened,"visibility");require(shown.at("hidden_part_ids").empty(),"Switching output to a solid prunes assembly visibility");
   fails("invalid_argument",[&]{call(reopened,"cad_viewer",{{"action","context"},{"view_id","visibility"},{"evaluation_id",shown.at("evaluation_id")},{"selection",nullptr},{"hidden_part_ids",Json::array({"beta"})}});});
 }
+std::set<std::string> json_files(const fs::path& directory) {
+  std::set<std::string> names;
+  if (!fs::exists(directory)) return names;
+  for (const auto& entry:fs::directory_iterator(directory)) if (entry.path().extension()==".json") names.insert(path_to_utf8(entry.path().stem()));
+  return names;
+}
+void age(const fs::path& path) { fs::last_write_time(path,fs::file_time_type::clock::now()-std::chrono::hours(2)); }
+void retention_tests() {
+  Temporary temporary;Service service(temporary.path);
+  const auto frozen=temporary.path/"views"/"kept"/"evaluations",global=temporary.path/"evaluations";
+  call(service,"cad_create",{{"document_id","part"},{"model",box()}});
+  call(service,"cad_open",{{"document_id","part"},{"view_id","idle"}});
+  const auto idle=ready(service,"idle").at("evaluation_id").get<std::string>();
+  call(service,"cad_open",{{"document_id","part"},{"view_id","kept"}});
+  auto previous=ready(service,"kept").at("evaluation_id").get<std::string>();
+  for (int revision=1;revision<=5;++revision) {
+    edit(service,revision,6+revision);
+    const auto current=ready(service,"kept",previous).at("evaluation_id").get<std::string>();
+    require(json_files(frozen)==std::set<std::string>{current},"A view keeps only its displayed frozen evaluation");
+    require(!fs::exists(global/(previous+".json"))&&fs::exists(global/(current+".json")),"Publishing a revision removes the superseded live metadata only");
+    fails("stale_selection",[&]{chunks(service,"kept",previous);});
+    previous=current;
+  }
+  require(json_files(global)==std::set<std::string>{previous,idle},"Five revisions leave the displayed evaluation plus another view's referenced display");
+  const auto mesh=chunks(service,"kept",previous);
+  const Json pick={{"document_id","part"},{"revision",6},{"evaluation_id",previous},{"feature_id","base"},{"kind","edge"},{"entity_id",mesh.at("topology").at("edges")[0].at("id")}};
+  require(call(service,"cad_viewer",{{"action","context"},{"view_id","kept"},{"evaluation_id",previous},{"selection",pick}}).contains("resolved_selection"),"Retained metadata still resolves the displayed pick");
+  // Retargeting releases the frozen mesh at once; current-revision metadata stays resolvable.
+  call(service,"cad_create",{{"document_id","second"},{"model",box()}});
+  call(service,"cad_show",{{"document_id","second"},{"view_id","kept"}});
+  require(json_files(frozen).empty(),"Retargeting deletes the former frozen mesh");
+  require(call(service,"cad_resolve_selection",pick).at("reference")==pick,"A retargeted view's current-revision pick remains resolvable");
+  const auto current_query=call(service,"cad_query",{{"document_id","second"},{"revision",1},{"kind","topology"}}).at("evaluation_id").get<std::string>();
+  const auto old_query=call(service,"cad_query",{{"document_id","part"},{"revision",6},{"kind","topology"}}).at("evaluation_id").get<std::string>();
+  edit(service,6,20);
+  for (const auto& entry:fs::directory_iterator(global)) age(entry.path());
+  ready(service,"kept");
+  const auto remaining=json_files(global);
+  require(!remaining.contains(old_query)&&!remaining.contains(previous),"Old superseded metadata no view references is swept after publication");
+  require(remaining.contains(idle),"A superseded evaluation stays while a view still displays it");
+  require(remaining.contains(current_query),"Unsuperseded agent metadata is never swept by age");
+  fails("stale_selection",[&]{call(service,"cad_resolve_selection",pick);});
+  // The sweep is throttled: a publication soon after a sweep leaves old files
+  // for the next one, while the view's own superseded display goes at once.
+  const auto late=call(service,"cad_query",{{"document_id","part"},{"revision",6},{"kind","topology"}}).at("evaluation_id").get<std::string>();
+  age(global/(late+".json"));
+  const auto refreshed=ready(service,"idle").at("evaluation_id").get<std::string>();
+  require(json_files(global).contains(late),"A recent sweep defers the next one");
+  require(json_files(temporary.path/"views"/"idle"/"evaluations")==std::set<std::string>{refreshed},"The idle view keeps one frozen evaluation after refreshing");
+  require(!json_files(global).contains(idle),"Refreshing the idle view removes its superseded display");
+}
 }
 int main() {try {
   set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temporary temporary;Service service(temporary.path);
@@ -228,5 +280,6 @@ int main() {try {
     if(tool.at("name")=="cad_viewer")require(tool.at("_meta").at("ui").at("visibility")==Json::array({"app"}),"viewer plumbing advertises app-only visibility");
   }
   visibility_tests();
+  retention_tests();
   std::cout<<"live: "<<checks<<" checks passed\n";return 0;
 }catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

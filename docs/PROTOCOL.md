@@ -143,7 +143,9 @@ Evaluated picks instead contain `document_id`, `revision`, `evaluation_id`,
 only within that stored evaluation. They are never persistent design references.
 Rebuilding the same revision creates a new evaluation identity. Stored evaluation
 metadata remains resolvable after restart; resolving a pick requires current HEAD
-to still equal its revision. Draft picks, missing evaluations and identity
+to still equal its revision. Metadata of superseded revisions may be deleted by
+live-view retention (see LIVE_VIEWER.md); such picks are stale either way. Draft
+picks, missing evaluations and identity
 mismatches fail explicitly. Geometry selectors can be suggested for unique edges;
 faces return measurements but have no face-based editing operation yet.
 
@@ -443,7 +445,8 @@ workspace/
   exports/<document>-<evaluation>.view.json
   jobs/<request_id>/state.json
   views/<view_id>/state.json        # workspace-scoped association and context
-  views/<view_id>/evaluations/      # frozen mesh JSON for live transfer
+  views/<view_id>/evaluations/      # frozen mesh JSON of the displayed evaluation only
+  evaluations/.retention            # last superseded-metadata sweep (LIVE_VIEWER.md)
   .workers/                         # bounded worker slots and temporary files
   .cache/<content-key>.json          # disposable exact geometry / view-set projections
 ```

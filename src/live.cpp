@@ -7,9 +7,12 @@
 #include <algorithm>
 #include <chrono>
 #include <fstream>
+#include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <set>
+#include <vector>
 
 namespace agentcad {
 namespace {
@@ -100,6 +103,104 @@ void write_frozen(const fs::path& path, const Json& evaluation) {
     if (!output) throw Error("storage_error","Could not write frozen view");
     publish_file(temporary,path);
   } catch (...) { std::error_code ignored; fs::remove(temporary,ignored); throw; }
+}
+// Retention. A view's frozen copy is readable only while it is the displayed
+// evaluation, so every other frozen file is deleted under the view lock (mesh
+// readers hold the same lock). Global metadata (evaluations/<id>.json) is read
+// only by cad_resolve_selection, which rejects a pick before reading it unless
+// HEAD still equals the pick's revision; superseded metadata is therefore
+// unusable. Losing a race with deletion yields explicit stale_selection.
+constexpr auto sweep_interval = std::chrono::seconds(60);
+constexpr auto sweep_grace = std::chrono::seconds(60);
+constexpr std::size_t sweep_limit = 4096;
+bool evaluation_name(const fs::path& file, std::string& id) {
+  if (file.extension() != ".json") return false;
+  id = path_to_utf8(file.stem());
+  try { identifier(id); return true; } catch (const Error&) { return false; }
+}
+void remove_quietly(const fs::path& path) { std::error_code ignored; fs::remove(path, ignored); }
+// Caller holds the view lock. Keeps only `keep` (empty keeps nothing).
+void prune_frozen(const fs::path& view, const std::string& keep) {
+  const auto parent = view / "evaluations";
+  if (fs::is_symlink(fs::symlink_status(parent)) || !fs::is_directory(parent)) return;
+  std::vector<fs::path> stale; std::error_code error;
+  for (fs::directory_iterator entry(parent, error), end; !error && entry != end; entry.increment(error)) {
+    std::string id;
+    if (evaluation_name(entry->path(), id) && id != keep) stale.push_back(entry->path());
+  }
+  for (const auto& path : stale) remove_quietly(path);
+}
+// Reads only the top-level document_id and revision of stored metadata,
+// stopping as soon as both are known (nlohmann orders object keys).
+struct EvaluationIdentity : nlohmann::json_sax<Json> {
+  int depth = 0; std::string field; std::optional<std::string> document; std::optional<std::uint64_t> revision;
+  bool more() const { return !document || !revision; }
+  bool null() override { return more(); }
+  bool boolean(bool) override { return more(); }
+  bool number_integer(number_integer_t value) override {
+    if (depth == 1 && field == "revision" && value > 0) revision = static_cast<std::uint64_t>(value);
+    return more();
+  }
+  bool number_unsigned(number_unsigned_t value) override { if (depth == 1 && field == "revision") revision = value; return more(); }
+  bool number_float(number_float_t, const string_t&) override { return more(); }
+  bool string(string_t& value) override { if (depth == 1 && field == "document_id") document = value; return more(); }
+  bool binary(binary_t&) override { return false; }
+  bool start_object(std::size_t) override { return ++depth <= 64; }
+  bool key(string_t& value) override { if (depth == 1) field = value; return true; }
+  bool end_object() override { --depth; return more(); }
+  bool start_array(std::size_t) override { return ++depth <= 64; }
+  bool end_array() override { --depth; return more(); }
+  bool parse_error(std::size_t, const std::string&, const nlohmann::detail::exception&) override { return false; }
+};
+std::set<std::string> displayed_evaluations(const fs::path& root) {
+  std::set<std::string> ids;
+  const auto views = root / "views";
+  if (!fs::exists(views)) return ids;
+  if (fs::is_symlink(fs::symlink_status(views))) throw Error("storage_error", "Managed view directory cannot be a symlink");
+  for (const auto& entry : fs::directory_iterator(views)) {
+    if (entry.is_symlink() || !entry.is_directory() || !fs::exists(entry.path() / "state.json")) continue;
+    const auto state = read_state(entry.path());
+    if (state.contains("display")) ids.insert(state.at("display").at("evaluation_id").get<std::string>());
+  }
+  return ids;
+}
+// Best effort, at most once per sweep_interval per workspace: delete global
+// metadata at least sweep_grace old that no view displays and whose document
+// HEAD has moved past its revision. Metadata for the current revision is never
+// deleted by age (offline cad_view picks stay resolvable). Any doubt keeps it.
+void sweep_evaluations(Store& store) {
+  try {
+    const auto parent = store.root() / "evaluations", marker = parent / ".retention";
+    if (fs::is_symlink(fs::symlink_status(parent)) || !fs::is_directory(parent)) return;
+    const auto now = fs::file_time_type::clock::now();
+    std::error_code error;
+    const auto last = fs::last_write_time(marker, error);
+    if (!error && now - last < sweep_interval) return;
+    if (error) { std::ofstream touch(marker, std::ios::binary | std::ios::app); }
+    fs::last_write_time(marker, now, error);
+    const auto displayed = displayed_evaluations(store.root());
+    std::vector<fs::path> candidates;
+    for (fs::directory_iterator entry(parent, error), end; !error && entry != end && candidates.size() < sweep_limit; entry.increment(error)) {
+      std::string id; std::error_code status;
+      if (!evaluation_name(entry->path(), id) || displayed.contains(id) || entry->is_symlink(status) || !entry->is_regular_file(status)) continue;
+      const auto modified = fs::last_write_time(entry->path(), status);
+      if (!status && now - modified >= sweep_grace) candidates.push_back(entry->path());
+    }
+    std::map<std::string, std::optional<Json>> heads; // nullopt: HEAD unknown, keep.
+    for (const auto& path : candidates) {
+      EvaluationIdentity identity;
+      { std::ifstream input(path, std::ios::binary); Json::sax_parse(input, &identity); }
+      if (!identity.document || !identity.revision) continue;
+      if (!heads.contains(*identity.document)) {
+        try { heads[*identity.document] = store.read(*identity.document).at("revision"); }
+        catch (const Error& e) { heads[*identity.document] = e.code == "not_found" ? std::optional<Json>(nullptr) : std::nullopt; }
+      }
+      const auto& head = heads.at(*identity.document);
+      if (head && *head != Json(*identity.revision)) remove_quietly(path);
+    }
+  } catch (const std::exception&) {
+    // Retention never changes a sync result; a failed sweep retries later.
+  }
 }
 Json context_result(Store& store, const Json& state) {
   Json result = {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
@@ -192,18 +293,31 @@ Json synchronize(Store& store, const Json& arguments) {
     const auto eid = text_field(evaluation,"evaluation_id"); identifier(eid);
     const auto directory_path = path / "evaluations"; directory(directory_path);
     write_frozen(directory_path / (eid + ".json"),evaluation);
+    Json published;
     {
       DocumentLock publication(store.root(),document);
       WorkspaceLock lock(path);
       auto current = read_state(path);
       if (!same_view(current,state) || current.value("pending",Json()) != state.at("pending") ||
-          store.read(document).at("revision") != revision) continue;
+          store.read(document).at("revision") != revision) {
+        // This result can never publish: the generation, pending revision or
+        // HEAD has moved on. Only a sync sharing its job could display it.
+        if (!current.contains("display") || current.at("display").at("evaluation_id") != eid) remove_quietly(directory_path / (eid + ".json"));
+        continue;
+      }
+      // A display in the same generation is an older revision of this document,
+      // so its metadata is superseded and its frozen copy is no longer readable.
+      if (current.contains("display") && current.at("display").at("evaluation_id") != eid && current.at("display").at("revision") != revision)
+        remove_quietly(store.root() / "evaluations" / (current.at("display").at("evaluation_id").get<std::string>() + ".json"));
       current["display"] = {{"document_id",document},{"revision",revision},{"evaluation_id",eid},
         {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")}};
       prune_hidden_parts(current);
       current.erase("pending"); current.erase("failure"); save_state(path,current);
-      return ready_status(current,record,arguments);
+      prune_frozen(path,eid);
+      published = ready_status(current,record,arguments);
     }
+    sweep_evaluations(store);
+    return published;
   }
   const auto state = snapshot(store.root(),id);
   return sync_status(state,state.at("document_id").is_null() ? Json(nullptr) : store.read(state.at("document_id").get<std::string>()).at("revision"),
@@ -309,13 +423,17 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
     if (arguments.contains("document_id")) store.read(text_field(arguments,"document_id"));
     const auto path = view_path(store.root(),id,true); WorkspaceLock lock(path);
     auto state = fs::exists(path/"state.json") ? read_state(path) : empty_state(id);
-    if (arguments.contains("document_id") && (state.at("document_id") != arguments.at("document_id") ||
-        (tool == "cad_show" && state.contains("failure")))) {
+    const bool reset = arguments.contains("document_id") && (state.at("document_id") != arguments.at("document_id") ||
+        (tool == "cad_show" && state.contains("failure")));
+    if (reset) {
       const auto hidden=state.at("document_id")==arguments.at("document_id")?state.value("hidden_part_ids",Json::array()):Json::array();
       state = empty_state(id); state["document_id"] = arguments.at("document_id");
       state["hidden_part_ids"]=hidden;
     }
     save_state(path,state);
+    // A new generation has no display, so no frozen copy is readable any more.
+    // Its global metadata stays resolvable until superseded (see sweep_evaluations).
+    if (reset) prune_frozen(path,"");
     return {{"view_id",id},{"document_id",state.at("document_id")},{"resource_uri",viewer_app_uri}};
   }
   if (tool == "cad_context") {
