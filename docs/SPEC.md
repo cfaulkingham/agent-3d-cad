@@ -137,10 +137,14 @@ Schema, graph, or modeling failure leaves HEAD and previous revisions untouched.
 Readers continue to see the old revision while a writer builds. Explicit queries
 and exports name a committed revision, rather than implicitly racing HEAD.
 
-M0 serializes writers across the entire workspace with a nonblocking POSIX
-`flock`; contention returns `workspace_busy`. Files are published by writing a
-temporary file in the destination directory, fsyncing it, renaming it, and
-fsyncing that directory. Revisions at or below HEAD are immutable. A snapshot
+Writers of one document are serialized by a per-document lock taken under a
+shared workspace lock (`flock` on POSIX, `LockFileEx` on Windows). Service
+mutations and artifact publication wait a bounded 5 seconds for a transient
+holder, so finished geometry work is not discarded; then, like other lock
+users that fail fast, contention returns `workspace_busy`. Files are published
+by writing a temporary file in the destination directory, fsyncing it
+(`F_FULLFSYNC` on macOS), renaming it, and fsyncing that directory. Revisions at
+or below HEAD are immutable. A snapshot
 beyond HEAD is an interrupted, uncommitted candidate and can be replaced by a
 subsequent writer. Temporary files may remain after abrupt process termination;
 they are never treated as documents.

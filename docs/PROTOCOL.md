@@ -13,6 +13,12 @@ Implemented contracts for the native preview. Runtime discovery (`tools` or MCP
 ```
 
 Unknown fields are errors. Identifiers match `[A-Za-z][A-Za-z0-9_-]{0,63}`.
+IDs that name workspace files (`document_id`, `request_id`/`job_id`, `view_id`,
+`evaluation_id` and selection `entity_id`) must also not be a Windows device
+name: `CON`, `PRN`, `AUX`, `NUL`, `COM0`–`COM9` or `LPT0`–`LPT9`, in any letter
+case. This is enforced on every platform so workspaces stay portable, and fails
+with `invalid_argument`. Names inside a model (features, parameters, assembly
+parts and mates) never become file names and are not restricted.
 A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
 is validated, including branches outside `output`. The output must be solid.
@@ -181,6 +187,15 @@ integers. See runtime schemas for exact closed field definitions.
 Placement replaces the complete root placement. Detaching a child and choosing
 its placement can be combined in either order. Validate the final batch graph.
 A valid unchanged batch still creates a revision. Restore never rewinds HEAD.
+An error raised while applying one operation carries `details.operation_index`
+(zero-based). A feature added or replaced by a batch must be an object with a
+string `id` when it is applied, otherwise the batch fails with `invalid_model`.
+
+`cad_import` embeds the file's bytes unchanged in a JSON string, so the file must
+be valid UTF-8 (ISO 10303-21 files are normally ASCII and encode other text with
+`\X2\` escapes). Otherwise it fails with `invalid_argument` and
+`details.byte_offset` of the first invalid byte; bytes are never transcoded,
+because the saved SHA-256 identifies the exact content.
 
 `set_bom_item` replaces or adds the complete metadata entry keyed by `item.input`;
 `remove_bom_item` requires an existing entry. Assembly `bom` accepts at most 64
@@ -205,7 +220,9 @@ Mutation `request_id` values are bound to tool + canonical arguments excluding
 the ID. An identical retry returns the original result even after HEAD advances;
 a different payload under that ID returns `request_conflict`. Receipts reside in
 committed immutable revisions, so interruption after publication cannot duplicate
-an edit. IDs are scoped to a document for synchronous mutations and workspace-wide
+an edit. A per-document receipt index makes the lookup constant-time; it is a
+hint that is verified against the named revision and rebuilt from the revisions
+when absent (workspaces from older builds) or untrustworthy. IDs are scoped to a document for synchronous mutations and workspace-wide
 for jobs. Without request_id, reread HEAD after an uncertain outcome.
 
 ### Geometry, views and previews
@@ -427,6 +444,8 @@ workspace/
   .locks/<document_id>.lock
   documents/<document_id>/HEAD.json
   documents/<document_id>/revisions/<revision>.json
+  documents/<document_id>/receipts/<sha256(request_id)>.json  # receipt index hint
+  documents/<document_id>/receipts/coverage.json  # revision through which receipts are indexed
   evaluations/<evaluation_id>.json
   exports/<document>-r<revision>.step
   exports/<document>-<evaluation>.html
@@ -440,9 +459,25 @@ workspace/
 
 HEAD defines visibility; snapshots beyond it are uncommitted candidates. Document
 records preserve schema version, units, kernel version, feature IDs and revision.
-POSIX writes fsync then rename then fsync the parent; Windows uses file flush and
+POSIX writes fsync then rename then fsync the parent (macOS uses `F_FULLFSYNC`,
+falling back to fsync where unsupported); Windows uses file flush and
 write-through replacement. Atomic publication has an uncertain outcome if the OS
 reports a durability error after rename; idempotent receipts let callers reconcile.
+
+A commit durably writes its receipt index entry `{schema_version, request_id,
+revision}` before the revision and HEAD, then replaces `coverage.json` without
+fsync. Replay uses an entry only if that revision is at or below HEAD and records
+the same request; damaged, forged or beyond-HEAD entries trigger a verified scan
+of all revisions, and a missing entry scans only revisions above coverage. The
+first commit by this build on an older document backfills the index. Deleting the
+whole `receipts/` directory is safe; deleting single entries is not supported.
+
+Writers take the workspace `.lock` shared and `.locks/<document_id>.lock`
+exclusive. Mutations (admission and commit) and artifact publication (export,
+BOM and drawing manifests) retry for up to 5 seconds with 2–50 ms backoff,
+holding neither lock between attempts, and then fail with `workspace_busy` and
+`details.waited_ms`. Viewer state, job admission and other short critical
+sections fail fast with `workspace_busy` and are retried by their callers.
 
 Use a trusted local workspace; managed-path symlinks are rejected. This is not a
 hostile-user or network-filesystem sandbox. No HTTP/remote multi-tenant service is
@@ -457,6 +492,9 @@ kernel_mismatch, workspace_busy, queue_full, job_timeout, job_cancelled,
 job_interrupted, worker_failed, memory_limit, export_failed, storage_error, internal_error.
 Modeling errors identify their failed feature. Missing/ambiguous selectors include
 candidate descriptors for repair. A failure never silently changes modeling intent.
+The service maps unexpected library failures once, so MCP, CLI and jobs report the
+same code: malformed JSON values are `invalid_argument`, filesystem failures are
+`storage_error` and anything else is `internal_error`.
 
 ## MCP stdio
 
