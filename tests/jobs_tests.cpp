@@ -486,6 +486,19 @@ int run_tests(int argc, const char* const* argv) {
       require(finished(gc.path,"gcTrigger").at("state")=="succeeded" && finished(gc.path,"countTrigger").at("state")=="succeeded","collection does not disturb new jobs");
     }
     {
+      const auto documents=fs::temp_directory_path() / "CAD documents with spaces" / path_from_utf8("設計");
+      require(workspace_in_documents(documents)==documents / "Agent CAD", "plugin workspace preserves absolute Unicode Documents path");
+      bool refused=false;
+      try { (void)workspace_in_documents("relative/documents"); } catch (const std::runtime_error&) { refused=true; }
+      require(refused,"default workspace rejects a relative Documents location");
+      const auto selected=default_workspace();
+      require(selected.is_absolute() && selected.filename()=="Agent CAD", "native OS default workspace resolves without writing to it");
+      require(plugin_workspace_setting("")==selected && plugin_workspace_setting("${user_config.workspace}")==selected,
+        "Claude optional empty and unexpanded settings resolve to the native default");
+      require(plugin_workspace_setting(documents)==documents, "existing plugin workspace setting preserves absolute Unicode paths");
+      refused=false;
+      try { (void)plugin_workspace_setting("${DOCUMENTS}/Agent CAD"); } catch (const std::runtime_error&) { refused=true; }
+      require(refused,"nested host placeholders are rejected instead of creating relative storage");
       // Linux reports an upgraded running image as "<path> (deleted)".
       const auto upgraded=resolve_proc_self_exe("/opt/cad/bin/agent-3d-cad (deleted)");
       require(upgraded.path==fs::path("/opt/cad/bin/agent-3d-cad") && upgraded.image==fs::path("/proc/self/exe"),

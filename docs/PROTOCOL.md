@@ -7,6 +7,17 @@ published schema is standalone: its `$defs` contains exactly the model
 definitions its `#/$defs/<name>` references reach, transitively, and is omitted
 when it has none. The MCP server builds this catalog once per process.
 
+Plugin startup: `agent-3d-cad serve --default-workspace` uses a persistent
+Documents/Agent CAD folder outside the plugin installation. Adding
+`--workspace PATH` overrides that default for existing projects and must be
+absolute in this mode. Claude uses `--default-workspace --workspace-setting VALUE`:
+an empty value or the exact unset marker `${user_config.workspace}` chooses the
+native default; other values must be absolute paths. No path-template expansion
+is performed. Both startup flags are only accepted for `serve`; existing CLI
+commands still require an explicit workspace. Modeling/tool/document contracts
+are unchanged. See `RELEASE_1_0.md`
+for the two desktop plugin targets and unfinished host acceptance gates.
+
 ## Document and scalar values
 
 ```json

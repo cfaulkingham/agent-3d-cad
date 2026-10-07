@@ -2,125 +2,72 @@
 
 # Agent CAD
 
-Create and refine real CAD models with your AI agent. Keep editable projects,
-select faces and edges, and export STEP, STL, and PDF/SVG/DXF drawings.
-The native CAD engine runs locally. You do not install Python, Node, Rust,
-CMake, or a compiler to use a release bundle.
+Create and refine editable CAD projects in your chat. Inspect faces and edges,
+reopen saved designs, and export STEP, STL and PDF/SVG/DXF drawings.
+The native CAD engine runs on your computer; the interactive viewer runs inside
+an MCP Apps host. No Python, Node, Rust or compiler is needed to use a package.
 
-**Preview:** [0.1.0-preview.1 is available](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1)
-for all five platform targets below. Packages are not publisher-signed or notarized.
-See [validation status](docs/HANDOFF.md) for tested behavior and remaining client/GUI checks.
+**We are building toward 1.0 for ChatGPT desktop and Claude Desktop.**
+The [published 0.1.0-preview.1](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1)
+is a development preview. It has not passed the complete installation and
+in-chat workflow in both hosts. [1.0 acceptance and current status](docs/RELEASE_1_0.md).
 
-## Install
+## Install in Claude Desktop
 
-Choose a download from [Releases](https://github.com/cfaulkingham/agent-3d-cad/releases):
+Claude uses a self-contained `.mcpb` extension containing the CAD engine and
+embedded viewer. You do not need a standalone viewer application.
 
-| Download | Use it for |
-|---|---|
-| `agent-3d-cad-desktop-…` | CLI agents plus the standalone **Tauri** viewer and project library |
-| `agent-3d-cad-…` | MCP hosts with an embedded viewer, or a headless native service |
-| `agent-3d-cad-….mcpb` | Claude Desktop extension with a workspace folder picker |
+1. Download the `.mcpb` for your Mac or Windows PC from
+   [Releases](https://github.com/cfaulkingham/agent-3d-cad/releases).
+2. Open Claude **Settings → Extensions → Advanced settings → Install extension**
+   and select the file.
+3. Enable Agent CAD and start a new chat.
 
-Build targets are macOS 15+ (Apple Silicon and Intel), Linux with glibc 2.39+
-(x64 and arm64; Ubuntu 24.04 baseline), and Windows x64. The standalone Tauri
-viewer uses the OS webview: macOS includes it; Windows needs Microsoft WebView2;
-Linux needs WebKitGTK 4.1 and GTK 3. Platform validation is tracked separately
-from the build targets. Signing/notarization are not yet configured.
+The published preview still asks you to select a project folder and requires the
+matching CPU build. The next extension build defaults to **Documents/Agent CAD**
+with an optional folder setting for existing projects. Host installation,
+publisher signing and automatic architecture selection remain 1.0 gates.
+[Claude's extension guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
 
-Download `install.sh` or `install.ps1` from the **same release**, then run:
+## Install in ChatGPT desktop
 
-```sh
-# macOS / Linux — installs the standalone viewer and native service
-bash install.sh 0.1.0-preview.1
-# Add --core for the smaller service-only bundle.
-```
+The local plugin package contains the native engine, embedded viewer and setup
+workflow. Its source and packaging are implemented; an end-user installer and
+actual host acceptance are still in development. It is **not yet listed in the
+public plugin directory**. We will keep CAD local.
 
-```powershell
-# Windows PowerShell
-.\install.ps1 -Version 0.1.0-preview.1
-# Add -Core for the service-only bundle.
-```
-
-The installer detects your architecture, verifies the archive against the release's
-`SHA256SUMS`, and installs into a new version directory in your user account.
-It prints the executable path and setup commands. Keep your model workspace
-outside the application directory so upgrades preserve your projects.
-You can also extract an archive manually; keep `bin`, `lib`, `share`, and
-`desktop` (when present) together.
-
-## Connect your agent
-
-Use the installed executable path wherever `agent-3d-cad` appears below.
-Choose one persistent workspace, for example `~/Documents/Agent CAD`, and use
-its **absolute path** in the client settings and standalone viewer.
-
-| Client | Setup |
-|---|---|
-| ChatGPT desktop / Codex | Add a local STDIO MCP server, or use `codex mcp add` |
-| Claude Desktop | Install the matching `.mcpb` from Settings → Extensions, then select your workspace |
-| OpenCode desktop / CLI | Add a local server in `opencode.json` |
-| Other CLI agents, including Grok Build and Muse | Use their local stdio MCP setup when supported, or call the executable directly |
-| ChatGPT web | Separate remote/tunnel connection; a local executable path is insufficient |
-
-Generate the right settings without hand-escaping paths:
-
-```sh
-agent-3d-cad config --client codex --workspace "/absolute/path/to/CAD workspace"
-agent-3d-cad config --client claude --workspace "/absolute/path/to/CAD workspace"
-agent-3d-cad config --client opencode --workspace "/absolute/path/to/CAD workspace"
-```
-
-These commands print settings to merge into your existing configuration.
-[Client setup](docs/GETTING_STARTED.md) has exact locations, registration commands,
-ChatGPT web guidance, and the distinction between documented configuration and
-a client that has been tested with this service.
+Local marketplace testing is documented in [the 1.0 delivery plan](docs/RELEASE_1_0.md).
+OpenAI currently requires a remote HTTPS endpoint for normal public MCP plugin
+submission, or an approved local MCP route. We must resolve that distribution
+requirement before promising a public Install button.
+[OpenAI plugin packaging](https://developers.openai.com/plugins/build/plugins).
 
 ## Create your first project
 
-Ask your connected agent:
+Once the plugin is connected, ask:
 
 > Create an editable 80 × 50 × 6 mm mounting plate with four mounting holes.
-> Save it as mounting_plate and show it in the viewer. Then make it 8 mm thick
-> and export a STEP file.
+> Save it as mounting_plate and show it. Then make it 8 mm thick and export STEP.
 
-In an MCP Apps host, the agent opens the embedded viewer with `cad_open`.
-For a CLI agent, open the standalone app once:
+The agent opens the viewer in chat. Select a face or edge, describe an edit in
+**Quick Edit**, and send the reference to your chat. Saved changes refresh the
+same view. Choose a saved model from the library to return to an older project.
 
-```sh
-agent-3d-cad viewer --workspace "/absolute/path/to/CAD workspace"
-```
+Use **Export** for STEP, STL or 2D drawings. Default drawings use an A4 sheet
+with standard views; ask the agent to add dimensions or customize the drawing.
+The current embedded viewer reports files saved in the workspace. Convenient
+file retrieval through both hosts is still required for 1.0.
 
-This opens an application window, with no browser tab or local web server.
-Choose a saved project, search the library, or use **Open workspace** and
-**Recent workspaces** to return to earlier work. To open a particular model:
+Your saved model is the editable source. Exports are separate outputs; exporting
+does not replace the project. Failed edits preserve the last committed revision.
+Keep the project folder outside the extension installation so updates preserve it.
 
-```sh
-agent-3d-cad viewer --workspace "/absolute/path/to/CAD workspace" --document mounting_plate
-```
+## Other clients and development previews
 
-Keep the window open while the agent works. Saved revisions appear automatically.
-Select a face or edge and copy an edit request into your agent; the agent can
-also read `cad_context` for the exact selection and revision. Choose **Export**
-for STEP, STL, or 2D drawings. The standalone app uses native save dialogs;
-the embedded viewer reports files saved in the workspace. Default drawings use
-an A4 sheet with standard views; dimensions and custom layouts are requested
-through the agent.
-
-Saved projects are editable model documents. STEP/STL exports are independent
-outputs; exporting does not replace the source project. Invalid edits preserve
-the last committed revision. Independent chats should choose distinct `--view`
-IDs when they need separate selection context.
-
-## Upgrade or remove
-
-Install the next version alongside the old one, close old viewer/server processes,
-and update your client's executable path. Keep the same workspace. The current
-preview may reject older geometry that does not meet newer validation rules;
-it preserves the stored model and reports the feature that needs attention.
-
-To uninstall, remove the MCP entry (or Claude extension) and application directory.
-Your workspaces remain until you separately delete them. Tauri remembers recent
-workspace paths in its per-user application configuration directory.
+CLI agents, OpenCode and the standalone Tauri viewer are deferred from the 1.0
+install path. Existing preview archives and their manual setup remain documented
+in [advanced client setup](docs/GETTING_STARTED.md) and
+[distribution](docs/DISTRIBUTION.md).
 
 ## More
 

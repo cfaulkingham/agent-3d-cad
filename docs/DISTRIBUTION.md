@@ -1,5 +1,10 @@
 # Native preview distributions
 
+The 1.0 delivery focus is now ChatGPT desktop and Claude Desktop plugins. See
+`RELEASE_1_0.md`. Main/PR CI builds native plugins without Rust or Tauri; the
+standalone archive pipeline below remains only for legacy `v0.*` preview tags.
+It does not define the stable 1.0 publication or installation experience.
+
 The install tree is a relocatable native application: `bin/agent-3d-cad`
 (`.exe` on Windows), its native runtime libraries, and
 `share/agent-3d-cad/{occt,examples,notices,provenance.json}`. The core bundle includes the embedded MCP App and offline HTML viewer. The
@@ -116,10 +121,11 @@ its lockfile and `tauri.conf.json` aligned; the desktop build rejects drift.
 Use tags such as `v0.1.0-preview.1`, matching `VERSION` exactly.
 
 Every push runs the five native platform lanes. Each lane tests the service,
-installer/client configuration, relocated bundle and Tauri stdio/export adapter,
-then builds a core archive and desktop archive. macOS arm64/x64 and Windows x64
-also produce Claude `.mcpb` packages. A `v*` tag creates a **draft prerelease** only
-after all lanes pass. The release job rejects a missing or extra asset before
+installer/client configuration and relocated bundle, then builds a core archive
+and local Agent Plugins package. macOS arm64/x64 and Windows x64 also produce
+Claude `.mcpb` packages. Main/PR builds do not build the standalone Tauri app.
+A legacy `v0.*` preview tag additionally tests/packages the Tauri adapter and
+creates a **draft prerelease** only after all lanes pass. That release job rejects a missing or extra asset before
 creating `SHA256SUMS` for the ten archives, three extensions and two installers.
 Review the draft, platform evidence and signing before publishing. Stable release
 publication is not automated by the preview workflow. No tag or release is

@@ -47,7 +47,10 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf libfontconfig1-dev libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+          sudo apt-get install -y patchelf libfontconfig1-dev
+          if [[ "$GITHUB_REF" == refs/tags/v0.* ]]; then
+            sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev
+          fi
           mkdir -p .deps/runtime-notices
           gcc_runtime_major=$(dpkg-query -W -f '${Version}' libstdc++6 | cut -d. -f1)
           cp "/usr/share/doc/gcc-${gcc_runtime_major}-base/copyright" .deps/runtime-notices/GCC-runtime-copyright
@@ -147,7 +150,31 @@ jobs:
         run: |
           cpack --config build/CPackConfig.cmake -C Release -B build/packages
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - name: Build and test the Tauri desktop shell
+      - name: Package and test native ChatGPT plugin (no standalone app)
+        run: |
+          python packaging/make-plugin.py bundle build/plugins
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $plugin = Get-ChildItem build/plugins -Directory | Select-Object -First 1
+          python tests/plugin_smoke.py $plugin.FullName
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not $IsLinux) {
+            $version = (Get-Content VERSION -Raw).Trim()
+            $system = if ($IsMacOS) { 'Darwin' } else { 'Windows' }
+            python packaging/make-mcpb.py bundle "build/plugins/agent-cad-claude-$version-$system-${{ matrix.architecture }}.mcpb"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-cad-plugins-${{ matrix.runner }}-${{ matrix.architecture }}
+          path: |
+            build/plugins/*.zip
+            build/plugins/*.mcpb
+          if-no-files-found: error
+          retention-days: 14
+      # Retain the old preview asset contract. Plugin development and 1.0 do
+      # not need Rust, a standalone app or GUI build dependencies.
+      - name: Build legacy standalone viewer for 0.x preview tags
+        if: startsWith(github.ref, 'refs/tags/v0.')
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
@@ -188,7 +215,8 @@ jobs:
             build-deps/**/CMakeConfigureLog.yaml
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 1.0 publication needs actual two-host acceptance, not just a green build.
+    if: startsWith(github.ref, 'refs/tags/v0.')
     needs: native
     runs-on: ubuntu-24.04
     permissions:

@@ -21,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     entry = {'path': 'bin/agent-3d-cad', 'sha256': hashlib.sha256(binary.read_bytes()).hexdigest()}
 
     def save(files):
-        manifest.write_text(json.dumps({'project_version': version, 'system': 'Darwin', 'files': files}))
+        manifest.write_text(json.dumps({'project_version': version, 'system': 'Darwin', 'architecture': 'arm64', 'files': files}))
 
     def run(helper, output):
         args = [sys.executable, str(repo / 'packaging' / helper), str(bundle), str(output)]
@@ -32,14 +32,14 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     for case, files in [('empty', []), ('duplicate', [entry, entry]),
                         ('missing', [entry, {'path': 'missing', 'sha256': '0' * 64}])]:
         save(files)
-        for helper in ['make-mcpb.py', 'package-desktop.py']:
+        for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
             output = root / (case + helper)
             result = run(helper, output)
             assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
             assert not output.exists()
     save([entry])
     (bundle / 'unlisted').write_text('unlisted bytes')
-    for helper in ['make-mcpb.py', 'package-desktop.py']:
+    for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
         output = root / ('extra-' + helper)
         result = run(helper, output)
         assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
@@ -51,5 +51,30 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     with zipfile.ZipFile(output) as archive:
         assert archive.read('bin/agent-3d-cad') == binary.read_bytes()
         assert json.loads(archive.read('share/agent-3d-cad/provenance.json'))['files'] == [entry]
+        extension = json.loads(archive.read('manifest.json'))
+        assert extension['user_config']['workspace']['required'] is False
+        assert extension['user_config']['workspace']['default'] == ''
+        args = extension['server']['mcp_config']['args']
+        assert args == ['serve', '--default-workspace', '--workspace-setting', '${user_config.workspace}']
+        # Match Claude's single substitution pass: the default must not leave
+        # a nested host placeholder in the executable's workspace argument.
+        substituted = [arg.replace('${user_config.workspace}', extension['user_config']['workspace']['default']) for arg in args]
+        assert substituted == ['serve', '--default-workspace', '--workspace-setting', '']
+    output = root / 'plugins'
+    result = run('make-plugin.py', output)
+    assert result.returncode == 0, result.stderr
+    for plugin in output.iterdir():
+        if plugin.is_dir():
+            settings = json.loads((plugin / 'mcp.json').read_text())['mcpServers']['agent-3d-cad']
+            assert settings == {'type': 'stdio', 'command': './bin/agent-3d-cad', 'args': ['serve', '--default-workspace']}
+            assert (plugin / 'skills/setup/SKILL.md').is_file()
+            assert (plugin / 'skills/native-cad/SKILL.md').is_file()
+            catalog = json.loads((plugin / '.agents/plugins/marketplace.json').read_text())
+            assert catalog['plugins'][0]['source'] == {'source': 'local', 'path': '.'}
+            assert not (plugin / 'desktop').exists()
+            generated = json.loads((plugin / 'share/agent-3d-cad/provenance.json').read_text())
+            inventory = {item['path']: item['sha256'] for item in generated['files']}
+            files = {file.relative_to(plugin).as_posix(): hashlib.sha256(file.read_bytes()).hexdigest() for file in plugin.rglob('*') if file.is_file() and file.name != 'provenance.json'}
+            assert inventory == files
 
-print('Packaging provenance: empty, duplicate, missing and unlisted inventories rejected by both packagers; complete MCPB accepted.')
+print('All three packagers reject invalid inventories; complete Claude extension and native-only plugin accepted.')

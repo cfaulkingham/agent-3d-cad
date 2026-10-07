@@ -38,6 +38,11 @@ runtime prerequisites.
 
 ## 1. Product outcome
 
+Release focus (2026-10-07): 1.0 targets ChatGPT desktop and Claude Desktop plugins
+with the embedded viewer and local CAD engine. Standalone Tauri and CLI onboarding
+are deferred. Installation and actual two-host acceptance gates are in
+`RELEASE_1_0.md`; prior preview implementation does not establish 1.0 readiness.
+
 An agent can create a saved design, reopen it in another session, make a targeted
 edit, inspect the resulting geometry, and export a manufacturing file. The user
 installs a native application bundle, not a language environment or compiler.

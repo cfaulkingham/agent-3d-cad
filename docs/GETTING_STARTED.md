@@ -1,5 +1,10 @@
 # Connect Agent CAD
 
+The 1.0 focus is ChatGPT desktop and Claude Desktop plugins with local CAD and
+an embedded viewer. See [the delivery plan](RELEASE_1_0.md) for current package
+status and unfinished host acceptance. The manual and standalone setup below
+documents the older development previews and other clients.
+
 Install a release bundle first (see the [README](../README.md)). Replace the
 executable and workspace paths below with absolute paths. Use the same workspace
 in every agent and viewer that should share your projects.
@@ -40,6 +45,11 @@ by Claude's developer settings, then restart Claude. Typical locations are
 The extension contains the CAD service and embedded MCP App. For a separate
 desktop window as well, install the desktop archive and point it at the same
 workspace. User workspaces survive extension replacement/removal.
+
+The next extension build makes the folder setting optional, defaulting to
+Documents/Agent CAD. That change is in source/CI packages; it is not in the
+immutable `0.1.0-preview.1` download. A separate desktop window is outside the
+1.0 plugin install path.
 
 ## OpenCode desktop and CLI
 

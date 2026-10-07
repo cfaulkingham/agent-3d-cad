@@ -7,6 +7,80 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## 1.0 narrowed to local desktop plugins — 2026-10-07
+
+The owner chose ChatGPT desktop and Claude Desktop for 1.0, with CAD staying
+local and the viewer embedded in chat. Tauri, CLI onboarding and other hosts are
+deferred. The published preview remains historical development evidence; no new
+version, tag or public release was created. `docs/RELEASE_1_0.md` defines the
+actual install/create/select/edit/reopen/export/upgrade gates. README now leads
+with installation and use; developer commands remain in `docs/DEVELOPMENT.md`.
+
+Implemented native `serve --default-workspace`, selecting persistent
+Documents/Agent CAD outside the plugin cache. Windows uses the OS Documents
+known folder (including redirected folders), macOS the user's Documents folder.
+Explicit existing folders remain supported; plugin-mode overrides must be
+absolute. CLI commands outside plugin startup retain their explicit workspace
+contract. Folder selection is tested without writing to the real user folder.
+
+Claude's optional setting exposed two actual host behaviors in **Claude
+2.26454.2 on macOS arm64**: its nested `${DOCUMENTS}` default reached the process
+literally, and clearing that field left `${user_config.workspace}` literally.
+The first attempt failed opening relative storage on a read-only filesystem.
+The extension now has an empty default and uses dedicated
+`--default-workspace --workspace-setting VALUE` startup. Only an empty value or
+the exact unset setting marker selects the native default. Other relative paths,
+including nested host placeholders, fail without creating storage. Repeated
+workspace arguments are rejected even if the first value is empty.
+
+The host ignores reinstalling an identical extension version. A local-only test
+wrapper used manifest version `0.1.0-preview.1.1` to exercise its Update action;
+this did not change VERSION, native binary version or any release/tag. The owner
+approved the local extension access prompt. The installed executable matches the
+tested native bundle by SHA-256. Actual initialize, tools/list and resources/list
+succeeded. Claude created `plugin_test_plate`, rendered the embedded viewer at
+revision 1, and read a selected 80 mm edge with its exact document/revision/
+evaluation reference through `cad_context`. The viewer created a **3,940-byte
+PDF** with a valid `%PDF-` header in the default workspace. This is actual host
+evidence, not just a protocol simulation. Select–edit–refresh, restart/library,
+complete exports and upgrade/uninstall preservation remain unverified in Claude.
+UI testing stopped when no Claude window was available; do not infer completion
+from the agent's conversational claim. Doubled pasted text was observed but its
+cause has not been established; do not claim a clipboard implementation bug.
+
+`packaging/make-plugin.py` creates native-only Agent Plugins packages with
+portable plugin/MCP metadata, an OpenAI onboarding skill, the modeling skill,
+icon and a local marketplace catalog. Full source/dependency notices and exact
+file hashes are preserved. The package rejects incomplete inventories and
+standalone desktop inputs. Main/PR CI now packages/tests these plugins on all
+five lanes and produces Claude MCPBs on macOS/Windows without Rust or GUI build
+dependencies. Legacy `v0.*` tags retain the old Tauri/draft-preview contract;
+`v1.*` does not trigger automatic publication. ChatGPT's public directory local
+MCP approval is a separate unfinished distribution gate. Its actual desktop host
+journey has not been verified; computer use could not access the installed
+ChatGPT app in this environment.
+
+Local validation against the final startup change: native build succeeded;
+CTest **6/6 passed** (`embedded_assets`, `notices`, `cli_smoke`, `jobs`,
+`app_protocol`, `live_mcp_flow`, 21.98 s). All three packagers reject empty,
+duplicate, missing and unlisted inventories; complete extension/plugin fixtures
+pass. The packaged plugin passed full inventory/hash checks, empty-PATH native
+MCP/viewer discovery, create/edit/reopen/history, STEP/STL/PDF/SVG/four DXF
+exports with unchanged source. Portable metadata passes the published Agent
+Plugins 1.0 plugin and MCP schemas. The setup skill passes Skill Creator's
+validator. Tool schema conformance passed **295 checks** across 19 tools; official
+MCP SDK 2.3.0 interoperability passed **932 checks**; version and all three client
+configuration round trips passed without creating a workspace.
+Evidence and packages: `build-desktop/plugin-check-host/`;
+native test log: `build-desktop/plugin-check/ctest-host-fix.log`.
+
+Next: finish both actual host journeys, resolve in-host file retrieval (current
+exports report local paths), establish easy architecture selection, and implement
+publisher signing/notarization and the approved install/update distribution
+routes. Keep the native engine local; do not introduce a hosted geometry service
+or tunnel requirement to bypass the product decision. Do not tag 1.0 before its
+acceptance gates pass.
+
 ## First versioned preview — 2026-10-07
 
 Commit `2065a692851604d29b72a4c2fc2ddd20960b1070` passed all five native jobs in

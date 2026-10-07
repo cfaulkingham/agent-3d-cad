@@ -1,0 +1,31 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-cad",
+  "version": "0.1.0-preview.1",
+  "description": "Create, view, refine and export editable CAD projects in your chat.",
+  "author": { "name": "Colin Faulkingham" },
+  "homepage": "https://github.com/cfaulkingham/agent-3d-cad",
+  "repository": "https://github.com/cfaulkingham/agent-3d-cad",
+  "license": "MIT",
+  "keywords": ["cad", "3d", "engineering", "3d-printing"],
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md",
+      "interface": {
+        "displayName": "Agent CAD",
+        "shortDescription": "Design and refine real CAD models in chat",
+        "longDescription": "An editable project library, interactive face and edge selection, and STEP, STL and drawing exports. The native CAD engine runs locally; the viewer stays inside your chat.",
+        "developerName": "Colin Faulkingham",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"],
+        "defaultPrompt": [
+          "Open my saved CAD projects.",
+          "Create an 80 × 50 × 6 mm mounting plate and show it.",
+          "Help me edit the selected edge and export a STEP file."
+        ],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      }
+    }
+  }
+}

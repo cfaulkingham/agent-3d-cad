@@ -187,6 +187,16 @@ composer delivery is host-dependent; the standalone app uses Copy request and
 shared context. A historical-revision browser is not yet implemented; the
 library reopens saved projects at HEAD and existing tools can read/restore history.
 
+## 1.0 gate — ChatGPT desktop and Claude Desktop plugins (2026-10-07)
+
+The user narrowed the first stable release to these two hosts, with CAD remaining
+local and the viewer embedded in chat. See `RELEASE_1_0.md` for the complete
+install/create/select/edit/reopen/export/upgrade journey. Native plugin packaging,
+default persistent workspace and an onboarding skill are implemented foundations;
+actual two-host installation/rendering, accessible exports, architecture selection,
+publisher signing and public distribution are unfinished acceptance gates.
+Tauri and other CLI hosts are deferred. Passing CI does not authorize a 1.0 tag.
+
 ## Later, only when driven by actual workflows
 
 Geometry/projection caching is implemented: bounded, checksummed exact feature

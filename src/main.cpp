@@ -24,6 +24,8 @@ int run(int argc, const char* const* argv) {
     if (argc == 2 && std::string(argv[1]) == "tools") { std::cout << tool_definitions().dump(2) << '\n'; return 0; }
     if (argc == 2 && std::string(argv[1]) == "--help") {
       std::cout << "agent-3d-cad serve --workspace PATH\n"
+        "agent-3d-cad serve --default-workspace [--workspace PATH]\n"
+        "agent-3d-cad serve --default-workspace --workspace-setting VALUE\n"
         "agent-3d-cad call TOOL --workspace PATH --input FILE|-\n"
         "agent-3d-cad viewer --workspace PATH [--document ID] [--view ID]\n"
         "agent-3d-cad config --client claude|opencode|codex --workspace PATH\n"
@@ -33,19 +35,33 @@ int run(int argc, const char* const* argv) {
     if (argc < 2) throw Error("usage", "Use agent-3d-cad --help for commands");
     const std::string command = argv[1];
     std::string tool, workspace, input, client, document, view;
+    bool use_default_workspace = false, workspace_provided = false, workspace_setting = false;
     int index = 2;
     if (command == "call" && index < argc) tool = argv[index++];
     if (command != "call" && command != "serve" && command != "viewer" && command != "config") throw Error("usage", "Unknown command: " + command);
     while (index < argc) {
       const std::string flag = argv[index++];
+      if (flag == "--default-workspace" && command == "serve" && !use_default_workspace) {
+        use_default_workspace = true; continue;
+      }
       if (index == argc) throw Error("usage", "Missing value for: " + flag);
-      if (flag == "--workspace" && workspace.empty()) workspace = argv[index++];
+      if (flag == "--workspace" && !workspace_provided) { workspace = argv[index++]; workspace_provided = true; }
+      else if (flag == "--workspace-setting" && command == "serve" && !workspace_provided) {
+        workspace = argv[index++]; workspace_provided = true; workspace_setting = true;
+      }
       else if (flag == "--input" && input.empty() && command == "call") input = argv[index++];
       else if (flag == "--client" && client.empty() && command == "config") client = argv[index++];
       else if (flag == "--document" && document.empty() && command == "viewer") document = argv[index++];
       else if (flag == "--view" && view.empty() && command == "viewer") view = argv[index++];
       else throw Error("usage", "Unknown or repeated flag: " + flag);
     }
+    if (workspace_setting) {
+      if (!use_default_workspace) throw Error("usage", "--workspace-setting requires --default-workspace");
+      workspace = path_to_utf8(plugin_workspace_setting(path_from_utf8(workspace)));
+    }
+    if (workspace.empty() && use_default_workspace) workspace = path_to_utf8(default_workspace());
+    if (use_default_workspace && !path_from_utf8(workspace).is_absolute())
+      throw Error("invalid_argument", "Plugin project folder must be an absolute path");
     if (workspace.empty() || (command == "call" && (tool.empty() || input.empty())))
       throw Error("usage", "An explicit --workspace and, for call, --input are required");
     if (command == "config") { print_client_config(client, path_from_utf8(workspace)); return 0; }

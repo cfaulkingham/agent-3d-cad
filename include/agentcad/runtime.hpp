@@ -6,6 +6,10 @@ namespace agentcad {
 // Locate resources relative to the installed executable. Existing explicit
 // resource settings are preserved for developer SDKs.
 void configure_runtime();
+// Plugin startup uses a persistent project folder outside the plugin cache.
+std::filesystem::path default_workspace();
+std::filesystem::path plugin_workspace_setting(const std::filesystem::path& setting);
+std::filesystem::path workspace_in_documents(const std::filesystem::path& documents);
 
 // The running executable. `path` locates bundled resources; `image` is what an
 // internal worker process must execute so it runs the same binary, whatever its

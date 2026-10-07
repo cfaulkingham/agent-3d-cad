@@ -25,11 +25,14 @@ manifest = {
     'author': {'name': 'Colin Faulkingham'}, 'license': 'MIT', 'tools_generated': True,
     'homepage': 'https://github.com/cfaulkingham/agent-3d-cad',
     'server': {'type': 'binary', 'entry_point': binary, 'mcp_config': {
-        'command': '${__dirname}/' + binary, 'args': ['serve', '--workspace', '${user_config.workspace}']}},
+        'command': '${__dirname}/' + binary, 'args': ['serve', '--default-workspace', '--workspace-setting', '${user_config.workspace}']}},
     'compatibility': {'platforms': ['darwin' if system == 'Darwin' else 'win32']},
-    'user_config': {'workspace': {'type': 'directory', 'title': 'CAD workspace',
-        'description': 'Your saved projects and exports. Choose a folder outside the extension installation.',
-        'required': True, 'default': '${DOCUMENTS}/Agent CAD'}}
+    'user_config': {'workspace': {'type': 'directory', 'title': 'Project folder (optional)',
+        'description': 'Ready to use in Documents/Agent CAD. Change this only to reopen an existing CAD workspace. Projects remain when the extension is updated or removed.',
+        # Claude 2.26454.2 substitutes this value into args but does not expand
+        # a nested ${DOCUMENTS} default. An empty value lets the native engine
+        # resolve the OS folder without host-specific placeholder expansion.
+        'required': False, 'default': ''}}
 }
 output.parent.mkdir(parents=True, exist_ok=True)
 with zipfile.ZipFile(output, 'x', compression=zipfile.ZIP_DEFLATED) as archive:
