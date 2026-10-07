@@ -376,11 +376,30 @@ regeneration and export limits are specified in [DRAWINGS.md](DRAWINGS.md).
 At most eight active jobs and four geometry workers are admitted
 per workspace. Excess admission returns `queue_full`. Jobs persist after CLI/MCP
 exit and can be inspected from a new process. List returns at most 1,000 records.
+Submit validates `arguments` with the same closed field sets, identifiers and
+revision numbers as a direct call, so malformed input fails immediately with
+`invalid_argument` and records no job. `get`/`cancel` of an unknown job ID return
+`not_found`.
+
+Retention: terminal jobs (`succeeded`, `failed`, `cancelled`, `interrupted`,
+or damaged records) are collected during submit admission once they were last
+updated more than **7 days** ago, or when they fall beyond the newest **256**
+terminal records. Queued, running and cancelling jobs, records whose coordinator
+still holds its ownership lock, and the request ID being submitted are never
+collected. A collected ID returns `not_found`; resubmitting a mutation with the
+same request_id still replays its committed receipt rather than editing twice.
+
+A damaged, unreadable or symlinked job record never makes `list` or `submit`
+fail. It reads as a `failed` job with error `job_record_corrupt`, and counts
+toward admission only while a live coordinator still owns it. Use a new
+request_id instead of a damaged one.
 
 Budgets: timeout 1–300,000 ms; memory 128–4,096 MiB. Defaults 30 seconds/2,048 MiB.
 Queue time counts toward the asynchronous deadline. Synchronous geometry uses
 default budgets. Workers run via native process spawning, without model-supplied
-code. Linux enforces address-space limits; Windows uses Job Objects; macOS checks
+code. Coordinators and workers execute the running service image itself, whatever
+its file name (on Linux, `/proc/self/exe` after an in-place upgrade). A detached
+coordinator holds no caller pipe; Windows children inherit only their NUL streams. Linux enforces address-space limits; Windows uses Job Objects; macOS checks
 physical footprint every 10 ms (there can be sampling overshoot). Worker-local
 watchdogs also bound work if a coordinator exits. Geometry is serial in each
 worker; no OCCT object is shared between workers.
@@ -414,8 +433,12 @@ writer lock, so concurrent builds cannot silently overwrite one another.
 Duplicate submits with identical tool/arguments/budget return the same job.
 A changed payload/budget with the same ID returns `request_conflict`. Recovery
 checks abandoned nonterminal jobs after five seconds, uses a coordinator ownership
-lock rather than a bare PID, and restores a successful committed mutation from its
-receipt. A job interrupted before commit can be resubmitted with the same ID.
+lock rather than a bare PID, and reports success when the job's `result.json` is
+present and belongs to the job, or restores a successful committed mutation from
+its receipt. A job interrupted before commit can be resubmitted with the same ID.
+The coordinator publishes `result.json` before the state that reports success.
+If any later step fails, it logs the failure to stderr and persists a `failed`
+state with the error, unless a durable result already exists for recovery.
 Failed/cancelled jobs remain terminal; use a new request_id for a deliberate retry.
 This application job API does not advertise the MCP Tasks extension.
 
@@ -431,7 +454,12 @@ workspace/
   exports/<document>-r<revision>.step
   exports/<document>-<evaluation>.html
   exports/<document>-<evaluation>.view.json
-  jobs/<request_id>/state.json
+  jobs/.lock                        # job admission
+  jobs/<request_id>/state.json      # small job record: state, error, result digest
+  jobs/<request_id>/request.json    # immutable submitted tool arguments
+  jobs/<request_id>/result.json     # result (≤64 MiB), published before success
+  jobs/<request_id>/.lock           # coordinator ownership
+  jobs/<request_id>/cancel          # cancellation request
   views/<view_id>/state.json        # workspace-scoped association and context
   views/<view_id>/evaluations/      # frozen mesh JSON for live transfer
   .workers/                         # bounded worker slots and temporary files
@@ -440,6 +468,13 @@ workspace/
 
 HEAD defines visibility; snapshots beyond it are uncommitted candidates. Document
 records preserve schema version, units, kernel version, feature IDs and revision.
+Job `state.json` (`schema_version: 2`) stays small: identity, tool, budget, state,
+progress, timestamps, structured error and the SHA-256/size of `result.json`.
+Admission and list read only these records, never results. `request.json` and
+`result.json` repeat the job ID and request fingerprint; a result is trusted only
+when it matches them and the recorded digest. Job directories written before this
+layout (arguments and result embedded in `state.json`) remain readable, and a
+terminal one is rewritten in the current layout the first time it is read.
 POSIX writes fsync then rename then fsync the parent; Windows uses file flush and
 write-through replacement. Atomic publication has an uncertain outcome if the OS
 reports a durability error after rename; idempotent receipts let callers reconcile.
@@ -454,7 +489,8 @@ unsupported_schema, unsupported_feature, invalid_shape, kernel_failure,
 selection_missing, selection_ambiguous, selection_count_mismatch, stale_selection,
 draft_selection, already_exists, not_found, revision_conflict, request_conflict,
 kernel_mismatch, workspace_busy, queue_full, job_timeout, job_cancelled,
-job_interrupted, worker_failed, memory_limit, export_failed, storage_error, internal_error.
+job_interrupted, job_record_corrupt, worker_failed, memory_limit, export_failed,
+storage_error, internal_error.
 Modeling errors identify their failed feature. Missing/ambiguous selectors include
 candidate descriptors for repair. A failure never silently changes modeling intent.
 
