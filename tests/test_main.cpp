@@ -1,4 +1,5 @@
 #include "agentcad/kernel.hpp"
+#include "agentcad/jobs.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/mcp.hpp"
 #include <STEPControl_Reader.hxx>
@@ -254,6 +255,7 @@ void protocol_tests() {
 int run_tests(int argc,const char* const* argv) {
   configure_kernel_logging();
   try {
+    set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));
 #ifdef _WIN32
     if (argc == 3 && std::string(argv[1]) == "--lock-child") {
       const fs::path workspace = path_from_utf8(argv[2]);

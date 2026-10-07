@@ -5,6 +5,7 @@
 #include "agentcad/drawing.hpp"
 #include "agentcad/cache.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/runtime.hpp"
 #include <array>
 #include <chrono>
 #include <cstdlib>
@@ -31,7 +32,6 @@
 #include <sys/prctl.h>
 #endif
 #ifdef __APPLE__
-#include <mach-o/dyld.h>
 #include <mach/mach.h>
 #endif
 extern char** environ;
@@ -90,28 +90,12 @@ Json budget(const Json& value) {
   return result;
 }
 fs::path executable_path() {
+  // Test programs name the service executable explicitly. Otherwise workers and
+  // coordinators run the very image of this process, whatever its file name.
   if (!worker_executable.empty()) return worker_executable;
-#ifdef _WIN32
-  std::vector<wchar_t> path(32768);
-  const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
-  if (length == 0 || length == path.size()) throw Error("worker_failed", "Cannot find native worker executable");
-  fs::path result(std::wstring(path.data(), length));
-#elif defined(__APPLE__)
-  std::uint32_t size = 0; _NSGetExecutablePath(nullptr, &size);
-  std::vector<char> path(size);
-  if (_NSGetExecutablePath(path.data(), &size) != 0) throw Error("worker_failed", "Cannot find native worker executable");
-  fs::path result = fs::canonical(path.data());
-#else
-  fs::path result = fs::read_symlink("/proc/self/exe");
-#endif
-  // Unit-test executables use the production worker beside themselves.
-  if (result.stem() != "agent-3d-cad") result = result.parent_path() /
-#ifdef _WIN32
-    "agent-3d-cad.exe";
-#else
-    "agent-3d-cad";
-#endif
-  return result;
+  const auto image = current_executable().image;
+  if (image.empty()) throw Error("worker_failed", "Cannot find native worker executable");
+  return image;
 }
 Json read_result(const fs::path& path) {
   if (!fs::is_regular_file(path) || fs::is_symlink(path) || fs::file_size(path) > max_result_bytes)

@@ -1,4 +1,5 @@
 #include "agentcad/app.hpp"
+#include "agentcad/jobs.hpp"
 #include "agentcad/mcp.hpp"
 #include <chrono>
 #include <iostream>
@@ -112,6 +113,7 @@ void session_contract(Service& service, bool apps) {
 }
 int main() {
   try {
+    set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));
     Temporary temporary;
     Service service(temporary.path);
     source_integrity();
