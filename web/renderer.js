@@ -164,8 +164,8 @@
   const defaultNow=()=>globalThis.performance?.now?.()??Date.now();
   const defaultReducedMotion=()=>!!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
   const rgb=(r,g,b)=>[r/255,g/255,b/255];
-  const defaultTheme=()=>({background:{top:rgb(241,244,248),bottom:rgb(217,223,231)},line:rgb(107,118,131),select:rgb(26,115,232),hover:rgb(110,173,255)});
-  const darkTheme=()=>({background:{top:rgb(46,53,61),bottom:rgb(25,30,36)},line:rgb(140,152,166),select:rgb(90,162,255),hover:rgb(140,190,255)});
+  const defaultTheme=()=>({background:{top:rgb(241,244,248),bottom:rgb(217,223,231)},line:rgb(58,68,80),select:rgb(26,115,232),hover:rgb(110,173,255)});
+  const darkTheme=()=>({background:{top:rgb(46,53,61),bottom:rgb(25,30,36)},line:rgb(34,41,50),select:rgb(90,162,255),hover:rgb(140,190,255)});
   function themeValue(value) {
     const unit=v=>Array.isArray(v)&&v.length===3&&v.every(n=>Number.isFinite(n)&&n>=0&&n<=1);
     if(!value||!value.background||![value.background.top,value.background.bottom,value.line,value.select,value.hover].every(unit))fail('Invalid viewer theme.');
@@ -719,8 +719,8 @@
       // Most GPUs cap wide lines at 1px, so highlighted edges are re-drawn at small
       // screen-space offsets (px is device pixels per CSS pixel) to read as thicker.
       const thick=(range,radius)=>{for(const [dx,dy] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){gl.uniform2f(u.uLineShift,2*dx*radius*ratio/w,-2*dy*radius*ratio/h);gl.drawArrays(gl.LINES,range.start,range.count);}gl.uniform2f(u.uLineShift,0,0);};
-      if(hovered)thick(hovered,.6);
-      if(selected)thick(selected,1);
+      if(hovered)thick(hovered,.8);
+      if(selected)thick(selected,1.3);
       if(r.capEdges){
         gl.uniform1i(u.uSection,true);gl.uniform1i(u.uClipping,false);gl.uniform1f(u.uSelected,-1);gl.bindBuffer(gl.ARRAY_BUFFER,r.capEdges);
         gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,16,0);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,16,12);gl.drawArrays(gl.LINES,0,r.capEdgeCount);

@@ -1,0 +1,66 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Viewer shell harness</title>
+<style>
+  body{margin:0;font:13px system-ui;background:#6b7280;color:#eee}
+  #bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 12px;background:#1f2328}
+  #bar button,#bar select{font:inherit;padding:4px 10px;border-radius:6px;border:1px solid #444c56;background:#2d333b;color:#eee;cursor:pointer}
+  #bar button[aria-pressed=true]{background:#1f6feb;border-color:#1f6feb}
+  #stage{padding:12px}
+  iframe{border:0;background:#fff;display:block;box-shadow:0 4px 20px #0006}
+  #log{margin-left:auto;opacity:.7;max-width:40ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+</style>
+<div id="bar">
+  <span>Width</span><span id="widths"></span>
+  <span>Theme</span><select id="theme"><option>auto</option><option>light</option><option>dark</option></select>
+  <span>Model</span><select id="doc"></select>
+  <span id="log"></span>
+</div>
+<div id="stage"><iframe id="app" src="/viewer" title="CAD viewer"></iframe></div>
+<script>
+const query = new URLSearchParams(location.search), frame = document.getElementById('app'), log = text => { document.getElementById('log').textContent = text; };
+const settings = { doc: query.get('doc') || 'live_plate', theme: query.get('theme') || 'auto', width: Number(query.get('width') || 900), height: Number(query.get('height') || 620), view: query.get('view') || 'harness_' + Math.random().toString(36).slice(2, 8) };
+const dark = matchMedia('(prefers-color-scheme: dark)');
+const resolved = () => settings.theme === 'auto' ? (dark.matches ? 'dark' : 'light') : settings.theme;
+const context = () => ({ theme: resolved(), displayMode: 'inline', availableDisplayModes: ['inline', 'fullscreen'] });
+const post = message => frame.contentWindow.postMessage({ jsonrpc: '2.0', ...message }, location.origin);
+async function rpc(method, params) {
+  const reply = await (await fetch('/rpc', { method: 'POST', body: JSON.stringify({ method, params }) })).json();
+  if (reply.error) throw Error(reply.error.message);
+  return reply.result;
+}
+function resize() { frame.style.width = settings.width + 'px'; frame.style.height = settings.height + 'px'; document.querySelectorAll('#widths button').forEach(b => b.setAttribute('aria-pressed', String(Number(b.dataset.width) === settings.width))); }
+for (const width of [360, 560, 900, 1280]) {
+  const button = Object.assign(document.createElement('button'), { textContent: width, onclick: () => { settings.width = width; resize(); } });
+  button.dataset.width = width; document.getElementById('widths').append(button);
+}
+document.getElementById('theme').value = settings.theme;
+document.getElementById('theme').onchange = event => { settings.theme = event.target.value; post({ method: 'ui/notifications/host-context-changed', params: { theme: resolved() } }); };
+dark.addEventListener('change', () => { if (settings.theme === 'auto') post({ method: 'ui/notifications/host-context-changed', params: { theme: resolved() } }); });
+fetch('/docs').then(r => r.json()).then(ids => {
+  const select = document.getElementById('doc');
+  for (const id of ids) select.append(Object.assign(document.createElement('option'), { value: id, textContent: id }));
+  select.value = settings.doc;
+  select.onchange = () => { const next = new URLSearchParams(location.search); next.set('doc', select.value); location.search = next.toString(); };
+});
+addEventListener('message', async event => {
+  if (event.source !== frame.contentWindow) return;
+  const message = event.data;
+  if (!message || message.jsonrpc !== '2.0') return;
+  if (message.method && Object.hasOwn(message, 'id')) {
+    try {
+      let result;
+      if (message.method === 'ui/initialize') result = { protocolVersion: '2026-01-26', hostCapabilities: { message: {}, updateModelContext: {} }, hostContext: context() };
+      else if (message.method === 'tools/call') result = await rpc('tools/call', message.params);
+      else if (message.method === 'ui/message' || message.method === 'ui/update-model-context') { log(message.method); result = {}; }
+      else if (message.method === 'ui/request-display-mode') result = { mode: message.params.mode };
+      else throw Error('Harness does not support ' + message.method);
+      post({ id: message.id, result });
+    } catch (error) { post({ id: message.id, error: { code: -32603, message: error.message } }); }
+  } else if (message.method === 'ui/notifications/initialized') {
+    const result = await rpc('tools/call', { name: 'cad_open', arguments: { document_id: settings.doc, view_id: settings.view } });
+    post({ method: 'ui/notifications/tool-result', params: result });
+  }
+});
+resize();
+</script>
