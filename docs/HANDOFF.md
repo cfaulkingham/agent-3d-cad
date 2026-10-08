@@ -56,12 +56,17 @@ Exact evidence (macOS arm64, Node v26.8.1, build `build-package`, branch
   counts were 325/51/110/34/30.
 - CTest: **55 suites, 54 pass** (73.10 s, `-j4`); this includes `embedded_assets`,
   `app_protocol` (byte-for-byte embed check including `shell.js`) and the new
-  `viewer_shell`. The one failure, `performance_geometry`, is **pre-existing**: it
-  fails identically (exit 1, same output) when that test is built from the base
-  commit `8a8c668` in a clean worktree, so it is not caused by this work. It is a
-  native drawing/HLR test; its output says streaming-root checks need the v2 patched
-  SDK and only projection regressions run otherwise. The failing assertion was not
-  investigated.
+  `viewer_shell`. After merging `origin/main` (`a173265`, the CI portability repairs
+  below) the rebuild was warning-free and the result identical: **55 suites, 54 pass
+  in 81.20 s**, same single failure, `web/` untouched by the merge.
+  The failure is `performance_geometry`. It is not caused by this work: it fails
+  identically (exit 1, same output) when built from the base commit `8a8c668` in a
+  clean worktree, in this build environment (`.deps/portable-sdk`). The CI Linux lanes
+  and the local `build-app-protocol` run recorded in the next section ran all 54
+  native tests at that point, so this looks specific to this SDK or environment. It
+  is a native drawing/HLR test whose output says streaming-root checks need the v2
+  patched SDK and only projection regressions run otherwise; this SDK may not be
+  that one. The failing assertion was not investigated.
 - Embedded `viewer.html` SHA-256 (local macOS arm64 build):
   `0d22ccf8034f22011c6c0dc2f8fb97b862311bd80da9053092b60eecf67dfdf3`. This changed
   because the viewer changed; no cross-platform equality is claimed until CI rebuilds.
