@@ -46,7 +46,7 @@ void source_integrity() {
   auto expected = read_text(source / "web/viewer.html");
   for (const auto& [token, asset] : {
        std::pair{"@VIEWER_STYLES@", "styles.css"}, {"@VIEWER_BRIDGE@", "bridge.js"},
-       {"@VIEWER_RENDERER@", "renderer.js"}, {"@VIEWER_STATE@", "state.js"}, {"@VIEWER_APP@", "app.js"}}) {
+       {"@VIEWER_RENDERER@", "renderer.js"}, {"@VIEWER_STATE@", "state.js"}, {"@VIEWER_SHELL@", "shell.js"}, {"@VIEWER_APP@", "app.js"}}) {
     const auto index = expected.find(token);
     require(index != std::string::npos, std::string("Missing HTML asset token: ") + token);
     expected.replace(index, std::char_traits<char>::length(token), read_text(source / "web" / asset));
