@@ -447,6 +447,58 @@ test('setView accepts the new names and reset still frames the model',()=>{
   assert.throws(()=>r.setView('diagonal'));r.reset();assert.ok(r.getCamera().zoom>0);r.destroy();
 });
 
+// ---- Unified face/edge picking and hover ----
+const withEdge=()=>evaluation([[-1,-1,0],[1,-1,0],[-1,1,0]],[[0,1,2]],['face-1'],[{id:'edge-1',points:[[-.8,-.4,0],[.2,-.4,0]]}]);
+const edgeMid=(model,width=400,height=400)=>{const p=model.edges[0].points,a=project([p[0],p[1],p[2]],defaultCamera,width,height),b=project([p[3],p[4],p[5]],defaultCamera,width,height);return [(a[0]+b[0])/2,(a[1]+b[1])/2];};
+test('auto pick: an edge within 6px wins, a face wins beyond it, edge mode keeps 9px',()=>{
+  const model=prepare(withEdge()),[x,y]=edgeMid(model);
+  let r=pick(model,defaultCamera,400,400,x,y+3,'auto');assert.equal(r.id,'edge-1');assert.equal(r.kind,'edge');
+  r=pick(model,defaultCamera,400,400,x,y+8,'auto');assert.equal(r.id,'face-1');assert.equal(r.kind,'face');
+  assert.equal(pick(model,defaultCamera,400,400,x,y+8,'edge').id,'edge-1');
+  assert.equal(pick(model,defaultCamera,400,400,x,y+8,'face').id,'face-1');
+  assert.equal('kind' in pick(model,defaultCamera,400,400,x,y+8,'face'),false,'face/edge modes keep their original result shape');
+});
+test('auto pick: empty space selects nothing and ambiguous edges fall through to the face',()=>{
+  const model=prepare(withEdge());
+  assert.equal(pick(model,defaultCamera,400,400,5,5,'auto').id,null);
+  const twin=withEdge();twin.mesh.edges.push({id:'edge-2',points:[[-.8,-.4,0],[.2,-.4,0]]});twin.topology.edges.push({id:'edge-2'});
+  const m2=prepare(twin),[x,y]=edgeMid(m2),r=pick(m2,defaultCamera,400,400,x,y,'auto');
+  assert.equal(r.id,'face-1');assert.equal(r.kind,'face');
+});
+test('auto pick reports overlapping faces without selecting either',()=>{
+  const d=evaluation([...flat,...flat],[[0,1,2],[3,4,5]],['face-1','face-2']),m=prepare(d),p=project([-.2,-.2,0],defaultCamera,400,400);
+  const r=pick(m,defaultCamera,400,400,p[0],p[1],'auto');assert.equal(r.id,null);assert.equal(r.ambiguous,true);
+});
+test('a click selects whatever auto resolves and clears on empty space; mode compatibility remains',()=>{
+  const {canvas}=mockCanvas(),picks=[],r=new Renderer(canvas,{onPick:(...v)=>picks.push(v)});
+  assert.equal(r.mode,'auto');r.load(withEdge());r.setCamera(defaultCamera);
+  const [x,y]=edgeMid(r.model,640,480);
+  r._pick(x,y+2);assert.equal(picks.at(-1)[0].reference.kind,'edge');assert.equal(r.selection.kind,'edge');
+  const f=project([-.2,-.2,0],defaultCamera,640,480);r._pick(f[0],f[1]);assert.equal(picks.at(-1)[0].reference.kind,'face');assert.equal(r.selection.kind,'face');
+  r._pick(2,2);assert.equal(picks.at(-1)[0],null);assert.equal(r.selection,null);
+  r.setMode('edge');assert.equal(r.mode,'edge');r.setMode('face');r.setMode('auto');assert.throws(()=>r.setMode('vertex'));
+  r.destroy();
+});
+test('hover highlights the entity under an idle cursor without selecting, one pick per frame',()=>{
+  const {canvas,stats}=mockCanvas(),hovers=[],picks=[],r=new Renderer(canvas,{onHover:h=>hovers.push(h),onPick:(...v)=>picks.push(v)});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy+1);move(cx,cy+2);move(cx,cy+3);flush();
+  assert.deepEqual(plain(r.hover),{kind:'edge',entity_id:'edge-1'});assert.equal(hovers.length,1);assert.equal(r.selection,null);assert.equal(picks.length,0);
+  const f=project([-.2,-.2,0],defaultCamera,640,480);move(f[0],f[1]);flush();assert.deepEqual(plain(r.hover),{kind:'face',entity_id:'face-1'});
+  stats.listeners.get('pointerleave')({});flush();assert.equal(r.hover,null);assert.equal(hovers.at(-1),null);
+  r.destroy();assert.equal(stats.listeners.size,0);
+});
+test('hover is skipped while dragging and cleared when the model changes',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const f=project([-.2,-.2,0],defaultCamera,640,480),L=type=>stats.listeners.get(type);
+  L('pointerdown')({pointerId:1,button:0,clientX:f[0],clientY:f[1],shiftKey:false,preventDefault(){}});
+  L('pointermove')({pointerId:1,clientX:f[0]+30,clientY:f[1]+30,buttons:1});flush();assert.equal(r.hover,null);
+  L('pointerup')({pointerId:1,clientX:f[0]+30,clientY:f[1]+30});
+  L('pointermove')({pointerId:1,clientX:f[0],clientY:f[1],buttons:0});flush();assert.ok(r.hover);
+  r.load({...withEdge(),evaluation_id:'next'});assert.equal(r.hover,null);r.destroy();
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {

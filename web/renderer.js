@@ -3,6 +3,7 @@
   'use strict';
   const MAX_VERTICES=200000, MAX_TRIANGLES=200000, MAX_ENTITIES=10000, MAX_EDGE_POINTS=200000;
   const MAX_PIXELS=4000000, PICK_BUDGET=2000000, DEPTH_EPS=1e-8;
+  const EDGE_TOLERANCE=9, AUTO_EDGE_TOLERANCE=6;
   const CLIP_EPS=1e-7;
   const DEFAULT_CAMERA={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]};
   const cloneCamera=c=>({yaw:c.yaw,pitch:c.pitch,zoom:c.zoom,pan:[...c.pan]});
@@ -480,18 +481,16 @@
     const t=length>1e-16?Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/length)):(a[2]<=b[2]?0:1);
     const q=a.map((v,i)=>v+t*(b[i]-v));return {point:q,distance:Math.hypot(q[0]-p[0],q[1]-p[1])};
   }
-  function pick(model,c,width,height,x,y,mode='face') {
-    if(!model||!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0||!Number.isFinite(x)||!Number.isFinite(y)||x<0||y<0||x>width||y>height)return {id:null,ambiguous:false};
-    const budget={remaining:PICK_BUDGET};
-    if(mode==='face') {
-      const hit=trace(model,screenRay(x,y,c,width,height,model.depthExtent??2),budget);
-      return {id:hit.ids.size===1?[...hit.ids][0]:null,ambiguous:hit.ids.size>1,...(hit.section?{section:true}:{})};
-    }
+  function pickFace(model,c,width,height,x,y,budget) {
+    const hit=trace(model,screenRay(x,y,c,width,height,model.depthExtent??2),budget);
+    return {id:hit.ids.size===1?[...hit.ids][0]:null,ambiguous:hit.ids.size>1,...(hit.section?{section:true}:{})};
+  }
+  function pickEdge(model,c,width,height,x,y,tolerance,budget) {
     const candidates=[];
     for(const edge of model.edges) {
       for(let i=3;i<edge.points.length;i+=3) {
         const segment=clipSegment(model,edge.points.subarray(i-3,i),edge.points.subarray(i,i+3));
-        if(segment){const q=nearestSegment([x,y],...segment.map(p=>project(p,c,width,height)));if(q.distance<=9&&q.point[0]>=0&&q.point[1]>=0&&q.point[0]<=width&&q.point[1]<=height)candidates.push({...q,id:edge.id});}
+        if(segment){const q=nearestSegment([x,y],...segment.map(p=>project(p,c,width,height)));if(q.distance<=tolerance&&q.point[0]>=0&&q.point[1]>=0&&q.point[0]<=width&&q.point[1]<=height)candidates.push({...q,id:edge.id});}
       }
     }
     candidates.sort((a,b)=>a.distance-b.distance);
@@ -508,6 +507,19 @@
     }
     const readonly=!ids.size&&model.section&&trace(model,screenRay(x,y,c,width,height,model.depthExtent??2),budget).section;
     return {id:ids.size===1?[...ids][0]:null,ambiguous:ids.size>1,...(readonly?{section:true}:{})};
+  }
+  // 'auto' resolves one cursor to an edge when exactly one visible edge is within
+  // a few pixels, otherwise to the face. Coincident edges fall through to the face.
+  function pick(model,c,width,height,x,y,mode='face') {
+    if(!model||!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0||!Number.isFinite(x)||!Number.isFinite(y)||x<0||y<0||x>width||y>height)return {id:null,ambiguous:false};
+    const budget={remaining:PICK_BUDGET};
+    if(mode==='face')return pickFace(model,c,width,height,x,y,budget);
+    if(mode==='edge')return pickEdge(model,c,width,height,x,y,EDGE_TOLERANCE,budget);
+    const edge=pickEdge(model,c,width,height,x,y,AUTO_EDGE_TOLERANCE,budget);
+    if(edge.id)return {...edge,kind:'edge'};
+    const face=pickFace(model,c,width,height,x,y,budget);
+    if(face.id)return {...face,kind:'face'};
+    return {...face,ambiguous:face.ambiguous||edge.ambiguous};
   }
   function gpuData(model) {
     const normals=new Float64Array(model.positions.length);
@@ -578,9 +590,9 @@
     finally {for(const shader of shaders)gl.deleteShader(shader);}
   }
   class CadRenderer {
-    constructor(canvas,{onPick=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{}}={}) {
+    constructor(canvas,{onPick=()=>{},onHover=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{}}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
-      this.canvas=canvas;this.callbacks={onPick,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.mode='face';this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
+      this.canvas=canvas;this.callbacks={onPick,onHover,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this.callbacks.onAnnotations([]);this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
       this._controls();
@@ -685,9 +697,10 @@
         canvas.setPointerCapture(event.pointerId);
       });
       this._listen(canvas,'pointermove',event=>{
+        if(!this.drag&&event.buttons===0){const rect=canvas.getBoundingClientRect();this.hoverPoint={x:event.clientX-rect.left,y:event.clientY-rect.top};this._scheduleHover();}
         const drag=this.drag;if(!drag||drag.id!==event.pointerId)return;
         if(Math.hypot(event.clientX-drag.x,event.clientY-drag.y)>3)drag.moved=true;
-        if(drag.moved){const dx=event.clientX-drag.lastX,dy=event.clientY-drag.lastY,{width,height}=this._size();
+        if(drag.moved){this.hoverPoint=null;this._setHover(null);const dx=event.clientX-drag.lastX,dy=event.clientY-drag.lastY,{width,height}=this._size();
           if(drag.pan){this.camera.pan[0]+=dx/Math.min(width,height);this.camera.pan[1]+=dy/Math.min(width,height);}else{this.camera.yaw+=dx*.008;this.camera.pitch+=dy*.008;}
           this.camera=camera(this.camera);this._cameraChanged();}
         drag.lastX=event.clientX;drag.lastY=event.clientY;
@@ -697,6 +710,7 @@
         if(canvas.hasPointerCapture(event.pointerId))canvas.releasePointerCapture(event.pointerId);
         if(!drag.moved&&!drag.pan){const rect=canvas.getBoundingClientRect();this._pick(event.clientX-rect.left,event.clientY-rect.top);}
       });
+      this._listen(canvas,'pointerleave',()=>{this.hoverPoint=null;this._setHover(null);});
       this._listen(canvas,'pointercancel',()=>{this.drag=null;});
       this._listen(canvas,'lostpointercapture',()=>{this.drag=null;});
       this._listen(canvas,'wheel',event=>{event.preventDefault();const delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?this._size().height:1);this.camera.zoom=Math.max(.05,Math.min(50,this.camera.zoom*Math.exp(-delta*.001)));this._cameraChanged();},{passive:false});
@@ -716,13 +730,24 @@
     _pick(x,y) {
       if(!this.model||this.lost||!this.gl)return;
       try {
-        const {width,height}=this._size(),result=pick(this.model,this.camera,width,height,x,y,this.mode);
-        this.selection=result.id?{...this.model.identity,kind:this.mode,entity_id:result.id}:null;this._schedule();
-        const selection=this.selection?{reference:this.model.read_only?{review_sha256:this.model.identity.review_sha256,kind:this.mode==='face'?'mesh_group':'curve',entity_id:result.id}:{...this.selection},geometry:this.model.geometries[this.mode].get(result.id)}:null;
+        const {width,height}=this._size(),result=pick(this.model,this.camera,width,height,x,y,this.mode),kind=this.mode==='auto'?result.kind:this.mode;
+        this.selection=result.id?{...this.model.identity,kind,entity_id:result.id}:null;this._schedule();
+        const selection=this.selection?{reference:this.model.read_only?{review_sha256:this.model.identity.review_sha256,kind:kind==='face'?'mesh_group':'curve',entity_id:result.id}:{...this.selection},geometry:this.model.geometries[kind].get(result.id)}:null;
         this.callbacks.onPick(selection,{artifact:!!this.model.read_only,ambiguous:result.ambiguous,section:!!result.section,message:result.section?'This is a section surface. Pick an original face or edge to edit the part.':result.ambiguous?'Geometry overlaps here. Rotate the view or inspect a specific feature.':''});
       }catch(error){this.selection=null;this._schedule();this.callbacks.onPick(null,{ambiguous:false,message:error.message});this._error(error);}
     }
-    load(evaluation,{preserveCamera=true,hiddenPartIds=[],presentation:settings=defaultPresentation(),appearance:style=defaultAppearance()}={}) {return this._checked(()=>{const full=evaluation?.read_only===true?prepareArtifact(evaluation):prepare(evaluation),value=presentation(settings,full),color=appearance(style,full),model=presentedModel(visibleModel(full,hiddenPartIds),value);this.fullModel=full;this.draft=!!evaluation.draft;this.annotations=[];this.callbacks.onAnnotations([]);this.sectionResult=null;this.presentation=value;this.appearance=color;this.hiddenPartIds=[...hiddenPartIds];this.model=model;this.selection=null;this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);this._upload();this._schedule();});}
+    _scheduleHover(){if(this.destroyed||this.hoverPending!==null)return;this.hoverPending=requestAnimationFrame(()=>{this.hoverPending=null;this._updateHover();});}
+    _updateHover(){
+      if(this.destroyed||this.lost||!this.model||this.drag||!this.hoverPoint)return;
+      const {width,height}=this._size(),mode=this.mode,result=pick(this.model,this.camera,width,height,this.hoverPoint.x,this.hoverPoint.y,mode);
+      this._setHover(result.id?{kind:mode==='auto'?result.kind:mode,entity_id:result.id}:null);
+    }
+    _setHover(value){
+      const same=(a,b)=>a===b||(a&&b&&a.kind===b.kind&&a.entity_id===b.entity_id);
+      if(same(this.hover,value))return;
+      this.hover=value;this._schedule();this.callbacks.onHover(value?{...value}:null);
+    }
+    load(evaluation,{preserveCamera=true,hiddenPartIds=[],presentation:settings=defaultPresentation(),appearance:style=defaultAppearance()}={}) {return this._checked(()=>{const full=evaluation?.read_only===true?prepareArtifact(evaluation):prepare(evaluation),value=presentation(settings,full),color=appearance(style,full),model=presentedModel(visibleModel(full,hiddenPartIds),value);this.fullModel=full;this.draft=!!evaluation.draft;this.annotations=[];this.callbacks.onAnnotations([]);this.sectionResult=null;this.presentation=value;this.appearance=color;this.hiddenPartIds=[...hiddenPartIds];this.model=model;this.selection=null;this._setHover(null);this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);this._upload();this._schedule();});}
     setPresentation(value){return this._checked(()=>{
       if(!this.fullModel)return;
       const settings=presentation(value,this.fullModel);if(JSON.stringify(settings)===JSON.stringify(this.presentation))return;
@@ -730,14 +755,14 @@
       const sectionChanged=JSON.stringify(sectionGeometry(settings))!==JSON.stringify(sectionGeometry(this.presentation));
       const model=geometryChanged?presentedModel(visibleModel(this.fullModel,this.hiddenPartIds),settings):{...this.model,clip:clipPlane(this.fullModel,settings.clip),presentation:settings};
       if(sectionChanged){this.sectionResult=null;delete model.section;}else if(this.sectionResult&&geometryChanged)model.section=sectionModel(this.sectionResult,this.fullModel,this.hiddenPartIds);
-      this.presentation=settings;this.model=model;this.selection=null;if(geometryChanged)this._upload();else if(sectionChanged)this._uploadSection();this._schedule();
+      this.presentation=settings;this.model=model;this.selection=null;this._setHover(null);if(geometryChanged)this._upload();else if(sectionChanged)this._uploadSection();this._schedule();
     });}
     setHiddenParts(ids){return this._checked(()=>{
       if(!Array.isArray(ids))fail('Visibility must be an array of part IDs.');
       if(!this.fullModel){if(ids.length)fail('Load an assembly before hiding parts.');return;}
       const canonical=[...ids].sort();
       if(JSON.stringify(canonical)===JSON.stringify([...this.model.hiddenPartIds].sort()))return;
-      const model=presentedModel(visibleModel(this.fullModel,ids),this.presentation);if(this.sectionResult)model.section=sectionModel(this.sectionResult,this.fullModel,ids);this.hiddenPartIds=[...ids];this.model=model;
+      const model=presentedModel(visibleModel(this.fullModel,ids),this.presentation);if(this.sectionResult)model.section=sectionModel(this.sectionResult,this.fullModel,ids);this.hiddenPartIds=[...ids];this.model=model;this._setHover(null);
       if(this.selection&&!model.geometries[this.selection.kind].has(this.selection.entity_id))this.selection=null;
       this._upload();this._schedule();
     });}
@@ -753,7 +778,7 @@
       const section=result?sectionModel(result,this.fullModel,this.hiddenPartIds):null;
       this.sectionResult=result;if(this.model)this.model={...this.model,section};this._uploadSection();this._schedule();
     });}
-    setMode(mode){return this._checked(()=>{if(mode!=='face'&&mode!=='edge')fail('Selection mode must be face or edge.');this.mode=mode;this.selection=null;this._schedule();});}
+    setMode(mode){return this._checked(()=>{if(!['auto','face','edge'].includes(mode))fail('Selection mode must be auto, face or edge.');this.mode=mode;this.selection=null;this._setHover(null);this._schedule();});}
     setCamera(value){return this._checked(()=>{this.camera=camera(value);this._cameraChanged();});}
     getCamera(){return cloneCamera(this.camera);}
     reset(){return this._checked(()=>{
@@ -789,7 +814,7 @@
       }
       return image.toDataURL('image/png');
     });}
-    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources)this.gl.deleteProgram(this.resources.program);this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
+    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;if(this.hoverPending!==null)cancelAnimationFrame(this.hoverPending);this.hoverPending=null;this.hover=null;this.hoverPoint=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources)this.gl.deleteProgram(this.resources.program);this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
   }
   CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds});
   globalThis.CadRenderer=CadRenderer;
