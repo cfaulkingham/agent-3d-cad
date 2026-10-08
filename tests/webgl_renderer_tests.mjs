@@ -567,6 +567,37 @@ test('WebGL1 has no backdrop program and still draws with a solid theme colour',
   assert.equal(stats.createdPrograms,1);assert.ok(stats.draws>0);r.destroy();assert.equal(stats.createdPrograms,stats.deletedPrograms);
 });
 
+test('onView reports orientation changes, including state-driven ones, but not pan or zoom',()=>{
+  const {canvas}=mockCanvas(),views=[],r=new Renderer(canvas,{onView:c=>views.push(plain(c))});
+  r.load(withEdge());flush();assert.ok(views.length>=1,'initial orientation is reported once the first frame draws');views.length=0;
+  r.setCamera({yaw:.5,pitch:.2,zoom:1,pan:[0,0]});flush();assert.equal(views.length,1);near(views[0].yaw,.5);
+  r.setCamera({yaw:.5,pitch:.2,zoom:3,pan:[.1,.1]});flush();assert.equal(views.length,1,'zoom and pan do not rotate the cube');
+  r.setCamera({yaw:.9,pitch:.2,zoom:3,pan:[.1,.1]});flush();assert.equal(views.length,2);near(views[1].yaw,.9);
+  r.destroy();
+});
+
+test('fitCamera centres the model in the usable area when chrome covers the edges',()=>{
+  const c={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]},bounds={min:[-.5,-.5,-.5],max:[.5,.5,.5]},insets={top:56,right:84,bottom:96,left:256};
+  const f=M.fitCamera(c,bounds,900,600,insets),corners=[];
+  for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])corners.push(M.project([x,y,z],f,900,600));
+  const xs=corners.map(p=>p[0]),ys=corners.map(p=>p[1]);
+  assert.ok(Math.min(...xs)>=insets.left&&Math.max(...xs)<=900-insets.right,'fits horizontally inside the usable rectangle');
+  assert.ok(Math.min(...ys)>=insets.top&&Math.max(...ys)<=600-insets.bottom,'fits vertically inside the usable rectangle');
+  near((Math.min(...xs)+Math.max(...xs))/2,insets.left+(900-insets.left-insets.right)/2,1e-6);
+  near((Math.min(...ys)+Math.max(...ys))/2,insets.top+(600-insets.top-insets.bottom)/2,1e-6);
+  assert.deepEqual(plain(M.fitCamera(c,bounds,900,600)),plain(M.fitCamera(c,bounds,900,600,{top:0,right:0,bottom:0,left:0})),'zero insets match the previous behaviour');
+});
+test('renderer insets drive reset, fit-all and framing, and reject bad values',()=>{
+  const {canvas}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true});r.load(withEdge());
+  assert.throws(()=>r.setInsets({top:-1,right:0,bottom:0,left:0}));assert.throws(()=>r.setInsets({top:0,right:0,bottom:NaN,left:0}));assert.throws(()=>r.setInsets(null));
+  r.setInsets({top:0,right:0,bottom:200,left:0});r.reset();
+  const b=r.model.bounds,ys=[];for(const x of [b.min[0],b.max[0]])for(const y of [b.min[1],b.max[1]])for(const z of [b.min[2],b.max[2]])ys.push(project([x,y,z],r.getCamera(),640,480)[1]);
+  assert.ok(Math.max(...ys)<=480-200,'reset keeps the model above the bottom inset');
+  r.setCamera({...r.getCamera(),zoom:30});r.fitAll();
+  const after=[];for(const x of [b.min[0],b.max[0]])for(const y of [b.min[1],b.max[1]])for(const z of [b.min[2],b.max[2]])after.push(project([x,y,z],r.getCamera(),640,480)[1]);
+  assert.ok(Math.max(...after)<=480-200,'fit-all honours the inset too');r.destroy();
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {

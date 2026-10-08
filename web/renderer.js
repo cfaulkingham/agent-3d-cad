@@ -188,12 +188,16 @@
     const zoom=Math.max(.05,Math.min(50,c.zoom*factor)),k=zoom/c.zoom,size=Math.min(width,height);
     return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[c.pan[0]*k+(x-width/2)/size*(1-k),c.pan[1]*k+(y-height/2)/size*(1-k)]};
   }
-  function fitCamera(c,bounds,width,height) {
+  // `insets` are CSS pixels of the canvas covered by floating chrome; the model is
+  // fitted and centred in what remains.
+  function fitCamera(c,bounds,width,height,insets) {
+    const left=insets?.left||0,right=insets?.right||0,top=insets?.top||0,bottom=insets?.bottom||0;
+    const usableWidth=Math.max(1,width-left-right),usableHeight=Math.max(1,height-top-bottom);
     const b=basis(c),corners=[];
     for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
     const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
-    const zoom=Math.max(.05,Math.min(50,Math.min(width*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),height*.72/(Math.max(1e-12,high[1]-low[1])*.68*size))));
-    return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[-(low[0]+high[0])/2*.68*zoom,(low[1]+high[1])/2*.68*zoom]};
+    const zoom=Math.max(.05,Math.min(50,Math.min(usableWidth*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),usableHeight*.72/(Math.max(1e-12,high[1]-low[1])*.68*size))));
+    return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[-(low[0]+high[0])/2*.68*zoom+(left-right)/2/size,(low[1]+high[1])/2*.68*zoom+(top-bottom)/2/size]};
   }
   // Extent of one face or edge in normalized model units, padded so a straight
   // edge or flat face still frames at a sensible zoom.
@@ -625,9 +629,9 @@
     finally {for(const shader of shaders)gl.deleteShader(shader);}
   }
   class CadRenderer {
-    constructor(canvas,{onPick=()=>{},onHover=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{},now=defaultNow,reducedMotion=defaultReducedMotion}={}) {
+    constructor(canvas,{onPick=()=>{},onHover=()=>{},onView=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{},now=defaultNow,reducedMotion=defaultReducedMotion}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
-      this.canvas=canvas;this.callbacks={onPick,onHover,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
+      this.canvas=canvas;this.callbacks={onPick,onHover,onView,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.insets={top:0,right:0,bottom:0,left:0};this.view=null;this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this.callbacks.onAnnotations([]);this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
       this._controls();
@@ -682,6 +686,8 @@
     _size(){const rect=this.canvas.getBoundingClientRect();return {width:Math.max(1,rect.width),height:Math.max(1,rect.height)};}
     _draw() {
       if(this.destroyed||this.lost||!this.gl||!this.resources)return;
+      // Orientation only: the cube ignores pan and zoom. Fires for every cause of a change (drag, animation, saved state).
+      if(!this.view||this.view.yaw!==this.camera.yaw||this.view.pitch!==this.camera.pitch){this.view={yaw:this.camera.yaw,pitch:this.camera.pitch};this.callbacks.onView(this.getCamera());}
       const {width,height}=this._size(),ratio=Math.min(globalThis.devicePixelRatio||1,2,this.maxDimension/width,this.maxDimension/height,Math.sqrt(MAX_PIXELS/(width*height)));
       const w=Math.max(1,Math.floor(width*ratio)),h=Math.max(1,Math.floor(height*ratio)),gl=this.gl,r=this.resources;
       if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
@@ -841,6 +847,12 @@
     }
     setTheme(value){return this._checked(()=>{this.theme=themeValue(value);this._schedule();});}
     getTheme(){return themeValue(this.theme);}
+    // CSS pixels covered by floating chrome on each side; used by fit, reset and frame.
+    setInsets(value){return this._checked(()=>{
+      const sides=['top','right','bottom','left'];
+      if(!value||!sides.every(side=>Number.isFinite(value[side])&&value[side]>=0))fail('Insets must be four non-negative numbers.');
+      this.insets={top:value.top,right:value.right,bottom:value.bottom,left:value.left};
+    });}
     _cancelAnimation(){if(!this.anim)return;this.anim=null;this.callbacks.onCamera(this.getCamera());}
     animateTo(target,{duration=250}={}){return this._checked(()=>{
       const to=camera(target);
@@ -853,14 +865,14 @@
       if(t>=1){this.camera=cloneCamera(a.to);this.anim=null;this.callbacks.onCamera(this.getCamera());return;}
       this.camera=camera(lerpCamera(a.from,a.to,easeOut(t)));this._schedule();
     }
-    fitAll(){if(!this.model?.bounds)return;const {width,height}=this._size();this.animateTo(fitCamera(this.camera,this.model.bounds,width,height));}
-    _frame(kind,id){const bounds=entityBounds(this.model,kind,id);if(!bounds)return;const {width,height}=this._size();this.animateTo(fitCamera(this.camera,bounds,width,height));}
+    fitAll(){if(!this.model?.bounds)return;const {width,height}=this._size();this.animateTo(fitCamera(this.camera,this.model.bounds,width,height,this.insets));}
+    _frame(kind,id){const bounds=entityBounds(this.model,kind,id);if(!bounds)return;const {width,height}=this._size();this.animateTo(fitCamera(this.camera,bounds,width,height,this.insets));}
     frameSelection(){const target=this.hover||this.selection;if(target)this._frame(target.kind,target.entity_id);}
     setCamera(value){return this._checked(()=>{this.anim=null;this.camera=camera(value);this._cameraChanged();});}
     getCamera(){return cloneCamera(this.camera);}
     reset(){return this._checked(()=>{
       this.anim=null;const bounds=this.model?.bounds,home=cloneCamera(DEFAULT_CAMERA);
-      if(bounds){const {width,height}=this._size();this.camera=camera(fitCamera(home,bounds,width,height));}else this.camera=home;
+      if(bounds){const {width,height}=this._size();this.camera=camera(fitCamera(home,bounds,width,height,this.insets));}else this.camera=home;
       this._cameraChanged();
     });}
     setView(view,{animate=false}={}){return this._checked(()=>{

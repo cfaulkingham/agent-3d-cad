@@ -3,22 +3,84 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
 <title>Agent CAD</title><style>@VIEWER_STYLES@</style></head>
-<body>
-<header><div class="wordmark"><span class="brand-icon" aria-hidden="true">◇</span> AGENT <b>CAD</b></div><div class="document-heading"><h1 id="document-title">Your workspace</h1><span id="revision">Editable native CAD</span></div><span id="connection" class="connection">Connecting</span><button id="fullscreen" class="quiet" hidden title="Expand viewer">Expand ↗</button></header>
-<main>
-  <aside class="library"><div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div><p id="workspace-label" class="workspace-label">Saved projects</p><button id="open-workspace" class="workspace-button" hidden>Open workspace…</button><select id="recent-workspaces" aria-label="Recent workspaces" hidden><option value="">Recent workspaces…</option></select><label class="sr-only" for="project-search">Find a saved project</label><input id="project-search" type="search" placeholder="Find a project…"><nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav><div class="section-heading feature-heading"><h2 id="feature-heading-title">Features</h2><span id="feature-count" class="count">0</span></div><div id="features"><p class="muted">Open a model to explore its design.</p></div><div id="library-foot" class="library-foot">Exact geometry · OpenCascade 8.0.1<br>Dimensions in millimeters</div></aside>
-  <section class="stage" aria-label="CAD viewport">
-    <div class="viewport-toolbar"><div class="segmented" aria-label="Selection mode"><button id="mode-face" aria-pressed="true">Faces</button><button id="mode-edge" aria-pressed="false">Edges</button></div><div class="toolbar-right"><button id="fit" title="Fit model (Home)">Fit</button><button id="view-iso" title="Isometric view">Iso</button><button id="view-top" title="Top view">Top</button><button id="view-front" title="Front view">Front</button><button id="view-right" title="Right view">Right</button></div></div>
-    <canvas id="viewport" tabindex="0" aria-label="CAD model. Drag to orbit, shift-drag to pan, scroll to zoom. Click to select geometry."></canvas>
-    <div id="annotation-overlay" class="annotation-overlay" aria-label="Review pins"></div>
-    <div id="empty-state" class="empty-state"><div class="empty-mark" aria-hidden="true">◇</div><h2>Your next idea starts here</h2><p>Ask your agent to create a model,<br>or open one from the list.</p></div>
-    <div id="all-hidden" class="all-hidden" hidden><p>All parts are hidden.</p><button id="restore-parts">Show all parts</button></div>
-    <div id="artifact-semantic-empty" class="all-hidden" hidden><p id="artifact-empty-help">This file contains robot semantics without geometry.</p><p>Review its groups and references in Source metadata.</p></div>
-    <div id="loading" class="loading" hidden><span class="spinner" aria-hidden="true"></span><span id="loading-text">Building current revision…</span></div>
-    <div id="view-error" role="alert" class="view-error" hidden></div>
-    <div class="viewport-foot"><span>Drag to orbit · Shift-drag to pan · Scroll to zoom</span><span id="dimensions"></span></div>
+<body data-theme="light">
+<div id="app" data-scene="open" data-dock="icons">
+  <canvas id="viewport" tabindex="0" aria-label="CAD model. Drag to orbit, shift-drag to pan, scroll to zoom. Hover and click to select a face or edge."></canvas>
+  <div id="annotation-overlay" class="annotation-overlay" aria-label="Review pins"></div>
+  <div id="empty-state" class="empty-state"><div class="empty-mark" aria-hidden="true">◇</div><h2>Your next idea starts here</h2><p>Ask your agent to create a model,<br>or open one from the Models menu.</p></div>
+  <div id="all-hidden" class="all-hidden" hidden><p>All parts are hidden.</p><button id="restore-parts">Show all parts</button></div>
+  <div id="artifact-semantic-empty" class="all-hidden" hidden><p id="artifact-empty-help">This file contains robot semantics without geometry.</p><p>Review its groups and references in Source metadata.</p></div>
+  <div id="loading" class="loading" hidden><span class="spinner" aria-hidden="true"></span><span id="loading-text">Building current revision…</span></div>
+  <div id="view-error" role="alert" class="view-error" hidden></div>
+
+  <header class="top-left">
+    <button id="project-pill" class="pill project-pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="models-popover" title="Models">
+      <span class="brand-icon" aria-hidden="true">◇</span>
+      <span class="pill-text"><span id="document-title" class="pill-title">Your workspace</span><span id="revision" class="pill-sub">Editable native CAD</span></span>
+      <span id="connection" class="connection">Connecting</span>
+      <span class="chevron" aria-hidden="true">▾</span>
+    </button>
+  </header>
+  <div class="top-right">
+    <button id="fullscreen" class="pill" hidden title="Expand viewer">Expand ↗</button>
+    <button id="export-menu-button" class="pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="export-menu">Export <span class="chevron" aria-hidden="true">▾</span></button>
+  </div>
+
+  <aside id="scene-card" class="card scene-card" aria-label="Scene">
+    <div class="card-head">
+      <div id="scene-tabs" class="tabs" role="tablist" aria-label="Scene">
+        <button id="tab-features" class="tab" role="tab" aria-selected="true" aria-controls="features-pane" data-pane="features-pane"><span id="feature-heading-title">Features</span> <span id="feature-count" class="count">0</span></button>
+        <button id="tab-parts" class="tab" role="tab" aria-selected="false" aria-controls="parts-pane" data-pane="parts-pane" hidden>Parts</button>
+      </div>
+      <button id="scene-collapse" class="icon-button" aria-label="Collapse scene panel" title="Collapse">–</button>
+    </div>
+    <div id="features-pane" class="pane" role="tabpanel" aria-labelledby="tab-features">
+      <div id="features"><p class="muted">Open a model to explore its design.</p></div>
+      <details id="parameters-panel" class="parameters"><summary>Parameters</summary><dl id="parameters"></dl></details>
+    </div>
+    <div id="parts-pane" class="pane" role="tabpanel" aria-labelledby="tab-parts" hidden>
+      <section id="parts-panel" class="parts-panel" aria-label="Assembly part visibility" hidden><div class="section-heading"><h2>Parts</h2><button id="show-all-parts" class="quiet">Show all</button></div><p id="parts-status" role="status" aria-live="polite" class="muted"></p><label class="sr-only" for="parts-search">Search parts and subassemblies</label><input id="parts-search" type="search" maxlength="519" placeholder="Search parts or sources…"><div id="parts-list"></div><p id="parts-empty" class="muted" hidden>No matching parts.</p></section>
+    </div>
+    <div class="scene-foot"><span id="model-facts">Ready when you are</span><span id="library-foot" class="library-foot">Exact geometry · OpenCascade 8.0.1 · Dimensions in millimeters</span></div>
+  </aside>
+  <button id="scene-chip" class="pill" hidden aria-expanded="false" aria-controls="scene-card">Scene</button>
+
+  <section id="models-popover" class="popover popover-left" role="dialog" aria-label="Models" hidden>
+    <div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div>
+    <p id="workspace-label" class="workspace-label">Saved projects</p>
+    <button id="open-workspace" class="workspace-button" hidden>Open workspace…</button>
+    <select id="recent-workspaces" aria-label="Recent workspaces" hidden><option value="">Recent workspaces…</option></select>
+    <label class="sr-only" for="project-search">Find a saved project</label><input id="project-search" type="search" placeholder="Find a project…">
+    <nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav>
   </section>
-  <aside class="inspector">
+
+  <div id="export-menu" class="popover popover-right-top" role="dialog" aria-label="Export" hidden>
+    <section id="export-panel" class="export-panel"><h2>Export</h2><label class="sr-only" for="export-format">Export format</label><select id="export-format"><option value="step">STEP · exact solid</option><option value="stl">STL · 3D printing</option><option value="pdf">PDF · 2D drawing</option><option value="svg">SVG · 2D drawing</option><option value="dxf">DXF · 1:1 views</option></select><button id="export-model" disabled>Export saved revision</button><p class="fine-print">Drawings use an A4 sheet with standard views. Ask your agent to add dimensions or customize the drawing.</p></section>
+    <button id="save-image" class="quiet save-image" disabled>Save PNG image</button>
+  </div>
+
+  <div id="cube-area" class="cube-area">
+    <div id="cube" class="cube" aria-label="Orientation cube"></div>
+    <button id="fit" class="pill small" title="Fit model (Home)" aria-label="Fit model">Fit</button>
+  </div>
+
+  <button id="dock-toggle" class="pill dock-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="tool-dock" hidden>Tools</button>
+  <nav id="tool-dock" class="dock" role="toolbar" aria-orientation="vertical" aria-label="Inspection tools">
+    <button class="dock-button" data-tool="presentation-panel" aria-label="Visual inspection" title="Visual inspection" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 12.5l8 4 8-4" stroke-dasharray="2.2 2.2"/></svg></button>
+    <button class="dock-button" data-tool="appearance-panel" aria-label="Colors" title="Colors" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="8.8" cy="10" r="1.2"/><circle cx="13.5" cy="8.4" r="1.2"/><circle cx="15.8" cy="13" r="1.2"/></svg></button>
+    <button class="dock-button" data-tool="annotations-panel" aria-label="Review notes" title="Review notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9.5L4 20z"/></svg></button>
+    <button class="dock-button" data-tool="presets-panel" aria-label="Saved views" title="Saved views" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
+    <button class="dock-button" data-tool="section-panel" aria-label="Exact section" title="Exact section" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16"/><path d="M8 16h8" stroke-dasharray="1.6 2"/></svg></button>
+    <button class="dock-button" data-tool="measurement-panel" aria-label="Measure" title="Measure" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 15.5L15.5 3.5l5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/></svg></button>
+    <button class="dock-button" data-tool="sequence-panel" aria-label="Sequences" title="Sequences" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.2l5.6 3.8-5.6 3.8z"/></svg></button>
+    <button class="dock-button" data-tool="motion-panel" aria-label="Motion" title="Motion" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M19.5 4.5v4.8h-4.8"/></svg></button>
+    <button class="dock-button" data-tool="artifact-review-panel" aria-label="Source" title="Source" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4"/></svg></button>
+  </nav>
+  <section id="tool-popover" class="popover popover-right" role="dialog" aria-labelledby="tool-popover-title" hidden>
+    <div class="popover-head"><h2 id="tool-popover-title">Tool</h2><button id="tool-popover-close" class="icon-button" aria-label="Close tool panel">×</button></div>
+    <div id="tool-popover-body"></div>
+  </section>
+  <div id="tool-panels" hidden>
     <section id="artifact-review-panel" class="artifact-review-panel" aria-label="External artifact review" hidden><div class="section-heading"><h2>Read-only review</h2></div><dl id="artifact-source"></dl><p id="artifact-association" class="fine-print"></p><details><summary>Captured source identity</summary><pre id="artifact-hashes"></pre></details><details><summary>Review limitations</summary><ul id="artifact-limitations"></ul></details></section>
     <section id="presentation-panel" class="presentation-panel" aria-label="Visual inspection" hidden>
       <div class="section-heading"><h2>Visual inspection</h2><button id="presentation-reset" class="quiet">Reset</button></div>
@@ -94,8 +156,38 @@
       <button id="motion-save" class="primary" disabled>Save pose</button>
       <p class="fine-print">Save keeps all previewed mechanisms in one revision. A name also saves a reusable pose for the selected definition.</p>
     </section>
-    <section id="parts-panel" class="parts-panel" aria-label="Assembly part visibility" hidden><div class="section-heading"><h2>Parts</h2><button id="show-all-parts" class="quiet">Show all</button></div><p id="parts-status" role="status" aria-live="polite" class="muted"></p><label class="sr-only" for="parts-search">Search parts and subassemblies</label><input id="parts-search" type="search" maxlength="519" placeholder="Search parts or sources…"><div id="parts-list"></div><p id="parts-empty" class="muted" hidden>No matching parts.</p></section><div class="section-heading"><h2>Inspect</h2><button id="clear-selection" class="quiet" hidden>Clear</button></div><div id="selection-name" class="selection-name">Model overview</div><p id="selection-help" class="muted">Select a face or edge to inspect it and discuss a precise edit.</p><dl id="measurements"></dl><details id="reference-details" hidden><summary>Selection reference</summary><pre id="reference"></pre></details><div class="quick-edit"><div class="section-heading"><h2 id="edit-heading">Quick Edit</h2><span id="selection-badge" class="count">Whole model</span></div><label class="sr-only" for="prompt">Describe a change for your agent</label><textarea id="prompt" rows="4" maxlength="8000" placeholder="Describe a change…&#10;e.g. Round this edge to 2 mm"></textarea><label class="capture-option" id="capture-option" hidden><input id="include-capture" type="checkbox"> Include this view</label><button id="send" class="primary" disabled>Send to chat <span aria-hidden="true">↗</span></button><button id="copy-request" class="copy-request" disabled>Copy request</button><p id="edit-status" role="status" aria-live="polite"></p><p id="edit-help" class="fine-print">If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.</p><details id="copy-fallback" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="8" aria-label="Request text to copy"></textarea></details></div><section id="export-panel" class="export-panel"><h2>Export</h2><label class="sr-only" for="export-format">Export format</label><select id="export-format"><option value="step">STEP · exact solid</option><option value="stl">STL · 3D printing</option><option value="pdf">PDF · 2D drawing</option><option value="svg">SVG · 2D drawing</option><option value="dxf">DXF · 1:1 views</option></select><button id="export-model" disabled>Export saved revision</button><p class="fine-print">Drawings use an A4 sheet with standard views. Ask your agent to add dimensions or customize the drawing.</p></section><details id="parameters-panel" class="parameters"><summary>Parameters</summary><dl id="parameters"></dl></details></aside>
-</main>
-<footer><span id="model-facts">Ready when you are</span><button id="save-image" class="quiet" disabled>Save PNG image</button><span id="update-status" role="status" aria-live="polite">Connecting to native service</span></footer>
+  </div>
+
+  <div class="corner-readout"><span id="dimensions"></span></div>
+
+  <details id="copy-fallback" class="card floating-note" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="6" aria-label="Request text to copy"></textarea></details>
+
+  <div id="selection-bar" class="selection-bar" data-state="idle">
+    <p id="edit-status" class="bar-status" role="status" aria-live="polite"></p>
+    <div id="details-panel" class="bar-details" hidden>
+      <h2 id="edit-heading" class="sr-only">Quick Edit</h2>
+      <p id="selection-help" class="muted">Select a face or edge, then ask your connected agent to edit it.</p>
+      <dl id="measurements"></dl>
+      <details id="reference-details" hidden><summary>Selection reference</summary><pre id="reference"></pre></details>
+      <label class="capture-option" id="capture-option" hidden><input id="include-capture" type="checkbox"> Include this view</label>
+      <p id="edit-help" class="fine-print">If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.</p>
+    </div>
+    <div class="bar-row">
+      <div id="selection-summary" class="selection-summary">
+        <span id="selection-badge" class="count">Whole model</span>
+        <span id="selection-name" class="selection-name">Model overview</span>
+        <span id="selection-key" class="selection-key"></span>
+      </div>
+      <button id="details-toggle" class="icon-button" aria-expanded="false" aria-controls="details-panel" aria-label="Show details" title="Details">⌃</button>
+      <label class="sr-only" for="prompt">Describe a change for your agent</label>
+      <textarea id="prompt" rows="1" maxlength="8000" placeholder="Ask the agent…&#10;e.g. Round this edge to 2 mm"></textarea>
+      <button id="send" class="primary" disabled>Send <span aria-hidden="true">↗</span></button>
+      <button id="copy-request" class="pill small" disabled>Copy request</button>
+      <button id="clear-selection" class="icon-button" hidden aria-label="Clear selection" title="Clear selection (Esc)">×</button>
+    </div>
+  </div>
+
+  <span id="update-status" class="sr-only" role="status" aria-live="polite">Connecting to native service</span>
+</div>
 <script>@VIEWER_BRIDGE@</script><script>@VIEWER_RENDERER@</script><script>@VIEWER_STATE@</script><script>@VIEWER_SHELL@</script><script>@VIEWER_APP@</script>
 </body></html>

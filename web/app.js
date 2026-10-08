@@ -2,7 +2,7 @@
   'use strict';
   const $ = id => document.getElementById(id), bridge = new CadBridge();
   let renderer = null, rendered = null, drawnEvaluation = null, sending = false, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
-  let sizeObserver = null, resizeTimer = null, partsKey = null, partsDocument = null, exporting = false;
+  let sizeObserver = null, resizeTimer = null, partsKey = null, partsDocument = null, exporting = false, shell = null;
   const fmt = value => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—';
   const status = text => { $('edit-status').textContent = text; };
   const fail = error => { $('view-error').hidden = false; $('view-error').textContent = error.message; };
@@ -50,8 +50,6 @@
     if(readonly)$('artifact-empty-help').textContent=p.summary.representation==='robot_semantics'?'This file contains robot semantics without geometry.':'This review contains no display geometry.';
     $('feature-heading-title').textContent=readonly?'Review data':'Features';
     $('library-foot').textContent=readonly?'Read-only artifact · Display in millimeters':'Exact geometry · OpenCascade 8.0.1 · Dimensions in millimeters';
-    $('mode-face').textContent=readonly?'Meshes':'Faces';$('mode-edge').textContent=readonly?'Curves':'Edges';
-    $('mode-face').disabled=readonly&&!p.summary.triangles;$('mode-edge').disabled=readonly&&!p.summary.curves;
     $('edit-heading').textContent=readonly?'Discuss review':'Quick Edit';
     $('prompt').placeholder=readonly?'Ask about this artifact…':'Describe a change…\ne.g. Round this edge to 2 mm';
     $('edit-help').textContent=readonly?'Your agent can inspect this captured artifact and its source references. Open its editable native source to make CAD edits.':'If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.';
@@ -218,8 +216,7 @@
       drawnEvaluation = null;
       try {
         renderer?.load(v.payload, { preserveCamera: same, hiddenPartIds: v.hidden_part_ids || [],presentation:v.presentation,appearance:v.appearance });
-        if(v.payload.read_only){const mode=v.payload.summary.triangles?'face':'edge';renderer?.setMode(mode);for(const other of ['face','edge'])$('mode-'+other).setAttribute('aria-pressed',String(other===mode));}
-        if (v.camera) renderer?.setCamera(v.camera);
+        if (v.camera) renderer?.setCamera(v.camera); else if (!same) renderer?.reset();
         if(renderer)state.setCamera(renderer.getCamera());
         rendered = v.payload; if(!v.payload.read_only)modelTree(v.model, v.payload.summary); artifactKey='';status('');
       } catch (error) { rendererError = error.message; fail(error); }
@@ -246,6 +243,7 @@
     sectionControls(v);
     measurementControls(v);
     inspect(v);
+    shell?.refresh();
     const s = v.payload?.summary;
     $('model-facts').textContent = v.payload?.read_only?`${s.triangles} triangles · ${s.curves} curves · Read-only`:s ? `${s.assembly ? `${s.assembly.parts.length} parts · ${(v.hidden_part_ids || []).length} hidden · ` : ''}${s.solid_count} solid${s.solid_count === 1 ? '' : 's'} · ${s.face_count} faces · ${s.edge_count} edges` : 'Ready when you are';
     const bounds=v.payload?.read_only?s?.bounds:s?.bounds_mm;
@@ -420,7 +418,7 @@
   const colorHex=color=>'#'+color.map(value=>Math.round(value*255).toString(16).padStart(2,'0')).join('');
   const colorRgb=value=>[1,3,5].map(index=>Number.parseInt(value.slice(index,index+2),16)/255);
   let annotationKey='',annotationDocument=null;
-  function selectNote(id){const note=state.value.annotations.find(note=>note.id===id);$('annotation-list').value=id;$('annotation-text').value=note?.text||'';annotationKey='';annotationControls(state.value);$('annotations-panel').scrollIntoView({block:'nearest'});}
+  function selectNote(id){const note=state.value.annotations.find(note=>note.id===id);$('annotation-list').value=id;$('annotation-text').value=note?.text||'';annotationKey='';annotationControls(state.value);shell?.openToolById('annotations-panel');}
   function annotationControls(v){
     const ready=v.status==='ready'&&!!v.payload&&v.read_only!==true&&v.payload.read_only!==true&&!sending&&!v.annotating,committed=ready&&!v.payload.draft,notes=v.annotations||[];
     if(annotationDocument!==v.payload?.document_id){annotationDocument=v.payload?.document_id;$('annotation-text').value='';$('annotation-list').value='';}
@@ -516,11 +514,13 @@
         else status('');
       },
       onAnnotations(pins){renderPins(pins);},
+      onView(camera) { shell?.syncView(camera); },
       onCamera(camera) { state.setCamera(camera); if (state.value.status === 'ready') saveSoon(); },
       onError(error) { rendererError = error.message; drawnEvaluation = null; $('viewport').style.visibility = 'hidden'; fail(error); },
       onReady(identity) { if (identity.evaluation_id === state.value.payload?.evaluation_id) { rendererError = null; drawnEvaluation = identity.evaluation_id; update(state.value); } }
     });
   } catch (error) { fail(error); }
+  shell = CadShell.mount({ $, bridge, renderer });
   async function refreshLibrary() {
     if (libraryBusy || disposed) return;
     libraryBusy = true;
@@ -584,10 +584,6 @@
     } catch (error) { if(current())status(error.message); }
     finally { exporting = false; if (!disposed) update(state.value); }
   };
-  for (const mode of ['face', 'edge']) $(`mode-${mode}`).onclick = () => {
-    renderer?.setMode(mode); state.update({ selection: null }); saveSoon();
-    for (const other of ['face', 'edge']) $(`mode-${other}`).setAttribute('aria-pressed', String(other === mode));
-  };
   $('fit').onclick = () => renderer?.reset();
   $('save-image').onclick=()=>{
     try{
@@ -596,7 +592,6 @@
       const link=document.createElement('a');link.href=image;link.download=state.value.payload.read_only?`artifact-${state.value.payload.artifact.review_sha256.slice(0,12)}.png`:`${state.value.payload.document_id}-r${state.value.payload.revision}.png`;document.body.append(link);link.click();link.remove();status('PNG download requested. Your host may ask where to save it.');
     }catch(error){status(error.message);}
   };
-  for (const view of ['iso', 'top', 'front', 'right']) $(`view-${view}`).onclick = () => renderer?.setView(view);
   $('clear-selection').onclick = () => { state.update({ selection: null }); saveSoon(); };
   $('prompt').addEventListener('input', () => update(state.value));
   $('send').onclick = async () => {
@@ -626,7 +621,7 @@
   };
   function dispose() {
     if (disposed) return; disposed = true; clearTimeout(contextTimer); clearInterval(libraryTimer); clearTimeout(resizeTimer); sizeObserver?.disconnect();
-    state.dispose(); renderer?.destroy(); bridge.dispose();
+    state.dispose(); shell?.dispose(); renderer?.destroy(); bridge.dispose();
   }
   bridge.on('ui/resource-teardown', dispose); window.addEventListener('pagehide', dispose, { once: true });
   function hostLayout() {
@@ -655,7 +650,7 @@
       }
       $('recent-workspaces').onchange = () => { if ($('recent-workspaces').value !== '') bridge.desktop.openRecent(Number($('recent-workspaces').value)).catch(error => status(error.message)); };
       $('send').hidden = true;
-      document.querySelector('.fine-print').textContent = `Selections are shared with agents using this workspace and view “${state.value.view_id}”. Ask in chat to use the selected face or edge, or paste a copied request. Saved edits appear automatically.`;
+      $('edit-help').textContent = `Selections are shared with agents using this workspace and view “${state.value.view_id}”. Ask in chat to use the selected face or edge, or paste a copied request. Saved edits appear automatically.`;
     }
     hostLayout();
     if (typeof ResizeObserver !== 'undefined') { sizeObserver = new ResizeObserver(hostLayout); sizeObserver.observe(document.body); }
