@@ -11,7 +11,7 @@ fn main() {
     let start = html.find("<meta http-equiv=\"Content-Security-Policy\"").expect("Viewer CSP");
     let end = start + html[start..].find('>').expect("CSP end") + 1;
     html.replace_range(start..end, "");
-    for (name, ext) in [("styles", "css"), ("bridge", "js"), ("renderer", "js"), ("state", "js"), ("app", "js")] {
+    for (name, ext) in [("styles", "css"), ("bridge", "js"), ("renderer", "js"), ("state", "js"), ("shell", "js"), ("app", "js")] {
         let path = format!("../web/{name}.{ext}");
         println!("cargo:rerun-if-changed={path}");
         html = html.replace(&format!("@VIEWER_{}@", name.to_uppercase()), &std::fs::read_to_string(path).expect("Viewer asset").replace("\r\n", "\n"));

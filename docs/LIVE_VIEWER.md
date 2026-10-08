@@ -1,8 +1,11 @@
 # Live CAD viewer preview
 
 The viewer runs as an embedded MCP App or a standalone Tauri desktop window
-for the core create–view–select–edit loop. The app opens a model library, source feature tree, WebGL viewport and
-Quick Edit panel. Committed edits appear automatically, retaining the camera.
+for the core create–view–select–edit loop. The WebGL canvas fills the whole viewer and
+the controls float over it: a project pill (models menu, revision, connection), a
+Scene card (features, parameters, parts), a dock of inspection tools, an Export
+menu, an orientation cube and a selection bar that carries Quick Edit. Committed
+edits appear automatically, retaining the camera.
 Selections name an exact evaluated revision; updated geometry clears old picks.
 
 This is an implementation preview. Native integration, real MCP SDK, revision
@@ -56,7 +59,7 @@ agent-3d-cad viewer --workspace "/absolute/path/to/cad-workspace" --view main
 The Tauri window starts its own stdio connection to the native service. It has no
 HTTP listener and opens no browser tab. The agent’s MCP connection or CLI calls
 must use the **same workspace and view ID**. Workspace paths are shown in the
-sidebar. Use **Open workspace**, **Recent workspaces** and project search to
+Models menu (the project pill). Use **Open workspace**, **Recent workspaces** and project search to
 reopen earlier projects; their editable documents stay outside the app install.
 Opening a workspace lists its saved models; choose one to display it.
 
@@ -87,9 +90,9 @@ Ask the agent to create or reopen a design. For a concrete first session:
 
 1. Create the simple plate from `examples/live-plate.create.json` using `cad_create`.
 2. Call `cad_open` with `{ "document_id": "live_plate", "view_id": "plate_review" }`.
-   The host should render the app; saved models appear in the left library.
-3. Choose **Edges**, click a visible edge, then type “Round this edge to 1 mm”
-   in **Quick Edit**. **Send to chat** carries the exact reference. If the host
+   The host should render the app; saved models appear in the Models menu.
+3. Click a visible edge (there is no Faces/Edges switch), then type “Round this
+   edge to 1 mm” in the selection bar. **Send** carries the exact reference. If the host
    places it in the chat composer, press Send there to submit it to the agent.
    If the host does not support messages, **Copy request** provides the same context.
 4. The agent reads the document, resolves the pick with `cad_resolve_selection`,
@@ -117,10 +120,62 @@ fails without changing the saved view state. All visibility edits require the
 current displayed evaluation, so a view that is loading or stale must synchronize
 before changing its mask.
 
-Drag to orbit, Shift/right drag to pan, wheel to zoom, and use the view buttons
-for orthographic directions. Keyboard arrows orbit; Shift+arrows pan; Home resets.
-Selected faces/edges display their native measurements. Faces are inspectable;
-the current selective-filleting operation uses edges.
+## Selecting
+
+One cursor selects faces and edges; there is no mode switch. The entity under the
+cursor highlights as you move: a face takes a soft blue wash, an edge a thicker
+line. A visible edge within 6 px wins; if exactly one is nearest it is chosen,
+otherwise the face under the cursor is. Click selects what is highlighted; clicking
+empty space or pressing Esc clears it. Overlapping faces select nothing and say so.
+In a read-only artifact review the same rule picks a curve, else a mesh group.
+Selected faces/edges display their native measurements in the selection bar, with
+the rest under **Details**. Faces are inspectable; the current selective-filleting
+operation uses edges. Selection references are unchanged: `cad_context` and
+`cad_resolve_selection` see the same face or edge identity as before.
+
+Hover repeats the click hit test on each pointer move. If a pick takes longer than
+8 ms (very large models) hover backs off for four times that long and then follows
+the latest pointer position; clicks always resolve.
+
+## Navigation
+
+| Input | Action |
+|---|---|
+| Left-drag | Orbit (a click that moves under 3 px still selects) |
+| Right-drag | Orbit |
+| Middle-drag, or Shift+drag with any button | Pan |
+| Wheel or pinch | Zoom toward the cursor |
+| Double-click an entity, or Space over one | Frame it |
+| Double-click empty space | Fit the model |
+
+Right-drag orbits (it used to pan); pan with the middle button or Shift.
+The orientation cube at top-right follows the camera. Click a face for that
+standard view (Top, Front, Right, Left, Back, Bottom); click near a face's border
+for an edge or corner view; drag the cube to orbit; double-click it for the default
+isometric view. **Fit** frames the whole model. Fit, reset and framing centre the
+model in the area the floating controls leave uncovered. Camera moves animate over
+about 250 ms and are saved once at the end; `prefers-reduced-motion` makes them
+instant. With the canvas focused: Home or 0 fits, digits 1–7 choose iso, front,
+back, top, bottom, right, left; Esc clears the selection; arrows orbit,
+Shift+arrows pan, +/- zoom.
+
+## Layout and theme
+
+Light is the default look. The viewer follows the host's light/dark theme when the
+host reports one, otherwise the operating system's, and switches live. Edge lines
+stay dark in both themes because the model is light in both.
+
+| Width | Behavior |
+|---|---|
+| 900 px and up | Scene card open, tool dock shown |
+| 560–899 px | Scene card collapsed to a chip, dock shown as icons |
+| Under 560 px | Dock folds into one **Tools** button, the selection bar spans the width with the prompt on a second row, the cube shrinks |
+
+Each tool (Visual inspection, Colors, Review notes, Saved views, Exact section,
+Measure, Sequences, Motion, Source) is one dock icon that opens one popover; an
+icon appears only while its panel applies (Motion needs an articulated assembly,
+Source only a read-only artifact). Esc, a click outside or the close button
+dismisses it and focus returns to the icon. The dock supports Up/Down arrows.
 
 Quick Edit hands a request to the host; it does not directly mutate geometry or
 guarantee that the host posts a message automatically. Complete any composer

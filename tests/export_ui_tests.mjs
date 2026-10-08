@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 const file=process.argv[2]||new URL('../web/app.js',import.meta.url);
-const source=fs.readFileSync(file,'utf8'),start=source.indexOf("  $('export-model').onclick = async () => {"),end=source.indexOf("  for (const mode of ['face', 'edge'])",start);
+const source=fs.readFileSync(file,'utf8'),start=source.indexOf("  $('export-model').onclick = async () => {"),end=source.indexOf("  $('fit').onclick",start);
 assert.ok(start>=0&&end>start,'Production export event handler must be present');
 const handler=source.slice(start,end);let checks=0;
 const check=(condition,label)=>{assert.ok(condition,label);checks++;};

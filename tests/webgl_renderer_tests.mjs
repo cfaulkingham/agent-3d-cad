@@ -395,6 +395,226 @@ test('captured labels stay in the viewport without covering their numbered pin a
  const renderer=new Renderer(canvas);renderer.load(base);renderer.setCamera({...defaultCamera,pan:[.45,0]});renderer.setAnnotations([{...reviewNote(base),text:'Review the current revision housing near the viewport edge.'}]);flush();renderer.capture();
  const arc=draw.find(row=>row[0]==='arc'),box=draw.find(row=>row[0]==='fillRect');assert.ok(box[1]+box[3]<=arc[1]-arc[3]);assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]==='1'));renderer.destroy();
 });
+// ---- Shapr3D-style navigation math ----
+const M=Renderer.math;
+const near=(a,b,eps=1e-9)=>assert.ok(Math.abs(a-b)<=eps,`${a} != ${b}`);
+const plain=value=>JSON.parse(JSON.stringify(value));
+test('standard views look along the documented axes',()=>{
+  const look=name=>{const [yaw,pitch]=M.STANDARD_VIEWS[name];return plain(M.basis({yaw,pitch,zoom:1,pan:[0,0]})[2]).map(v=>Math.round(v*1e9)/1e9+0);};
+  assert.deepEqual(look('front'),[0,1,0]);assert.deepEqual(look('back'),[0,-1,0]);
+  assert.deepEqual(look('right'),[-1,0,0]);assert.deepEqual(look('left'),[1,0,0]);
+  assert.deepEqual(look('top'),[0,0,-1]);assert.deepEqual(look('bottom'),[0,0,1]);
+  assert.deepEqual(Object.keys(M.STANDARD_VIEWS).sort(),['back','bottom','front','iso','left','right','top']);
+});
+test('viewFromDirection reproduces the axis views and gives a true isometric corner',()=>{
+  for(const [name,d] of [['front',[0,-1,0]],['back',[0,1,0]],['right',[1,0,0]],['left',[-1,0,0]],['top',[0,0,1]],['bottom',[0,0,-1]]]){
+    const v=M.viewFromDirection(d),[yaw,pitch]=M.STANDARD_VIEWS[name];
+    near(Math.cos(v.yaw),Math.cos(yaw));near(Math.sin(v.yaw),Math.sin(yaw));near(v.pitch,pitch);
+  }
+  const corner=M.viewFromDirection([1,-1,1]);near(corner.yaw,-Math.PI/4);near(corner.pitch,Math.asin(1/Math.sqrt(3)));
+  assert.throws(()=>M.viewFromDirection([0,0,0]));
+  assert.throws(()=>M.viewFromDirection([1,NaN,0]));
+});
+test('lerpCamera hits both endpoints, takes the short way round and eases',()=>{
+  const a={yaw:3,pitch:0,zoom:1,pan:[0,0]},b={yaw:-3,pitch:.5,zoom:4,pan:[.2,-.2]};
+  assert.deepEqual(plain(M.lerpCamera(a,b,0)),a);
+  const end=M.lerpCamera(a,b,1);near(Math.cos(end.yaw),Math.cos(b.yaw));near(Math.sin(end.yaw),Math.sin(b.yaw));near(end.zoom,4);near(end.pitch,.5);
+  const mid=M.lerpCamera(a,b,.5);near(Math.abs(Math.cos(mid.yaw)),1,1e-2);near(mid.zoom,2);
+  near(M.easeOut(0),0);near(M.easeOut(1),1);assert.ok(M.easeOut(.5)>.5);
+});
+test('zoomAbout keeps the world point under the cursor fixed',()=>{
+  const c={yaw:.4,pitch:.7,zoom:1.3,pan:[.05,-.08]},p=[.12,-.2,.07],[x,y]=M.project(p,c,640,480);
+  for(const factor of [1.7,.4,3]){const z=M.zoomAbout(c,factor,x,y,640,480),[x2,y2]=M.project(p,z,640,480);near(x2,x,1e-7);near(y2,y,1e-7);near(z.zoom,Math.min(50,Math.max(.05,c.zoom*factor)),1e-12);}
+  assert.equal(M.zoomAbout({...c,zoom:49},10,100,100,640,480).zoom,50);
+});
+test('fitCamera frames bounds inside the viewport and centred',()=>{
+  const c={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]},bounds={min:[-.5,-.5,-.5],max:[.5,.5,.5]},f=M.fitCamera(c,bounds,640,480);
+  const corners=[];for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])corners.push(M.project([x,y,z],f,640,480));
+  for(const [x,y] of corners)assert.ok(x>0&&x<640&&y>0&&y<480);
+  near((Math.min(...corners.map(p=>p[0]))+Math.max(...corners.map(p=>p[0])))/2,320,1e-6);
+  near((Math.min(...corners.map(p=>p[1]))+Math.max(...corners.map(p=>p[1])))/2,240,1e-6);
+});
+test('entityBounds finds a face or edge extent and rejects unknown ids',()=>{
+  const model=prepare(evaluation([[-1,-1,0],[1,-1,0],[-1,1,0]],[[0,1,2]],['face-1'],[{id:'edge-1',points:[[-.8,-.4,0],[.2,-.4,0]]}]));
+  const face=M.entityBounds(model,'face','face-1'),edge=M.entityBounds(model,'edge','edge-1');
+  assert.ok(face.max[0]-face.min[0]>=.1);assert.ok(edge.max[0]-edge.min[0]>.2);
+  assert.equal(M.entityBounds(model,'face','nope'),null);assert.equal(M.entityBounds(model,'edge','nope'),null);
+});
+test('setView accepts the new names and reset still frames the model',()=>{
+  const {canvas}=mockCanvas(),r=new Renderer(canvas);r.load(base);
+  for(const name of ['iso','top','bottom','front','back','right','left'])r.setView(name);
+  near(Math.abs(r.getCamera().yaw),Math.PI/2);
+  assert.throws(()=>r.setView('diagonal'));r.reset();assert.ok(r.getCamera().zoom>0);r.destroy();
+});
+
+// ---- Unified face/edge picking and hover ----
+const withEdge=()=>evaluation([[-1,-1,0],[1,-1,0],[-1,1,0]],[[0,1,2]],['face-1'],[{id:'edge-1',points:[[-.8,-.4,0],[.2,-.4,0]]}]);
+const edgeMid=(model,width=400,height=400)=>{const p=model.edges[0].points,a=project([p[0],p[1],p[2]],defaultCamera,width,height),b=project([p[3],p[4],p[5]],defaultCamera,width,height);return [(a[0]+b[0])/2,(a[1]+b[1])/2];};
+test('auto pick: an edge within 6px wins, a face wins beyond it, edge mode keeps 9px',()=>{
+  const model=prepare(withEdge()),[x,y]=edgeMid(model);
+  let r=pick(model,defaultCamera,400,400,x,y+3,'auto');assert.equal(r.id,'edge-1');assert.equal(r.kind,'edge');
+  r=pick(model,defaultCamera,400,400,x,y+8,'auto');assert.equal(r.id,'face-1');assert.equal(r.kind,'face');
+  assert.equal(pick(model,defaultCamera,400,400,x,y+8,'edge').id,'edge-1');
+  assert.equal(pick(model,defaultCamera,400,400,x,y+8,'face').id,'face-1');
+  assert.equal('kind' in pick(model,defaultCamera,400,400,x,y+8,'face'),false,'face/edge modes keep their original result shape');
+});
+test('auto pick: empty space selects nothing and ambiguous edges fall through to the face',()=>{
+  const model=prepare(withEdge());
+  assert.equal(pick(model,defaultCamera,400,400,5,5,'auto').id,null);
+  const twin=withEdge();twin.mesh.edges.push({id:'edge-2',points:[[-.8,-.4,0],[.2,-.4,0]]});twin.topology.edges.push({id:'edge-2'});
+  const m2=prepare(twin),[x,y]=edgeMid(m2),r=pick(m2,defaultCamera,400,400,x,y,'auto');
+  assert.equal(r.id,'face-1');assert.equal(r.kind,'face');
+});
+test('auto pick reports overlapping faces without selecting either',()=>{
+  const d=evaluation([...flat,...flat],[[0,1,2],[3,4,5]],['face-1','face-2']),m=prepare(d),p=project([-.2,-.2,0],defaultCamera,400,400);
+  const r=pick(m,defaultCamera,400,400,p[0],p[1],'auto');assert.equal(r.id,null);assert.equal(r.ambiguous,true);
+});
+test('a click selects whatever auto resolves and clears on empty space; mode compatibility remains',()=>{
+  const {canvas}=mockCanvas(),picks=[],r=new Renderer(canvas,{onPick:(...v)=>picks.push(v)});
+  assert.equal(r.mode,'auto');r.load(withEdge());r.setCamera(defaultCamera);
+  const [x,y]=edgeMid(r.model,640,480);
+  r._pick(x,y+2);assert.equal(picks.at(-1)[0].reference.kind,'edge');assert.equal(r.selection.kind,'edge');
+  const f=project([-.2,-.2,0],defaultCamera,640,480);r._pick(f[0],f[1]);assert.equal(picks.at(-1)[0].reference.kind,'face');assert.equal(r.selection.kind,'face');
+  r._pick(2,2);assert.equal(picks.at(-1)[0],null);assert.equal(r.selection,null);
+  r.setMode('edge');assert.equal(r.mode,'edge');r.setMode('face');r.setMode('auto');assert.throws(()=>r.setMode('vertex'));
+  r.destroy();
+});
+test('hover highlights the entity under an idle cursor without selecting, one pick per frame',()=>{
+  const {canvas,stats}=mockCanvas(),hovers=[],picks=[],r=new Renderer(canvas,{onHover:h=>hovers.push(h),onPick:(...v)=>picks.push(v)});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy+1);move(cx,cy+2);move(cx,cy+3);flush();
+  assert.deepEqual(plain(r.hover),{kind:'edge',entity_id:'edge-1'});assert.equal(hovers.length,1);assert.equal(r.selection,null);assert.equal(picks.length,0);
+  const f=project([-.2,-.2,0],defaultCamera,640,480);move(f[0],f[1]);flush();assert.deepEqual(plain(r.hover),{kind:'face',entity_id:'face-1'});
+  stats.listeners.get('pointerleave')({});flush();assert.equal(r.hover,null);assert.equal(hovers.at(-1),null);
+  r.destroy();assert.equal(stats.listeners.size,0);
+});
+test('hover is skipped while dragging and cleared when the model changes',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const f=project([-.2,-.2,0],defaultCamera,640,480),L=type=>stats.listeners.get(type);
+  L('pointerdown')({pointerId:1,button:0,clientX:f[0],clientY:f[1],shiftKey:false,preventDefault(){}});
+  L('pointermove')({pointerId:1,clientX:f[0]+30,clientY:f[1]+30,buttons:1});flush();assert.equal(r.hover,null);
+  L('pointerup')({pointerId:1,clientX:f[0]+30,clientY:f[1]+30});
+  L('pointermove')({pointerId:1,clientX:f[0],clientY:f[1],buttons:0});flush();assert.ok(r.hover);
+  r.load({...withEdge(),evaluation_id:'next'});assert.equal(r.hover,null);r.destroy();
+});
+
+// ---- Navigation input, animation, theme ----
+const L=(stats,type)=>stats.listeners.get(type);
+const down=(stats,o)=>L(stats,'pointerdown')({pointerId:1,button:0,shiftKey:false,preventDefault(){},...o});
+test('mouse mapping: left and right orbit, middle and Shift pan',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera({yaw:0,pitch:.3,zoom:1,pan:[0,0]});
+  const drag=(o,dx,dy)=>{down(stats,{clientX:100,clientY:100,...o});L(stats,'pointermove')({pointerId:1,clientX:100+dx,clientY:100+dy,buttons:1});L(stats,'pointerup')({pointerId:1,clientX:100+dx,clientY:100+dy});};
+  let c=plain(r.getCamera());drag({button:0},40,0);assert.ok(r.getCamera().yaw!==c.yaw);assert.deepEqual(plain(r.getCamera().pan),c.pan);
+  c=plain(r.getCamera());drag({button:2},0,30);assert.ok(r.getCamera().pitch!==c.pitch);assert.deepEqual(plain(r.getCamera().pan),c.pan);
+  c=plain(r.getCamera());drag({button:1},40,10);assert.equal(r.getCamera().yaw,c.yaw);assert.ok(r.getCamera().pan[0]!==c.pan[0]);
+  c=plain(r.getCamera());drag({button:0,shiftKey:true},-40,0);assert.equal(r.getCamera().yaw,c.yaw);assert.ok(r.getCamera().pan[0]!==c.pan[0]);
+  c=plain(r.getCamera());drag({button:2,shiftKey:true},0,30);assert.equal(r.getCamera().pitch,c.pitch);assert.ok(r.getCamera().pan[1]!==c.pan[1]);
+  r.destroy();
+});
+test('a right-button click does not select; a left click does',()=>{
+  const {canvas,stats}=mockCanvas(),picks=[],r=new Renderer(canvas,{onPick:(...v)=>picks.push(v)});r.load(withEdge());r.setCamera(defaultCamera);
+  const f=project([-.2,-.2,0],defaultCamera,640,480);
+  down(stats,{button:2,clientX:f[0],clientY:f[1]});L(stats,'pointerup')({pointerId:1,clientX:f[0],clientY:f[1]});assert.equal(picks.length,0);
+  down(stats,{button:0,clientX:f[0],clientY:f[1]});L(stats,'pointerup')({pointerId:1,clientX:f[0],clientY:f[1]});assert.equal(picks.length,1);r.destroy();
+});
+test('wheel zooms about the cursor',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera({yaw:.4,pitch:.5,zoom:1,pan:[.02,.03]});
+  const c=plain(r.getCamera()),p=[.1,-.1,0],[x,y]=project(p,c,640,480);
+  L(stats,'wheel')({preventDefault(){},deltaY:-240,deltaMode:0,clientX:x,clientY:y});
+  const [x2,y2]=project(p,r.getCamera(),640,480);near(x2,x,1e-6);near(y2,y,1e-6);assert.ok(r.getCamera().zoom>c.zoom);r.destroy();
+});
+test('animateTo interpolates over 250ms, saves once, is cancelled by input and is instant for reduced motion',()=>{
+  let t=0;const {canvas,stats}=mockCanvas(),moves=[],r=new Renderer(canvas,{now:()=>t,reducedMotion:()=>false,onCamera:c=>moves.push(c)});
+  r.load(withEdge());r.setCamera({yaw:0,pitch:0,zoom:1,pan:[0,0]});moves.length=0;
+  r.animateTo({yaw:1,pitch:.5,zoom:2,pan:[0,0]});assert.equal(moves.length,0);
+  t=125;flush();const mid=r.getCamera();assert.ok(mid.yaw>0&&mid.yaw<1);assert.equal(moves.length,0,'camera is not saved mid-animation');
+  t=250;flush();near(r.getCamera().yaw,1);near(r.getCamera().zoom,2);assert.equal(moves.length,1,'camera saved once at the end');
+  r.animateTo({yaw:0,pitch:0,zoom:1,pan:[0,0]});t=300;flush();const held=r.getCamera();
+  down(stats,{button:0,clientX:5,clientY:5});assert.equal(r.anim,null);t=600;flush();near(r.getCamera().yaw,held.yaw);
+  L(stats,'pointerup')({pointerId:1,clientX:5,clientY:5});
+  const instant=new Renderer(mockCanvas().canvas,{reducedMotion:()=>true});instant.load(withEdge());instant.animateTo({yaw:1,pitch:.5,zoom:2,pan:[0,0]});near(instant.getCamera().yaw,1);
+  r.destroy();instant.destroy();
+});
+test('double-click frames the entity under the cursor, or fits when empty; Space frames the hover',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true});r.load(withEdge());r.setCamera(defaultCamera);
+  const f=project([-.2,-.2,0],defaultCamera,640,480),before=r.getCamera();
+  L(stats,'dblclick')({clientX:f[0],clientY:f[1],preventDefault(){}});assert.ok(r.getCamera().zoom>before.zoom,'framing a small face zooms in');
+  r.setCamera({...defaultCamera,zoom:30});L(stats,'dblclick')({clientX:3,clientY:3,preventDefault(){}});assert.ok(r.getCamera().zoom<30,'empty double-click fits all');
+  r.setCamera(defaultCamera);L(stats,'pointermove')({pointerId:1,clientX:f[0],clientY:f[1],buttons:0});flush();
+  const z=r.getCamera().zoom;L(stats,'keydown')({key:' ',preventDefault(){},shiftKey:false});assert.ok(r.getCamera().zoom>z);r.destroy();
+});
+test('digit keys select standard views',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true}),key=k=>L(stats,'keydown')({key:k,preventDefault(){},shiftKey:false});
+  r.load(withEdge());
+  for(const [k,name] of [['1','iso'],['2','front'],['3','back'],['4','top'],['5','bottom'],['6','right'],['7','left']]){
+    key(k);const [yaw,pitch]=M.STANDARD_VIEWS[name];near(Math.cos(r.getCamera().yaw),Math.cos(yaw));near(Math.sin(r.getCamera().yaw),Math.sin(yaw));near(r.getCamera().pitch,pitch);
+  }
+  r.destroy();
+});
+test('theme: light by default, dark available, validated, drawn through the backdrop pass and kept across context loss',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());flush();
+  assert.deepEqual(r.getTheme(),M.defaultTheme());assert.notDeepEqual(M.darkTheme(),M.defaultTheme());
+  r.setTheme(M.darkTheme());assert.deepEqual(r.getTheme(),M.darkTheme());
+  assert.throws(()=>r.setTheme({background:{top:[2,0,0],bottom:[0,0,0]},line:[0,0,0],select:[0,0,0],hover:[0,0,0]}));
+  assert.throws(()=>r.setTheme({line:[0,0,0]}));
+  assert.equal(stats.createdPrograms,2,'main program plus WebGL2 backdrop program');
+  L(stats,'webglcontextlost')({preventDefault(){}});L(stats,'webglcontextrestored')();flush();assert.deepEqual(r.getTheme(),M.darkTheme());
+  const deletedBefore=stats.deletedPrograms;r.destroy();assert.equal(stats.deletedPrograms-deletedBefore,2);
+});
+test('WebGL1 has no backdrop program and still draws with a solid theme colour',()=>{
+  const {canvas,stats}=mockCanvas({webgl2:false}),r=new Renderer(canvas);r.load(withEdge());flush();
+  assert.equal(stats.createdPrograms,1);assert.ok(stats.draws>0);r.destroy();assert.equal(stats.createdPrograms,stats.deletedPrograms);
+});
+
+test('onView reports orientation changes, including state-driven ones, but not pan or zoom',()=>{
+  const {canvas}=mockCanvas(),views=[],r=new Renderer(canvas,{onView:c=>views.push(plain(c))});
+  r.load(withEdge());flush();assert.ok(views.length>=1,'initial orientation is reported once the first frame draws');views.length=0;
+  r.setCamera({yaw:.5,pitch:.2,zoom:1,pan:[0,0]});flush();assert.equal(views.length,1);near(views[0].yaw,.5);
+  r.setCamera({yaw:.5,pitch:.2,zoom:3,pan:[.1,.1]});flush();assert.equal(views.length,1,'zoom and pan do not rotate the cube');
+  r.setCamera({yaw:.9,pitch:.2,zoom:3,pan:[.1,.1]});flush();assert.equal(views.length,2);near(views[1].yaw,.9);
+  r.destroy();
+});
+
+test('fitCamera centres the model in the usable area when chrome covers the edges',()=>{
+  const c={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]},bounds={min:[-.5,-.5,-.5],max:[.5,.5,.5]},insets={top:56,right:84,bottom:96,left:256};
+  const f=M.fitCamera(c,bounds,900,600,insets),corners=[];
+  for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])corners.push(M.project([x,y,z],f,900,600));
+  const xs=corners.map(p=>p[0]),ys=corners.map(p=>p[1]);
+  assert.ok(Math.min(...xs)>=insets.left&&Math.max(...xs)<=900-insets.right,'fits horizontally inside the usable rectangle');
+  assert.ok(Math.min(...ys)>=insets.top&&Math.max(...ys)<=600-insets.bottom,'fits vertically inside the usable rectangle');
+  near((Math.min(...xs)+Math.max(...xs))/2,insets.left+(900-insets.left-insets.right)/2,1e-6);
+  near((Math.min(...ys)+Math.max(...ys))/2,insets.top+(600-insets.top-insets.bottom)/2,1e-6);
+  assert.deepEqual(plain(M.fitCamera(c,bounds,900,600)),plain(M.fitCamera(c,bounds,900,600,{top:0,right:0,bottom:0,left:0})),'zero insets match the previous behaviour');
+});
+test('renderer insets drive reset, fit-all and framing, and reject bad values',()=>{
+  const {canvas}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true});r.load(withEdge());
+  assert.throws(()=>r.setInsets({top:-1,right:0,bottom:0,left:0}));assert.throws(()=>r.setInsets({top:0,right:0,bottom:NaN,left:0}));assert.throws(()=>r.setInsets(null));
+  r.setInsets({top:0,right:0,bottom:200,left:0});r.reset();
+  const b=r.model.bounds,ys=[];for(const x of [b.min[0],b.max[0]])for(const y of [b.min[1],b.max[1]])for(const z of [b.min[2],b.max[2]])ys.push(project([x,y,z],r.getCamera(),640,480)[1]);
+  assert.ok(Math.max(...ys)<=480-200,'reset keeps the model above the bottom inset');
+  r.setCamera({...r.getCamera(),zoom:30});r.fitAll();
+  const after=[];for(const x of [b.min[0],b.max[0]])for(const y of [b.min[1],b.max[1]])for(const z of [b.min[2],b.max[2]])after.push(project([x,y,z],r.getCamera(),640,480)[1]);
+  assert.ok(Math.max(...after)<=480-200,'fit-all honours the inset too');r.destroy();
+});
+
+test('hover backs off after a slow pick and resumes with the latest pointer position',()=>{
+  let t=0;const {canvas,stats}=mockCanvas(),hovers=[],r=new Renderer(canvas,{now:()=>(t+=20),onHover:h=>hovers.push(plain(h))});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),f=project([-.2,-.2,0],defaultCamera,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy);flush();assert.equal(hovers.length,1);assert.equal(hovers[0].kind,'edge');
+  move(f[0],f[1]);flush();assert.equal(hovers.length,1,'a pick inside the back-off window is deferred, not dropped');
+  for(let i=0;i<8&&hovers.length<2;i++)flush();
+  assert.equal(hovers.length,2);assert.equal(hovers[1].kind,'face','the deferred pick uses the latest pointer position');
+  r.destroy();
+});
+test('fast picks never back off',()=>{
+  const {canvas,stats}=mockCanvas(),hovers=[],r=new Renderer(canvas,{now:()=>0,onHover:h=>hovers.push(plain(h))});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),f=project([-.2,-.2,0],defaultCamera,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy);flush();move(f[0],f[1]);flush();move(cx,cy);flush();assert.equal(hovers.length,3);r.destroy();
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {
