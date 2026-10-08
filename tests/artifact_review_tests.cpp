@@ -5,6 +5,8 @@
 #include <cmath>
 #include <iostream>
 #include <functional>
+#include <limits>
+#include <locale>
 using namespace agentcad;
 namespace {
 int checks=0;Json evidence={{"arguments",Json::array()},{"results",Json::array()}};
@@ -16,8 +18,24 @@ void put32(std::string&raw,std::size_t at,std::uint32_t value){for(unsigned n=0;
 Json input(const fs::path&path,const std::string&format,const std::string&units){return {{"action","review"},{"path",path_to_utf8(path)},{"format",format},{"units",units},{"expected_sha256",sha256_file(path,artifact_input_limit)}};}
 Json reviewed(const fs::path&workspace,const Json&args){const auto r=review_external_artifact(workspace,args,"fixture-native-build");evidence["arguments"].push_back(args);evidence["results"].push_back(r);check(r.at("read_only")==true&&r.at("native_selection_references")==false,"Read-only contract");check(r.at("source").at("sha256")==args.at("expected_sha256"),"Exact source hash");check(verify_external_artifact(path_from_utf8(text_field(r,"directory")),text_field(r,"sha256")).at("sha256")==r.at("sha256"),"Portable verification");return r;}
 Json data(const Json&r){return parse_json(read_text(path_from_utf8(text_field(r,"path")),64*1024*1024),64*1024*1024);}
+void numeric_tokens() {
+  struct Comma : std::numpunct<char> {char do_decimal_point()const override{return ',';}};
+  struct LocaleGuard {std::locale previous=std::locale();~LocaleGuard(){std::locale::global(previous);}} guard;
+  std::locale::global(std::locale(std::locale::classic(),new Comma));
+  near(artifact_detail::real("1.25"),1.25);
+  near(artifact_detail::real("-.5"),-.5);
+  near(artifact_detail::real("1."),1);
+  near(artifact_detail::real("2.5e-2"),.025);
+  near(artifact_detail::real("-1E+3"),-1000);
+  check(std::signbit(artifact_detail::real("-0")),"Signed zero is preserved");
+  check(artifact_detail::real("4.9406564584124654e-324")==std::numeric_limits<double>::denorm_min(),"Representable subnormal is retained");
+  check(artifact_detail::numbers("1.25 -.5 2e1",3)==std::vector<double>({1.25,-.5,20}),"Coordinate lists stay locale independent");
+  for(const auto* token:{"","+1"," 1","1 ","1,25","0x1p0","nan","inf","1e","1e999","1e-999","1000000001"})
+    rejects([&]{artifact_detail::real(token);},"artifact_invalid");
+}
 }
 int main(int argc,char**argv){try{
+  numeric_tokens();
   if(argc!=4)throw std::runtime_error("Usage: tests native-worker fixtures evidence.json");set_worker_executable(fs::path(argv[1]));Temporary temp;const auto source=temp.root/"source";directory(source);for(const auto&e:fs::directory_iterator(fs::path(argv[2])))fs::copy_file(e.path(),source/e.path().filename());const auto workspace=temp.root/"workspace";directory(workspace);
   Json source_model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},{"features",Json::array({{{"id","Part"},{"type","box"},{"size",{10,20,30}}}})},{"output","Part"}};{DocumentLock lock(workspace,"Source");Store(workspace).commit("Source",source_model,true);}
   auto a=input(source/"triangle.stl","stl","in");a["native_source"]={{"document_id","Source"},{"revision",1},{"feature_id","Part"}};auto r=reviewed(workspace,a);near(r["summary"]["bounds"]["max"][0],25.4);check(r["source"]["native_source_association"]["qualification"]=="caller_declared","Native source association stays declared");check(r["summary"]["triangles"]==1,"ASCII STL count");

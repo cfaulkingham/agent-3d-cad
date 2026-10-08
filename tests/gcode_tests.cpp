@@ -28,6 +28,11 @@ double stat(const Json& result,const char* key){return result.at("statistics").a
 void analytic() {
   auto r=inspect("G1 X10 Y5 Z1 E1\n");require(r.at("status")=="pass","Finite explicit linear move passes supported static checks");
   require(stat(r,"extruded_mm")==1&&r.at("statistics").at("commanded_bounds_mm")[0][1]==10,"Independent endpoint and commanded E amount");
+  r=inspect("G1X+1.25Y-.5Z.2E1.\n");require(r.at("status")=="pass","Signed and fractional decimal words remain supported");
+  require(r.at("statistics").at("commanded_bounds_mm")[0][1]==1.25&&r.at("statistics").at("commanded_bounds_mm")[1][0]==-.5,"Decimal words retain their exact commanded coordinates");
+  require(check(inspect("G1X1,25E1\n"),"syntax").at("status")=="fail","Locale decimal separators cannot alter G-code motion");
+  require(check(inspect("G1X"+std::string(400,'9')+"E1\n"),"syntax").at("status")=="fail","Overflowing decimal words are rejected");
+  require(check(inspect("G1X0."+std::string(400,'0')+"1E1\n"),"syntax").at("status")=="fail","Underflowing nonzero words cannot silently become zero");
   r=inspect("G91\nG1X15E1\nG1X10E1\n");require(check(r,"commanded_bounds").at("status")=="fail","Relative moves accumulate past the envelope");
   require(r.at("statistics").at("commanded_bounds_mm")[0][1]==25,"Relative bounds include summed endpoints");
   r=inspect("G20\nG1 X1 E.1\n");require(check(r,"commanded_bounds").at("status")=="fail","Inch coordinate converted to mm exceeds fixture");
