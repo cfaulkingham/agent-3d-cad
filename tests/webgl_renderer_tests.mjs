@@ -499,6 +499,74 @@ test('hover is skipped while dragging and cleared when the model changes',()=>{
   r.load({...withEdge(),evaluation_id:'next'});assert.equal(r.hover,null);r.destroy();
 });
 
+// ---- Navigation input, animation, theme ----
+const L=(stats,type)=>stats.listeners.get(type);
+const down=(stats,o)=>L(stats,'pointerdown')({pointerId:1,button:0,shiftKey:false,preventDefault(){},...o});
+test('mouse mapping: left and right orbit, middle and Shift pan',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera({yaw:0,pitch:.3,zoom:1,pan:[0,0]});
+  const drag=(o,dx,dy)=>{down(stats,{clientX:100,clientY:100,...o});L(stats,'pointermove')({pointerId:1,clientX:100+dx,clientY:100+dy,buttons:1});L(stats,'pointerup')({pointerId:1,clientX:100+dx,clientY:100+dy});};
+  let c=plain(r.getCamera());drag({button:0},40,0);assert.ok(r.getCamera().yaw!==c.yaw);assert.deepEqual(plain(r.getCamera().pan),c.pan);
+  c=plain(r.getCamera());drag({button:2},0,30);assert.ok(r.getCamera().pitch!==c.pitch);assert.deepEqual(plain(r.getCamera().pan),c.pan);
+  c=plain(r.getCamera());drag({button:1},40,10);assert.equal(r.getCamera().yaw,c.yaw);assert.ok(r.getCamera().pan[0]!==c.pan[0]);
+  c=plain(r.getCamera());drag({button:0,shiftKey:true},-40,0);assert.equal(r.getCamera().yaw,c.yaw);assert.ok(r.getCamera().pan[0]!==c.pan[0]);
+  c=plain(r.getCamera());drag({button:2,shiftKey:true},0,30);assert.equal(r.getCamera().pitch,c.pitch);assert.ok(r.getCamera().pan[1]!==c.pan[1]);
+  r.destroy();
+});
+test('a right-button click does not select; a left click does',()=>{
+  const {canvas,stats}=mockCanvas(),picks=[],r=new Renderer(canvas,{onPick:(...v)=>picks.push(v)});r.load(withEdge());r.setCamera(defaultCamera);
+  const f=project([-.2,-.2,0],defaultCamera,640,480);
+  down(stats,{button:2,clientX:f[0],clientY:f[1]});L(stats,'pointerup')({pointerId:1,clientX:f[0],clientY:f[1]});assert.equal(picks.length,0);
+  down(stats,{button:0,clientX:f[0],clientY:f[1]});L(stats,'pointerup')({pointerId:1,clientX:f[0],clientY:f[1]});assert.equal(picks.length,1);r.destroy();
+});
+test('wheel zooms about the cursor',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());r.setCamera({yaw:.4,pitch:.5,zoom:1,pan:[.02,.03]});
+  const c=plain(r.getCamera()),p=[.1,-.1,0],[x,y]=project(p,c,640,480);
+  L(stats,'wheel')({preventDefault(){},deltaY:-240,deltaMode:0,clientX:x,clientY:y});
+  const [x2,y2]=project(p,r.getCamera(),640,480);near(x2,x,1e-6);near(y2,y,1e-6);assert.ok(r.getCamera().zoom>c.zoom);r.destroy();
+});
+test('animateTo interpolates over 250ms, saves once, is cancelled by input and is instant for reduced motion',()=>{
+  let t=0;const {canvas,stats}=mockCanvas(),moves=[],r=new Renderer(canvas,{now:()=>t,reducedMotion:()=>false,onCamera:c=>moves.push(c)});
+  r.load(withEdge());r.setCamera({yaw:0,pitch:0,zoom:1,pan:[0,0]});moves.length=0;
+  r.animateTo({yaw:1,pitch:.5,zoom:2,pan:[0,0]});assert.equal(moves.length,0);
+  t=125;flush();const mid=r.getCamera();assert.ok(mid.yaw>0&&mid.yaw<1);assert.equal(moves.length,0,'camera is not saved mid-animation');
+  t=250;flush();near(r.getCamera().yaw,1);near(r.getCamera().zoom,2);assert.equal(moves.length,1,'camera saved once at the end');
+  r.animateTo({yaw:0,pitch:0,zoom:1,pan:[0,0]});t=300;flush();const held=r.getCamera();
+  down(stats,{button:0,clientX:5,clientY:5});assert.equal(r.anim,null);t=600;flush();near(r.getCamera().yaw,held.yaw);
+  L(stats,'pointerup')({pointerId:1,clientX:5,clientY:5});
+  const instant=new Renderer(mockCanvas().canvas,{reducedMotion:()=>true});instant.load(withEdge());instant.animateTo({yaw:1,pitch:.5,zoom:2,pan:[0,0]});near(instant.getCamera().yaw,1);
+  r.destroy();instant.destroy();
+});
+test('double-click frames the entity under the cursor, or fits when empty; Space frames the hover',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true});r.load(withEdge());r.setCamera(defaultCamera);
+  const f=project([-.2,-.2,0],defaultCamera,640,480),before=r.getCamera();
+  L(stats,'dblclick')({clientX:f[0],clientY:f[1],preventDefault(){}});assert.ok(r.getCamera().zoom>before.zoom,'framing a small face zooms in');
+  r.setCamera({...defaultCamera,zoom:30});L(stats,'dblclick')({clientX:3,clientY:3,preventDefault(){}});assert.ok(r.getCamera().zoom<30,'empty double-click fits all');
+  r.setCamera(defaultCamera);L(stats,'pointermove')({pointerId:1,clientX:f[0],clientY:f[1],buttons:0});flush();
+  const z=r.getCamera().zoom;L(stats,'keydown')({key:' ',preventDefault(){},shiftKey:false});assert.ok(r.getCamera().zoom>z);r.destroy();
+});
+test('digit keys select standard views',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas,{reducedMotion:()=>true}),key=k=>L(stats,'keydown')({key:k,preventDefault(){},shiftKey:false});
+  r.load(withEdge());
+  for(const [k,name] of [['1','iso'],['2','front'],['3','back'],['4','top'],['5','bottom'],['6','right'],['7','left']]){
+    key(k);const [yaw,pitch]=M.STANDARD_VIEWS[name];near(Math.cos(r.getCamera().yaw),Math.cos(yaw));near(Math.sin(r.getCamera().yaw),Math.sin(yaw));near(r.getCamera().pitch,pitch);
+  }
+  r.destroy();
+});
+test('theme: light by default, dark available, validated, drawn through the backdrop pass and kept across context loss',()=>{
+  const {canvas,stats}=mockCanvas(),r=new Renderer(canvas);r.load(withEdge());flush();
+  assert.deepEqual(r.getTheme(),M.defaultTheme());assert.notDeepEqual(M.darkTheme(),M.defaultTheme());
+  r.setTheme(M.darkTheme());assert.deepEqual(r.getTheme(),M.darkTheme());
+  assert.throws(()=>r.setTheme({background:{top:[2,0,0],bottom:[0,0,0]},line:[0,0,0],select:[0,0,0],hover:[0,0,0]}));
+  assert.throws(()=>r.setTheme({line:[0,0,0]}));
+  assert.equal(stats.createdPrograms,2,'main program plus WebGL2 backdrop program');
+  L(stats,'webglcontextlost')({preventDefault(){}});L(stats,'webglcontextrestored')();flush();assert.deepEqual(r.getTheme(),M.darkTheme());
+  const deletedBefore=stats.deletedPrograms;r.destroy();assert.equal(stats.deletedPrograms-deletedBefore,2);
+});
+test('WebGL1 has no backdrop program and still draws with a solid theme colour',()=>{
+  const {canvas,stats}=mockCanvas({webgl2:false}),r=new Renderer(canvas);r.load(withEdge());flush();
+  assert.equal(stats.createdPrograms,1);assert.ok(stats.draws>0);r.destroy();assert.equal(stats.createdPrograms,stats.deletedPrograms);
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {
