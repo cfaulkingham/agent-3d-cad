@@ -214,12 +214,44 @@ Keep source edits atomic, exact geometry native and historical revisions intact.
 ## Later, only when driven by actual workflows
 
 Geometry/projection caching is implemented: bounded, checksummed exact feature
-snapshots and complete view sets, content/build invalidation, fresh render and
+snapshots and individual projected views, dependency/build invalidation, fresh render and
 evaluation identity, corruption/deletion fallback, and coordinator publication.
-Native regression tests and a reproducible threaded-part benchmark are provided;
+Native regression tests and reproducible threaded-part/dependency benchmarks are provided;
 executed local results are recorded in HANDOFF.md. No public cache API is needed.
 
-Further work beyond the authorized motion increment: nested assemblies, general mate constraint solving,
-hierarchical BOMs, full drafting/GD&T, multi-sheet drawings, manufacturing
+Assembly composition, fabrication workflows and visual review are now authorized
+in `COMPOSITION_FABRICATION_REVIEW.md`. Bounded nested geometry, occurrence paths,
+rolled-up/hierarchical BOM inspection and group visibility are implemented locally,
+along with composed motion/robot handoff, revision-pinned editable components and
+dependency-level native caching. Native manufacturing packages now preserve
+editable source, unique leaf STEP/STL/drawings, saved assembly transforms,
+BOM/purchasing metadata and a portable SHA-256 manifest. Process assumptions
+remain explicit. Exact and sampled native fabrication review now records
+oriented bounds, mesh topology, wall chords, process-specific checks and
+saved-pose clearance/interference with explicit unknown coverage.
+Sourced STEP import now binds caller supplier identity to actual artifact bytes,
+retains it through unchanged rigid copies and pinned components, and includes
+original supplier STEP files in portable manufacturing manifests.
+Catalog discovery remains an agent workflow. Native static G-code review now
+preserves caller-supplied bytes and checks explicit bounds/targets/state, retaining
+unsupported firmware behavior as unknown. Native `cad_slice` now plans and runs
+an explicitly identified installed OrcaSlicer 2.4.2 with captured resolved
+profiles, resource/cancellation containment, actual effective settings and
+portable source/G-code provenance. Native offline printer plans and portable
+re-verification are in PRINTER_HANDOFF.md; physical start remains separate.
+Saved live clipping planes and exploded leaf inspection now preserve source
+geometry and topology identity, with ordered view persistence, clipped picking
+and revision/retarget guards. Native exact sections add material caps and
+hole-preserving intersections in SECTIONS.md. Exact topology-pair measurements, closest-point witnesses,
+analytic angles and bounded leaf clearance/interference queries now qualify
+source/build/evaluation identity, with durable jobs and live controls. See
+MEASUREMENTS.md for coverage and tolerances. Appearance/presets, saved inspection
+notes, declarative time sequences and bounded read-only external-format review
+are implemented in APPEARANCE.md, ANNOTATIONS.md, PLAYBACK.md and
+ARTIFACT_REVIEW.md. Combined acceptance is recorded in HANDOFF; implementation
+does not establish additional platform, desktop-host or physical-hardware gates.
+
+Further work includes general mate constraint solving,
+full drafting/GD&T, multi-sheet drawings, manufacturing
 checks, distributed execution, remote collaborative editing, and additional
 authoring frontends. Python/build123d API parity remains outside the product.

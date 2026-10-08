@@ -1,0 +1,1 @@
+<robot name="external"><group name="arm"><chain base_link="base" tip_link="arm"/></group><group name="all"><group name="arm"/></group><group_state name="rest" group="arm"><joint name="hinge" value="0"/></group_state><disable_collisions link1="base" link2="arm" reason="Adjacent"/></robot>

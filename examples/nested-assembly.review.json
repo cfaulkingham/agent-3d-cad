@@ -1,0 +1,17 @@
+{
+  "document_id": "nested_assembly_demo",
+  "revision": 1,
+  "options": {
+    "profile": {
+      "process": "fdm",
+      "orientation": {
+        "build_direction": [0, 0, 1],
+        "x_direction": [1, 0, 0]
+      },
+      "build_envelope_mm": [50, 50, 50],
+      "minimum_wall_mm": 1.2,
+      "overhang_angle_deg": 45
+    },
+    "minimum_clearance_mm": 0.5
+  }
+}

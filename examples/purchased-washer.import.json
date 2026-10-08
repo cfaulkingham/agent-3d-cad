@@ -1,0 +1,10 @@
+{
+  "document_id": "purchased_washer_demo",
+  "path": "flat_washer_normal_m5_simple.step",
+  "expected_sha256": "51ff899874c1b231d8b120a3c92d5657faf50d085897c2b7fc6d92e27e10fe5a",
+  "purchase": {
+    "supplier": "step.parts CAD catalog (physical supplier unselected)",
+    "part_number": "flat_washer_normal_m5_simple",
+    "source_url": "https://www.step.parts/parts/flat_washer_normal_m5_simple"
+  }
+}

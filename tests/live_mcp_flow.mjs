@@ -86,12 +86,21 @@ try {
   check(message.params.content[0].text.includes(evaluation.evaluation_id), 'Quick Edit carries exact evaluation');
   const resolved = await tool('cad_resolve_selection', reference);
   check(resolved.selector?.expected_count === 1, 'pick resolves to unique persistent design selector');
+  await state.annotation('add',{anchor:{kind:'entity',reference},text:'Inspect selected native edge'});
+  const annotation=structuredClone(state.value.annotations[0]);
+  check(annotation.anchor.point_mm.every((v,i)=>v===resolved.geometry.center_mm[i]),'Actual bridge/controller receives native resolved inspection center');
+  check(annotation.anchor.reference.entity_id===picked&&annotation.anchor_lifetime==='evaluation','Actual annotation retains source-qualified inspection evidence');
+  await state.sendPrompt('Review saved inspection note.');
+  check(messages.filter(m=>m.method==='ui/message').at(-1).params.content[0].text.includes(annotation.text),'Agent request includes saved review text and native source identity');
   await tool('cad_apply', { document_id: 'plate', expected_revision: 1, operations: [
     { op: 'add_feature', feature: { id: 'rounded', type: 'fillet', input: 'base', radius: 1, edges: resolved.selector } },
     { op: 'set_output', feature_id: 'rounded' }
   ] });
   check((await tool('cad_context', { view_id: 'test_view' })).stale, 'old context marked stale immediately after commit');
   await untilReady(2);
+  check(state.value.annotations[0].status==='retired'&&state.value.annotations[0].evaluation_id===annotation.evaluation_id,'Actual commit retires notes without rebinding inspection centers');
+  await state.annotation('update',{annotation_id:annotation.id,text:'Keep historical inspection'});
+  check(state.value.annotations[0].status==='retired','Actual historical text edit cannot activate old source anchor');
   check(state.value.selection === null, 'automatic reload clears old selection');
   assert.deepEqual(state.value.camera, camera); checks++;
   check(state.value.payload.summary.volume_mm3 < evaluation.summary.volume_mm3, 'selected fillet changes exact solid');
@@ -176,10 +185,72 @@ try {
   check(!state.value.payload.draft && state.value.payload.summary.assembly.motion.poses.includes('review'), 'Explicit save commits current joints and a named pose');
   const dofs = state.value.payload.summary.assembly.motion.dofs;
   check(dofs.find(d => d.mate_id === 'rail').value === 7 && dofs.find(d => d.mate_id === 'spindle_joint' && d.coordinate === 'angle_deg').value === -35, 'Saved geometry respects both couplings');
-  await state.previewPose('folded'); await untilReady(2);
+  const committedBeforePlayback=await tool('cad_read',{document_id:mechanism.document_id}),committedMesh=structuredClone(state.value.payload.mesh);
+  await state.annotation('add',{anchor:{kind:'model'},text:'Review coordinated motion from the saved pose'});
+  const motionNote=structuredClone(state.value.annotations[0]);
+  const first=state.captureSequenceFrame(0),last=structuredClone(first);last.time_s=2;last.presentation.explode.distance_mm=10;
+  last.joints[0].values.find(v=>v.mate_id==='hinge').value=90;last.joints[0].values.find(v=>v.mate_id==='spindle_joint').value=18;
+  await state.sequence('save',{sequence:{name:'Coordinated playback',frames:[first,last]}});
+  check(state.value.sequences[0].source.revision===2&&state.value.sequences[0].source.evaluation_id===state.value.payload.evaluation_id,'Real controller saves native source-qualified keyframes');
+  await state.sequence('options',{name:'Coordinated playback',speed:1.5,loop:true});
+  check(CadLiveState.promptText(state.snapshot()).includes(motionNote.text)&&CadLiveState.promptText(state.snapshot()).includes('Coordinated playback'),'Combined agent snapshot retains note evidence and declarative timeline identity');
+  check(state.value.playback.state==='unapplied'&&!state.value.playing,'Selecting native playback options does not start or claim a displayed sample');
+  await state.sequence('seek',{name:'Coordinated playback',time_s:1});await untilReady(2);await state.contextQueue;
+  const midway=state.value.payload.summary.assembly.motion.dofs;
+  check(midway.find(v=>v.mate_id==='hinge').value===80&&midway.find(v=>v.mate_id==='spindle_joint'&&v.coordinate==='travel_mm').value===15,'Real native controller coordinates both independent interpolated joints');
+  check(midway.find(v=>v.mate_id==='rail').value===8&&midway.find(v=>v.mate_id==='spindle_joint'&&v.coordinate==='angle_deg').value===-40,'Native interpolated geometry honors both declarative couplings');
+  check(state.value.payload.mesh.positions.some((p,i)=>p.some((v,axis)=>v!==committedMesh.positions[i]?.[axis])),'Playback loads actual changed native solid tessellation');
+  check(state.value.presentation.explode.distance_mm===5&&state.value.playback.time_s===1&&state.value.playback.state==='displayed','Native sync atomically identifies displayed pose, explosion and paused timeline time');
+  check(state.value.annotations[0].status==='retired'&&state.value.annotations[0].evaluation_id===motionNote.evaluation_id,'Real joint playback retires the original note anchor without rebinding it to moving geometry');
+  check(state.snapshot().playback.source.model_sha256===state.value.sequences[0].source.model_sha256&&state.snapshot().selection===null,'Agent snapshot contains playback source and no committed draft pick');
+  assert.deepEqual(await tool('cad_read',{document_id:mechanism.document_id}),committedBeforePlayback);checks++;
+  const playbackReopened=new CadLiveState(bridge);playbackReopened.attach('test_view');await untilReady(2,playbackReopened);check(playbackReopened.value.playback.time_s===1&&playbackReopened.value.playback.speed===1.5&&playbackReopened.value.playback.loop&&!playbackReopened.value.playing,'Reopened real controller restores paused position and options');playbackReopened.dispose();
+  const nativeBridgeTool=bridge.tool.bind(bridge);let lostSeekCalls=0;
+  bridge.tool=async(name,args)=>{const result=await nativeBridgeTool(name,args);if(args.action==='sequence'&&args.operation==='seek'){lostSeekCalls++;throw Error('Seek acknowledgement was lost');}return result;};
+  await assert.rejects(state.sequence('seek',{name:'Coordinated playback',time_s:1.5}),/acknowledgement/);checks++;bridge.tool=nativeBridgeTool;await untilReady(2);
+  check(lostSeekCalls===1&&state.value.playback.time_s===1.5&&!state.value.playing,'Actual admitted seek reconciles lost ACK without replay');
   await tool('cad_apply', { document_id: mechanism.document_id, expected_revision: 2, operations: [{ op: 'set_joint_value', assembly_id: 'mechanism', mate_id: 'hinge', coordinate: 'angle_deg', value: 50 }] });
   await untilReady(3);
   check(!state.value.payload.draft && state.value.payload.summary.assembly.motion.dofs[0].value === 50, 'External revision supersedes draft through the real controller');
+  check(state.value.playback===null&&state.value.sequences[0].source.revision===2,'External revision retires playback and retains its historical definition');
+  await assert.rejects(state.sequence('seek',{name:'Coordinated playback',time_s:1}),error=>error.code==='stale_selection');checks++;
+  // Extended appearance/preset controller smoke against the actual native process.
+  const reviewHead=readFileSync(join(workspace,'documents',mechanism.document_id,'HEAD.json'),'utf8');
+  const colors={default_color:[.2,.5,.7],parts:[{part_id:'spindle',color:[1,.1,.05]}]};
+  await state.setAppearance(colors);state.setCamera({yaw:1,pitch:.4,zoom:1.7,pan:[.02,-.01]});
+  await state.preset('save','Assembled overview');
+  check((await tool('cad_context',{view_id:'test_view'})).presets.length===1,'Native/controller preset save captures current persisted settings');
+  const bounds=state.value.payload.summary.bounds_mm,plane={normal:[0,0,1],offset_mm:(bounds.min[2]+bounds.max[2])/2};
+  await state.setPresentation({clip:{...plane,keep:'negative'},explode:{distance_mm:0,directions:[]}});
+  await state.section({action:'section',plane,explode:{distance_mm:0,directions:[]}});
+  const sectionDeadline=Date.now()+45000;
+  while(Date.now()<sectionDeadline&&state.value.section_status?.state!=='succeeded'){
+    await state.pollOnce();
+    if(['failed','cancelled','interrupted'].includes(state.value.section_status?.state))throw Error(state.value.section_status.error?.message||'Section stopped');
+    await new Promise(resolve=>setTimeout(resolve,25));
+  }
+  check(state.value.section_status?.state==='succeeded','Actual native cap report is qualified through the current controller');
+  const report=state.value.section_status.result;
+  await state.preset('save','Section overview');
+  await state.setAppearance({default_color:[.8,.4,.2],parts:[]});state.setCamera({yaw:2,pitch:.5,zoom:2.5,pan:[0,0]});await state.showAll();
+  await state.preset('apply','Section overview');
+  check(state.value.section_status.result===report,'Actual native same-plane preset apply retains the cached qualified cap report');
+  assert.deepEqual(state.value.appearance,colors);checks++;
+  check(Math.abs(state.value.camera.zoom-1.7)<1e-12,'Actual preset apply restores the native saved camera');
+  const fresh=new CadLiveState(bridge);fresh.attach('test_view');
+  try{await untilReady(3,fresh);check(fresh.value.presets.length===2&&fresh.value.appearance.parts[0].part_id==='spindle','Fresh controller restores persisted native presets and colors');}
+  finally{fresh.dispose();}
+  await state.preset('apply','Assembled overview');
+  check(!state.value.section&&!state.value.section_status?.result&&!state.value.presentation.clip,'Actual native different-plane preset retires current cap metadata');
+  check(readFileSync(join(workspace,'documents',mechanism.document_id,'HEAD.json'),'utf8')===reviewHead,'Colors, native presets, sections and review changes preserve raw source HEAD');
+  await state.previewPose('folded');await untilReady(3);
+  await state.preset('list');check(state.value.presets.length===2,'Actual native preset listing accepts the qualified current draft');
+  await state.preset('delete','Section overview');check(state.value.presets.length===1,'Actual native preset deletion works during a qualified draft');
+  await assert.rejects(state.preset('save','Draft'),/pose/);checks++;
+  await state.resetMotion();await untilReady(3);
+  state.invalidate();await tool('cad_show',{view_id:'test_view',document_id:'plate'});await untilReady(2);
+  check(!state.value.presets.length&&!state.value.appearance.parts.length&&state.value.appearance.default_color[0]===.66,'Actual native retarget clears presets and restores default appearance');
+
   console.log(`${checks} real MCP live-loop checks passed`);
 } finally {
   state.dispose(); bridge.dispose(); child.stdin.end();

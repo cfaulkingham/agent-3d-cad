@@ -765,8 +765,8 @@ Json drawing_schema() {
   const Json id={{"type","string"},{"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
   auto text=[](int max){return Json{{"type","string"},{"pattern","^[ -~]+$"},{"minLength",1},{"maxLength",max}};};
   const auto section=closed({{"axis",{{"enum",{"x","y","z"}}}},{"offset",scalar_ref}},{"axis","offset"});
-  const Json explode={{"type","array"},{"minItems",1},{"maxItems",64},
-    {"items",closed({{"part_id",id},{"translation",translation_schema}},{"part_id","translation"})}};
+  const Json explode={{"type","array"},{"minItems",1},{"maxItems",assembly_leaf_limit},
+    {"items",closed({{"part_id",occurrence_schema()},{"translation",translation_schema}},{"part_id","translation"})}};
   const Json view={{"oneOf",Json::array({
     closed({{"id",id},{"orientation",{{"enum",{"top","front","right","isometric"}}}},{"explode",explode}},{"id","orientation"}),
     closed({{"id",id},{"orientation",{{"const","section"}}},{"section",section},{"hatch",{{"type","boolean"}}},{"explode",explode}},{"id","orientation","section"})})}};
@@ -783,7 +783,7 @@ Json drawing_schema() {
     {"hidden_lines",{{"type","boolean"}}},{"formats",{{"type","array"},{"minItems",1},{"maxItems",3},{"uniqueItems",true},{"items",{{"enum",{"svg","pdf","dxf"}}}}}},
     {"views",{{"type","array"},{"minItems",1},{"maxItems",6},{"items",view}}},{"dimensions",{{"type","array"},{"maxItems",32},{"items",dimension}}},
     {"bom",{{"type","boolean"}}},
-    {"balloons",{{"type","array"},{"maxItems",64},{"items",closed({{"view",id},{"part_id",id},{"anchor",translation_schema},{"label",point_schema}}, {"view","part_id","anchor","label"})}}},
+    {"balloons",{{"type","array"},{"maxItems",64},{"items",closed({{"view",id},{"part_id",occurrence_schema()},{"anchor",translation_schema},{"label",point_schema}}, {"view","part_id","anchor","label"})}}},
     {"general_tolerances",general},
     {"material",text(80)},{"notes",{{"type","array"},{"maxItems",6},{"items",text(120)}}}});
 }
@@ -865,16 +865,25 @@ Json normalize_drawing(const Json& spec,const Json& model) {
       for(const auto& feature:model.at("features")) if(feature.at("id")==model.at("output") && feature.at("type")=="assembly") assembly=&feature;
       if(!assembly) invalid("Exploded views require an assembly output",{{"view",id}});
       const auto& moves=view.at("explode");
-      if(!moves.is_array() || moves.empty() || moves.size()>64) invalid("Exploded views require one to 64 part translations",{{"view",id}});
+      if(!moves.is_array() || moves.empty() || moves.size()>assembly_leaf_limit) invalid("Exploded views require one to 1024 occurrence translations",{{"view",id}});
+      const auto structure=assembly_structure(model);
       std::set<std::string> part_ids,moved;
-      for(const auto& part:assembly->at("parts")) part_ids.insert(text_field(part,"id"));
+      for(const auto& part:structure) part_ids.insert(text_field(part,"id"));
+      std::map<std::string,std::array<double,3>> expanded;
       normalized["explode"]=Json::array();
       for(const auto& move:moves) {
-        fields(move,{"part_id","translation"});const auto part_id=text_field(move,"part_id");model_identifier(part_id);
+        fields(move,{"part_id","translation"});const auto part_id=text_field(move,"part_id");validate_occurrence_path(part_id);
         if(!part_ids.contains(part_id)) invalid("Exploded view references an unknown assembly part",{{"view",id},{"part_id",part_id}});
         if(!moved.insert(part_id).second) invalid("Exploded view repeats an assembly part",{{"view",id},{"part_id",part_id}});
-        normalized["explode"].push_back({{"part_id",part_id},{"translation",vector3(move.at("translation"),parameters)}});
+        const auto delta=vector3(move.at("translation"),parameters);
+        for(const auto& node:structure) if(node.at("kind")=="part") {
+          const auto leaf=text_field(node,"id");
+          if(leaf==part_id || leaf.starts_with(part_id+"/")) {
+            auto& sum=expanded[leaf];for(int axis=0;axis<3;++axis) sum[axis]+=delta[axis];
+          }
+        }
       }
+      for(const auto& [path,delta]:expanded) normalized["explode"].push_back({{"part_id",path},{"translation",delta}});
     }
     result["views"].push_back(std::move(normalized));
   }

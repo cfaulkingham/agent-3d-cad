@@ -9,9 +9,10 @@ const source=fs.readFileSync(new URL('../web/renderer.js',import.meta.url),'utf8
 let checks=0;
 function test(name,action){action();checks++;console.log('PASS '+name);}
 const scheduled=new Map();let nextFrame=1;
-const environment={console,requestAnimationFrame:callback=>{const id=nextFrame++;scheduled.set(id,callback);return id;},cancelAnimationFrame:id=>scheduled.delete(id),devicePixelRatio:2};
+const environment={console,TextEncoder,requestAnimationFrame:callback=>{const id=nextFrame++;scheduled.set(id,callback);return id;},cancelAnimationFrame:id=>scheduled.delete(id),devicePixelRatio:2};
 vm.runInNewContext(source,environment);
-const Renderer=environment.CadRenderer,{validate,prepare,visibleModel,project,screenRay,pick,trace,camera,gpuData}=Renderer.math;
+vm.runInNewContext(fs.readFileSync(new URL('../web/state.js',import.meta.url),'utf8'),environment);
+const Renderer=environment.CadRenderer,{validate,prepare,visibleModel,project,screenRay,pick,trace,camera,gpuData,presentedModel,defaultPresentation,clipSegment,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds}=Renderer.math;
 const defaultCamera={yaw:0,pitch:Math.PI/2,zoom:1,pan:[0,0]};
 function evaluation(positions,triangles,triangleFaces,edges=[]) {
   return {schema_version:1,document_id:'test',revision:1,evaluation_id:'evaluation-a',feature_id:'part',
@@ -136,11 +137,122 @@ test('assembly ownership is validated before presentation filtering',()=>{
     const data=assembly();alter(data);assert.throws(()=>prepare(data));
   }
 });
+test('nested occurrence ownership remains selectable and hierarchy rejects missing or false parents',()=>{
+  const data=assembly();
+  data.summary.assembly.parts.forEach(part=>{part.id='module/'+part.id;});
+  for(const item of [...data.topology.faces,...data.topology.edges,...data.mesh.edges])item.part_id='module/'+item.part_id;
+  data.summary.assembly.tree=[{id:'module',input:'subassembly',assembly_id:'machine',parent_id:'',kind:'assembly'},
+    ...data.summary.assembly.parts.map(part=>({id:part.id,input:part.input,assembly_id:'subassembly',parent_id:'module',kind:'part'}))];
+  const model=prepare(data),filtered=visibleModel(model,['module/cover']);
+  const selected=at(filtered,[-.1,-.1,0]);assert.equal(selected.id,'face-1');
+  assert.equal(filtered.geometries.face.get(selected.id).part_id,'module/base');
+  for(const alter of [d=>d.summary.assembly.tree.shift(),d=>d.summary.assembly.tree.pop(),
+    d=>d.summary.assembly.tree[0].kind='part',d=>d.summary.assembly.tree[1].parent_id='',
+    d=>d.summary.assembly.tree[1].id='module/../base']) {
+    const invalid=structuredClone(data);alter(invalid);assert.throws(()=>prepare(invalid));
+  }
+});
+test('clipped faces do not occlude source face picks and reversing the plane selects the other side',()=>{
+  const source=prepare(assembly()),value=defaultPresentation();value.clip={normal:[0,0,1],offset_mm:.25,keep:'negative'};
+  const shown=presentedModel(source,value);assert.equal(at(shown,[-.1,-.1,0]).id,'face-1');
+  value.clip.keep='positive';assert.equal(at(presentedModel(source,value),[-.1,-.1,0]).id,'face-2');
+  value.clip.offset_mm=5;assert.equal(at(presentedModel(source,value),[-.1,-.1,0]).id,null);
+  assert.equal(source.clip,undefined);assert.equal(source.geometries.face.get('face-1').part_id,'base');
+});
+test('edge picking clips segments at their plane crossing and ignores the discarded half',()=>{
+  const source=prepare(assembly()),value=defaultPresentation();value.clip={normal:[1,0,0],offset_mm:0,keep:'negative'};
+  const shown=presentedModel(source,value),edge=shown.edges[1];
+  const cut=clipSegment(shown,[.1,0,0],[-.1,0,0]);assert.ok(Math.abs(cut[0][0])<2e-7);
+  assert.equal(clipSegment(shown,[.1,0,0],[.2,0,0]),null);
+  assert.equal(at(shown,[-.1,-.1,0],'edge').id,'edge-2');
+  assert.equal(at(shown,[.04,-.1,0],'edge').id,null);
+  assert.equal(edge.points.length,source.edges[1].points.length);
+});
+test('exploded parts retain source measurements, references and independent vertex ownership',()=>{
+  const data=assembly();data.mesh.triangles[1]=[0,1,2];data.mesh.positions=data.mesh.positions.slice(0,3);
+  const raw=JSON.stringify(data),full=prepare(data),value=defaultPresentation();value.explode={distance_mm:4,directions:[{part_id:'base',direction:[-1,0,0]},{part_id:'cover',direction:[1,0,0]}]};
+  const shown=presentedModel(full,value);assert.equal(shown.positions.length,18);assert.equal(shown.identity,full.identity);
+  assert.equal(shown.positions[3*shown.indices[0]],full.positions[0]-1);assert.equal(shown.positions[3*shown.indices[3]],full.positions[0]+1);
+  const c={...defaultCamera,zoom:.2},point=project([-.1+1,-.1,0],c,400,400);
+  assert.equal(pick(shown,c,400,400,point[0],point[1]).id,'face-2');
+  assert.equal(shown.geometries.face.get('face-2'),full.geometries.face.get('face-2'));assert.equal(JSON.stringify(data),raw);
+});
+test('large exploded depth uses the same extended range for CPU picking and GPU coordinates',()=>{
+  const full=prepare(assembly()),value=defaultPresentation();value.explode={distance_mm:20,directions:[{part_id:'base',direction:[0,0,-1]}]};
+  const shown=presentedModel(visibleModel(full,['cover']),value);assert.ok(shown.depthExtent>5);
+  const point=project([-.1,-.1,-5],defaultCamera,400,400);assert.equal(pick(shown,defaultCamera,400,400,point[0],point[1]).id,'face-1');
+  assert.equal(shown.bounds.min[2],-5);assert.equal(full.positions[2],0);
+});
+test('presentation rejects non-unit directions, unknown/duplicate owners, arbitrary fields and invalid distances',()=>{
+  const full=prepare(assembly());
+  for(const mutate of [v=>v.clip={normal:[0,0,0],offset_mm:0,keep:'positive'},v=>v.explode.distance_mm=-1,v=>v.explode.distance_mm=Infinity,
+    v=>v.explode.directions=[{part_id:'unknown',direction:[1,0,0]}],v=>v.explode.directions=[{part_id:'base',direction:[1,0,0]},{part_id:'base',direction:[0,1,0]}],v=>v.script='bad']) {
+    const value=defaultPresentation();mutate(value);assert.throws(()=>presentedModel(full,value));
+  }
+  const value=defaultPresentation();value.explode.distance_mm=1;assert.throws(()=>presentedModel(prepare(base),value));
+});
+function sectionSettings(offset=.25) {const value=defaultPresentation();value.clip={normal:[0,0,1],offset_mm:offset,keep:'negative'};return value;}
+function capResult(data=base,offset=.25,owner=null) {
+  const positions=flat.map(([x,y])=>[x,y,offset]),lengths=[2,Math.sqrt(8),2],boundary=lengths.reduce((a,b)=>a+b,0);
+  const curves=positions.map((a,i)=>{const b=positions[(i+1)%3];return {id:'section-'+(i+1),part_id:owner,solid_index:1,curve_kind:'line',length_mm:lengths[i],center_mm:a.map((v,k)=>(v+b[k])/2),bounds_mm:{min:a.map((v,k)=>Math.min(v,b[k])),max:a.map((v,k)=>Math.max(v,b[k]))},degenerate:false,points:[a,b]};});
+  return {document_id:data.document_id,revision:data.revision,evaluation_id:data.evaluation_id,feature_id:data.feature_id,kernel_version:'8.0.1',model_sha256:'a'.repeat(64),native_build:'native-test-build',
+    report:{schema_version:1,units:'mm',action:'section',method:'native_BRep_planar_section',coordinate_space:'committed_source_pose',plane_coordinate_space:'displayed_world_mm',coverage:owner?'explicit_leaf_subset':'feature_solids',area_semantics:'sum_of_solid_sections',plane:{normal:[0,0,1],offset_mm:offset},explode:{distance_mm:0,directions:[]},
+      sections:[{part_id:owner,source_plane_offset_mm:offset,displacement_mm:[0,0,0],area_mm2:2,boundary_length_mm:boundary,region_count:1,curve_count:3,contact_points:[],status:'area'}],regions:[{id:'cap-1',part_id:owner,solid_index:1,area_mm2:2,perimeter_mm:boundary,center_mm:[-1/3,-1/3,offset],wire_count:1}],curves,
+      mesh:{positions,triangles:[[0,1,2]],triangle_regions:['cap-1'],linear_deflection_mm:.1},area_mm2:2,boundary_length_mm:boundary,status:'area',selection_lifetime:'section_result',tolerance_mm:1e-7,point_tolerance_mm:1e-6}};
+}
+function withSection(data,result,settings=sectionSettings(),hidden=[]) {const full=prepare(data),model=presentedModel(visibleModel(full,hidden),settings);validateSection(result,full,settings);model.section=sectionModel(result,full,hidden);return model;}
+test('section geometry retains plane/explosion but ignores kept side, direction order and zero-distance overrides',()=>{
+  const value=sectionSettings(),other=structuredClone(value);other.clip.keep='positive';other.explode.directions=[{part_id:'base',direction:[1,0,0]}];
+  assert.equal(JSON.stringify(sectionGeometry(value)),JSON.stringify(sectionGeometry(other)));assert.equal(sectionGeometry(defaultPresentation()),null);
+  value.explode={distance_mm:1,directions:[{part_id:'z',direction:[1,0,0]},{part_id:'a',direction:[0,1,0]}]};other.explode={distance_mm:1,directions:[...value.explode.directions].reverse()};
+  assert.equal(JSON.stringify(sectionGeometry(value)),JSON.stringify(sectionGeometry(other)));
+});
+test('native section caps occlude original faces without inventing topology references',()=>{
+  const result=capResult(),raw=JSON.stringify(base),model=withSection(base,result),hit=at(model,[-.1,-.1,0]);
+  assert.equal(hit.id,null);assert.equal(hit.ambiguous,false);assert.equal(hit.section,true);assert.equal(model.geometries.face.has('cap-1'),false);
+  assert.equal(JSON.stringify(base),raw);assert.equal(result.report.area_mm2,2);
+  assert.throws(()=>trace(model,screenRay(180,220,defaultCamera,400,400),{remaining:1}),/work limit/);
+});
+test('source edge deflection allowance cannot expose geometry behind a native cap',()=>{
+  const data=structuredClone(base);data.mesh.linear_deflection_mm=.1;data.mesh.edges=[{id:'edge-1',points:[[-.8,-.4,.24],[.2,-.4,.24]]}];data.topology.edges=[{id:'edge-1'}];
+  const full=presentedModel(prepare(data),sectionSettings());assert.equal(at(full,[-.1,-.1,0],'edge').id,'edge-1');
+  const capped=withSection(data,capResult(data));const hit=at(capped,[-.1,-.1,0],'edge');assert.equal(hit.id,null);assert.equal(hit.section,true);
+});
+test('hidden cap owners stop drawing and occluding without shrinking section coverage',()=>{
+  const data=assembly();data.summary.assembly.parts[1].bounds_mm.min[2]=0;data.summary.assembly.parts[1].bounds_mm.max[2]=1;const result=capResult(data,.25,'cover');const shown=withSection(data,result),hidden=withSection(data,result,sectionSettings(),['cover']);
+  assert.equal(at(shown,[-.1,-.1,0]).section,true);assert.equal(at(hidden,[-.1,-.1,0]).id,'face-1');assert.equal(hidden.section.indices.length,0);assert.equal(hidden.section.edges.length,0);assert.equal(result.report.sections.length,1);
+});
+test('native section rejects stale identity, unsafe fields, malformed geometry and false coverage',()=>{
+  const full=prepare(base),value=sectionSettings();
+  for(const mutate of [r=>r.evaluation_id='old',r=>r.model_sha256='bad',r=>r.report.method='mesh_slice',r=>r.report.plane.offset_mm=.5,r=>r.report.mesh.positions[0][2]+=.01,r=>r.report.mesh.positions[0][0]=10,
+    r=>r.report.regions[0].part_id='missing',r=>r.report.mesh.triangle_regions[0]='face-1',r=>r.report.regions[0].id='face-1',r=>r.report.area_mm2=3,
+    r=>r.report.sections[0].displacement_mm[0]=1,r=>r.report.curves[0].center_mm[2]=.5,r=>r.report.curves[0].points[0][0]=Infinity,r=>r.report.mesh.triangles[0][0]=100,
+    r=>r.report.mesh.positions=Array(200001).fill([0,0,.25]),r=>r.report.curves[0].points=Array(200001).fill([0,0,.25]),r=>r.report.sections[0].contact_points=Array(10001).fill([0,0,.25]),
+    r=>r.report.script='bad',r=>r.report.mesh.script='bad',r=>r.report.curves[0].script='bad',r=>r.report.coverage='all_assembly_leaves',r=>r.report.regions[0].wire_count=0]) {
+    const invalid=capResult();mutate(invalid);assert.throws(()=>validateSection(invalid,full,value));
+  }
+  assert.throws(()=>validateSection(capResult(),full,defaultPresentation()));
+});
+test('finite unused OCCT triangulation vertices remain qualified without drawing or picking them',()=>{
+  const result=capResult();result.report.mesh.positions.push([2,2,.25]);const model=withSection(base,result);assert.equal(model.section.positions.length,9);assert.equal(model.section.indices.length,3);
+  result.report.mesh.positions[3][2]=1;assert.throws(()=>validateSection(result,prepare(base),sectionSettings()),/Unused native cap vertex/);
+});
+test('combined native section arrays retain the 8 MiB report limit',()=>{
+  const result=capResult();result.report.curves[0].points=Array(200000).fill([.3333333333333333,.3333333333333333,.25]);
+  assert.ok(JSON.stringify(result.report).length>8*1024*1024);assert.throws(()=>validateSection(result,prepare(base),sectionSettings()),/byte limit/);
+});
+test('empty and tangent native sections retain honest status without invented cap geometry',()=>{
+  for(const tangent of [false,true]) {
+    const result=capResult(),r=result.report;r.regions=[];r.mesh.positions=[];r.mesh.triangles=[];r.mesh.triangle_regions=[];r.area_mm2=0;r.sections[0].area_mm2=0;r.sections[0].region_count=0;
+    if(!tangent){r.curves=[];r.boundary_length_mm=0;r.sections[0].boundary_length_mm=0;r.sections[0].curve_count=0;}r.status=r.sections[0].status=tangent?'tangent':'empty';
+    const model=withSection(base,result);assert.equal(model.section.indices.length,0);assert.equal(model.section.edges.length,tangent?3:0);assert.equal(at(model,[-.1,-.1,0]).id,'face-1');
+  }
+});
 function mockCanvas({webgl2=true,unavailable=false}={}) {
   const stats={createdBuffers:0,deletedBuffers:0,createdPrograms:0,deletedPrograms:0,draws:0,listeners:new Map(),contexts:[],dimensions:[]};let id=0;
   const gl=new Proxy({NO_ERROR:0,COMPILE_STATUS:1,LINK_STATUS:2,MAX_RENDERBUFFER_SIZE:3,MAX_VIEWPORT_DIMS:4,ALIASED_LINE_WIDTH_RANGE:5,
     createShader:()=>({id:++id}),createProgram:()=>{stats.createdPrograms++;return {id:++id};},createBuffer:()=>{stats.createdBuffers++;return {id:++id};},deleteBuffer:()=>stats.deletedBuffers++,deleteProgram:()=>stats.deletedPrograms++,
-    getShaderParameter:()=>true,getProgramParameter:()=>true,getUniformLocation:()=>1,getAttribLocation:(_,name)=>({aPosition:0,aNormal:1,aEntity:2}[name]),getError:()=>0,
+    getShaderParameter:()=>true,getProgramParameter:()=>true,getUniformLocation:()=>1,getAttribLocation:(_,name)=>({aPosition:0,aNormal:1,aEntity:2,aColor:3}[name]),getError:()=>0,
     getParameter:name=>name===3?4096:name===4?[4096,4096]:name===5?[1,1]:0,drawArrays:()=>stats.draws++,viewport:(_,__,w,h)=>stats.dimensions.push([w,h]),
   },{get:(target,key)=>key in target?target[key]:(()=>{})});
   const canvas={width:0,height:0,getContext:name=>{stats.contexts.push(name);return unavailable||(!webgl2&&name==='webgl2')?null:gl;},getBoundingClientRect:()=>({left:0,top:0,width:640,height:480}),
@@ -155,6 +267,50 @@ test('WebGL2 loads, highlights, captures, and releases resources',()=>{
   assert.match(renderer.capture(),/^data:image\/png/);renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);assert.equal(stats.createdPrograms,stats.deletedPrograms);assert.equal(stats.listeners.size,0);
 });
 test('WebGL1 fallback uses the same renderer API',()=>{const {canvas,stats}=mockCanvas({webgl2:false}),renderer=new Renderer(canvas);renderer.load(base);flush();assert.deepEqual(stats.contexts,['webgl2','webgl']);assert.ok(stats.draws>0);renderer.destroy();});
+test('clipping updates uniforms/picking without rebuilding geometry buffers and survives graphics recovery',()=>{
+  const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(assembly());const original=renderer.fullModel,created=stats.createdBuffers;
+  const settings=defaultPresentation();settings.clip={normal:[0,0,1],offset_mm:.25,keep:'negative'};renderer.setPresentation(settings);flush();
+  assert.equal(stats.createdBuffers,created);assert.equal(renderer.fullModel,original);assert.ok(renderer.model.clip);
+  settings.explode.distance_mm=2;renderer.setPresentation(settings);assert.ok(stats.createdBuffers>created);const position=Array.from(renderer.model.positions);
+  const invalidated=[renderer.resources.faces,renderer.resources.edges].filter(Boolean).length;
+  stats.listeners.get('webglcontextlost')({preventDefault:()=>{}});stats.listeners.get('webglcontextrestored')();flush();assert.deepEqual(Array.from(renderer.model.positions),position);assert.ok(renderer.model.clip);
+  renderer.setHiddenParts(['base','cover']);flush();assert.equal(renderer.resources.faceCount,0);renderer.setHiddenParts([]);assert.ok(renderer.model.clip);renderer.destroy();assert.equal(stats.createdBuffers-stats.deletedBuffers,invalidated,'The lost context invalidates its old buffers; all subsequent buffers are deleted');
+});
+test('appearance validates finite opaque RGB and current leaf ownership before rendering',()=>{
+  const full=prepare(assembly()),style={default_color:[.1,.2,.3],parts:[{part_id:'base',color:[1,0,0]},{part_id:'cover',color:[0,1,0]}]},copy=JSON.stringify(style),colors=appearanceData(full,appearance(style,full));
+  assert.deepEqual(Array.from(colors.slice(0,9)),[1,0,0,1,0,0,1,0,0]);assert.deepEqual(Array.from(colors.slice(9)),[0,1,0,0,1,0,0,1,0]);assert.equal(JSON.stringify(style),copy);assert.equal(appearanceData(full,defaultAppearance()).length,0);
+  for(const alter of [v=>v.default_color=[NaN,0,0],v=>v.default_color=[0,2,0],v=>v.parts[0].color=[1,0],v=>v.parts[0].part_id='missing',v=>v.parts.push(v.parts[0]),v=>v.opacity=.5,v=>v.parts[0].script='bad',v=>v.parts=Array(1025).fill(v.parts[0])]){const bad=structuredClone(style);alter(bad);assert.throws(()=>appearance(bad,full));}
+  assert.equal(appearance(style,prepare(base),{prune:true}).parts.length,0);assert.throws(()=>appearance(style,prepare(base)));assert.equal(appearance(style,full).parts.length,2);
+});
+test('part colors preserve native section buffers, original picking, opaque occlusion and capture',()=>{
+  const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas),data=assembly();data.summary.assembly.parts[1].bounds_mm.min[2]=0;data.summary.assembly.parts[1].bounds_mm.max[2]=1;
+  renderer.load(data);renderer.setPresentation(sectionSettings());renderer.setSection(capResult(data,.25,'cover'));const original=renderer.fullModel,sourceBuffers=[renderer.resources.faces,renderer.resources.edges],capBuffers=[renderer.resources.capFaces,renderer.resources.capEdges],section=renderer.sectionResult;
+  const style={default_color:[.1,.2,.3],parts:[{part_id:'base',color:[1,0,0]},{part_id:'cover',color:[0,1,0]}]};renderer.setAppearance(style);assert.ok(renderer.resources.colors);assert.deepEqual([renderer.resources.faces,renderer.resources.edges],sourceBuffers);assert.deepEqual([renderer.resources.capFaces,renderer.resources.capEdges],capBuffers);assert.equal(renderer.sectionResult,section);assert.equal(renderer.fullModel,original);assert.equal(at(renderer.model,[-.1,-.1,0]).section,true);
+  const created=stats.createdBuffers;renderer.setAppearance(style);assert.equal(stats.createdBuffers,created);renderer.setHiddenParts(['cover']);assert.equal(at(renderer.model,[-.1,-.1,0]).id,'face-1');assert.equal(renderer.model.geometries.face.get('face-1').part_id,'base');assert.equal(renderer.resources.capFaces,null);assert.ok(renderer.resources.colors);assert.match(renderer.capture(),/^data:image\/png/);
+  renderer.setHiddenParts([]);const invalidated=5;stats.listeners.get('webglcontextlost')({preventDefault:()=>{}});stats.listeners.get('webglcontextrestored')();flush();assert.ok(renderer.resources.colors&&renderer.resources.capFaces);assert.equal(renderer.appearance.parts.length,2);assert.equal(renderer.sectionResult,section);
+  const saved=JSON.stringify(renderer.appearance),bad=structuredClone(style);bad.parts[0].part_id='missing';assert.throws(()=>renderer.setAppearance(bad));assert.equal(JSON.stringify(renderer.appearance),saved);
+  renderer.setAppearance(defaultAppearance());assert.equal(renderer.resources.colors,null);assert.equal(renderer.sectionResult,section);renderer.destroy();assert.equal(stats.createdBuffers-stats.deletedBuffers,invalidated);
+});
+test('default surface color needs no extra buffer and is reset by a new source load',()=>{
+  const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);const created=stats.createdBuffers;renderer.setAppearance({default_color:[.8,.2,.1],parts:[]});assert.equal(stats.createdBuffers,created);assert.equal(renderer.resources.colors,null);assert.deepEqual(Array.from(renderer.appearance.default_color),[.8,.2,.1]);
+  renderer.load({...base,evaluation_id:'next'});assert.deepEqual(Array.from(renderer.appearance.default_color),[.66,.75,.8]);renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);
+});
+test('section buffers render, capture, remain readonly, survive context recovery and retire atomically',()=>{
+  const {canvas,stats}=mockCanvas(),picks=[],renderer=new Renderer(canvas,{onPick:(...v)=>picks.push(v)});renderer.load(base);renderer.setPresentation(sectionSettings());const sourceBuffers=[renderer.resources.faces,renderer.resources.edges],result=capResult(),original=renderer.fullModel;
+  renderer.setSection(result);flush();assert.equal(stats.createdBuffers,4);assert.deepEqual([renderer.resources.faces,renderer.resources.edges],sourceBuffers);assert.equal(renderer.resources.capFaceCount,3);assert.equal(renderer.resources.capEdgeCount,6);assert.equal(renderer.fullModel,original);
+  const created=stats.createdBuffers,section=renderer.model.section;renderer.setSection(result);renderer.setCamera(defaultCamera);assert.equal(stats.createdBuffers,created);
+  renderer._pick(...project([-.1,-.1,0],defaultCamera,640,480));assert.equal(picks[0][0],null);assert.equal(picks[0][1].section,true);assert.match(picks[0][1].message,/section surface/);assert.throws(()=>renderer.setSelection({...base,kind:'face',entity_id:'cap-1'}));assert.match(renderer.capture(),/^data:image\/png/);
+  const keep=sectionSettings();keep.clip.keep='positive';renderer.setPresentation(keep);assert.equal(renderer.sectionResult,result);assert.equal(renderer.model.section,section);assert.equal(stats.createdBuffers,created);
+  const invalid=capResult();invalid.evaluation_id='old';assert.throws(()=>renderer.setSection(invalid));assert.equal(renderer.sectionResult,result);
+  const invalidated=4;stats.listeners.get('webglcontextlost')({preventDefault:()=>{}});stats.listeners.get('webglcontextrestored')();flush();assert.equal(renderer.resources.capFaceCount,3);assert.equal(renderer.sectionResult,result);
+  renderer.setPresentation(sectionSettings(.5));assert.equal(renderer.sectionResult,null);assert.equal(renderer.resources.capFaces,null);assert.equal(renderer.model.section,undefined);assert.equal(renderer.fullModel,original);
+  renderer.setPresentation(sectionSettings());renderer.setSection(result);renderer.setSection(null);assert.equal(renderer.resources.capFaces,null);assert.equal(renderer.resources.capEdges,null);renderer.destroy();assert.equal(stats.createdBuffers-stats.deletedBuffers,invalidated);
+});
+test('section GPU buffers follow hidden owners and source reloads',()=>{
+  const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas),data=assembly();data.summary.assembly.parts[1].bounds_mm.min[2]=0;data.summary.assembly.parts[1].bounds_mm.max[2]=1;const result=capResult(data,.25,'cover');renderer.load(data);renderer.setPresentation(sectionSettings());renderer.setSection(result);
+  renderer.setHiddenParts(['cover']);assert.equal(renderer.resources.capFaceCount,0);assert.equal(renderer.resources.capFaces,null);renderer.setHiddenParts([]);assert.equal(renderer.resources.capFaceCount,3);
+  renderer.load({...data,evaluation_id:'new'});assert.equal(renderer.sectionResult,null);assert.equal(renderer.resources.capFaces,null);assert.equal(stats.createdBuffers-stats.deletedBuffers,2);renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);
+});
 test('missing graphics support produces a clear error and never reports ready',()=>{const {canvas}=mockCanvas({unavailable:true}),errors=[],ready=[],renderer=new Renderer(canvas,{onError:e=>errors.push(e),onReady:value=>ready.push(value)});renderer.load(base);flush();assert.match(errors[0].message,/WebGL is unavailable/);assert.equal(ready.length,0);assert.throws(()=>renderer.capture());renderer.destroy();});
 test('ready identifies the successfully drawn evaluation without firing on every frame',()=>{
   const {canvas}=mockCanvas(),ready=[],renderer=new Renderer(canvas,{onReady:value=>ready.push(value)});flush();assert.equal(ready.length,0);
@@ -202,6 +358,43 @@ test('pointer picks emit complete evaluation identity and selected geometry',()=
 test('destroy cancels animation and makes further mutations fail',()=>{
   const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.destroy();const before=scheduled.size;assert.throws(()=>renderer.load(base));flush();assert.equal(before,0);
 });
+function reviewNote(data,anchor={kind:'model',part_id:null,point_mm:[0,0,0],position_semantics:'bounds_center'}){return{id:'ann_1',text:'Inspect clearance <plain text>',document_id:data.document_id,revision:data.revision,evaluation_id:data.evaluation_id,feature_id:data.feature_id,anchor_lifetime:'evaluation',coordinate_space:'committed_source_pose',status:'current',anchor};}
+test('review anchors validate their own source identity, closed fields and UTF-8 bounds',()=>{
+ const full=prepare(base),note=reviewNote(base);assert.equal(annotations([note],full)[0].text,note.text);
+ for(const mutate of [n=>n.evaluation_id='old',n=>n.anchor.point_mm=[9,0,0],n=>n.anchor.part_id='absent',n=>n.anchor.reference={},n=>n.status='active',n=>n.text='é'.repeat(257),n=>n.text='bad\u0001',n=>n.script='x',n=>n.anchor_lifetime='stable',n=>n.revision=0]){const bad=structuredClone(note);mutate(bad);assert.throws(()=>annotations([bad],full));}
+ assert.throws(()=>annotations([note,note],full));assert.throws(()=>annotations(Array(33).fill(note),full));assert.throws(()=>annotations([note],full,{draft:true}));
+ const retired={...note,status:'retired',evaluation_id:'old_evaluation'};assert.equal(annotations([retired],full)[0].status,'retired');assert.equal(annotationLayout([retired],full,defaultPresentation(),defaultCamera,400,400).length,0);
+});
+test('native entity inspection centers must retain the actual resolved owner and coordinates',()=>{
+ const data=assembly();data.topology.faces[0].center_mm=[0,0,0];const full=prepare(data),reference={...full.identity,kind:'face',entity_id:'face-1'},note=reviewNote(data,{kind:'entity',part_id:'base',point_mm:[0,0,0],position_semantics:'entity_center',reference});
+ assert.equal(annotations([note],full).length,1);const bad=structuredClone(note);bad.anchor.point_mm[0]=.1;assert.throws(()=>annotations([bad],full));bad.anchor.point_mm=[0,0,0];bad.anchor.reference.entity_id='face-999';assert.throws(()=>annotations([bad],full));
+ const original=JSON.stringify(data);annotations([note],full);assert.equal(JSON.stringify(data),original);
+});
+test('numbered review pins follow native leaf explosion and filter hidden, clipped and offscreen centers',()=>{
+ const data=assembly(),full=prepare(data),note=reviewNote(data,{kind:'part',part_id:'cover',point_mm:[0,0,.5],position_semantics:'bounds_center'}),settings=defaultPresentation();annotations([note],full);
+ const initial=annotationLayout([note],full,settings,defaultCamera,400,400)[0];settings.explode={distance_mm:1,directions:[{part_id:'cover',direction:[1,0,0]}]};const moved=annotationLayout([note],full,settings,defaultCamera,400,400)[0];assert.ok(moved.x>initial.x);assert.equal(moved.number,1);
+ assert.equal(annotationLayout([note],full,settings,defaultCamera,400,400,['cover']).length,0);settings.clip={normal:[1,0,0],offset_mm:2,keep:'positive'};assert.equal(annotationLayout([note],full,settings,defaultCamera,400,400).length,0);settings.clip.keep='negative';assert.equal(annotationLayout([note],full,settings,defaultCamera,400,400).length,1);
+ assert.equal(annotationLayout([note],full,settings,{...defaultCamera,pan:[20,0]},400,400).length,0);
+});
+test('review pins do not replace source buffers or source picks and PNG capture composites their labels',()=>{
+ const {canvas,stats}=mockCanvas(),draw=[];canvas.ownerDocument={createElement:()=>({getContext:()=>new Proxy({measureText:text=>({width:text.length*6})},{get:(o,k)=>k in o?o[k]:(...args)=>draw.push([k,...args])}),toDataURL:()=> 'data:image/png;base64,withpins'})};
+ const layouts=[],renderer=new Renderer(canvas,{onAnnotations:layout=>layouts.push(layout)});renderer.load(base);renderer.setCamera(defaultCamera);const buffers=stats.createdBuffers,source=renderer.fullModel,note=reviewNote(base);renderer.setAnnotations([note]);flush();assert.equal(stats.createdBuffers,buffers);assert.equal(renderer.fullModel,source);assert.equal(layouts.at(-1)[0].id,note.id);
+ assert.equal(renderer.capture(),'data:image/png;base64,withpins');assert.ok(draw.some(row=>row[0]==='drawImage'&&row[1]===canvas));assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]===note.text));assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]==='1'));
+ assert.equal(at(renderer.model,[-.1,-.1,0]).id,'face-1');renderer.load(base);assert.equal(renderer.annotations.length,0);renderer.destroy();assert.equal(layouts.at(-1).length,0);
+});
+test('review overlays survive graphics restoration and never capture retired anchors',()=>{
+ const {canvas,stats}=mockCanvas(),layouts=[],renderer=new Renderer(canvas,{onAnnotations:layout=>layouts.push(layout)});renderer.load(base);renderer.setAnnotations([reviewNote(base)]);flush();stats.listeners.get('webglcontextlost')({preventDefault(){}});renderer.setAnnotations([reviewNote(base)]);assert.equal(layouts.at(-1).length,0);assert.throws(()=>renderer.capture());stats.listeners.get('webglcontextrestored')();flush();assert.equal(layouts.at(-1).length,1);renderer.setAnnotations([{...reviewNote(base),status:'retired',evaluation_id:'old'}]);assert.match(renderer.capture(),/^data:image\/png/);assert.equal(layouts.at(-1).length,0);renderer.destroy();
+});
+test('captured labels stay in the viewport without covering their numbered pin at edges',()=>{
+ for(const [width,height,pin,textWidth] of [[640,480,{x:550,y:240},300],[640,480,{x:12,y:12},300],[180,100,{x:90,y:50},500],[180,100,{x:90,y:85},500]]) {
+  const box=annotationLabelBounds(pin,textWidth,width,height);
+  assert.ok(box.x>=4&&box.y>=4&&box.x+box.width<=width-4&&box.y+box.height<=height-4);
+  assert.ok(box.x>=pin.x+11||box.x+box.width<=pin.x-11||box.y>=pin.y+11||box.y+box.height<=pin.y-11);
+ }
+ const {canvas}=mockCanvas(),draw=[];canvas.ownerDocument={createElement:()=>({getContext:()=>new Proxy({measureText:text=>({width:text.length*6})},{get:(o,k)=>k in o?o[k]:(...args)=>draw.push([k,...args])}),toDataURL:()=> 'data:image/png;base64,withpins'})};
+ const renderer=new Renderer(canvas);renderer.load(base);renderer.setCamera({...defaultCamera,pan:[.45,0]});renderer.setAnnotations([{...reviewNote(base),text:'Review the current revision housing near the viewport edge.'}]);flush();renderer.capture();
+ const arc=draw.find(row=>row[0]==='arc'),box=draw.find(row=>row[0]==='fillRect');assert.ok(box[1]+box[3]<=arc[1]-arc[3]);assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]==='1'));renderer.destroy();
+});
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {
@@ -226,6 +419,48 @@ if(process.argv[2]) {
       let picked=false;
       for(let i=0;i<model.indices.length;i+=3){const centroid=[0,0,0];for(let j=0;j<3;j++)for(let a=0;a<3;a++)centroid[a]+=model.positions[3*model.indices[i+j]+a]/3;const p=project(centroid,defaultCamera,400,400);if(pick(model,defaultCamera,400,400,p[0],p[1],'face').id){picked=true;break;}}
       assert.ok(picked,'native mesh has a selectable visible face');
+    });
+    test('native declarative exploded playback preserves source mesh, identity and topology owners',()=>{
+      const creation=JSON.parse(fs.readFileSync(new URL('../examples/articulated-arm.create.json',import.meta.url),'utf8'));call('cad_create',creation);
+      const data=call('cad_query',{document_id:creation.document_id,revision:1,kind:'mesh'}),raw=JSON.stringify(data),full=prepare(data),start={time_s:0,presentation:defaultPresentation(),joints:[]};
+      start.presentation.explode.directions=[{part_id:'lever',direction:[1,0,0]}];const end=structuredClone(start);end.time_s=2;end.presentation.explode.distance_mm=20;
+      const sample=environment.CadLiveState.sequenceSample({frames:[start,end]},1),shown=presentedModel(full,sample.presentation);
+      assert.equal(sample.presentation.explode.distance_mm,10);assert.equal(shown.identity,full.identity);assert.equal(JSON.stringify(data),raw);
+      const index=data.mesh.triangle_faces.findIndex(id=>full.geometries.face.get(id).part_id==='lever'),originalVertex=data.mesh.triangles[index][0],presentedVertex=shown.indices[3*index];
+      assert.ok(Math.abs(shown.positions[3*presentedVertex]-full.positions[3*originalVertex]-10/full.span)<1e-6);
+      assert.equal(shown.geometries.face.get(data.mesh.triangle_faces[index]),full.geometries.face.get(data.mesh.triangle_faces[index]));
+      const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(data);renderer.setPresentation(sample.presentation);flush();assert.match(renderer.capture(),/^data:image\/png/);renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);
+    });
+    const ringModel={schema_version:1,units:'mm',parameters:{},features:[{id:'outer',type:'cylinder',radius:5,height:10},{id:'inner',type:'cylinder',radius:2,height:10},{id:'ring',type:'cut',left:'outer',right:'inner'},{id:'backing',type:'box',size:[12,12,1]},
+      {id:'review',type:'assembly',parts:[{id:'housing',input:'ring',placement:{translation:[0,0,0]}},{id:'backing',input:'backing',placement:{translation:[-6,-6,-3]}}],mates:[]}],output:'review'};
+    call('cad_create',{document_id:'section_ring',model:ringModel});
+    const ringEvaluation=call('cad_query',{document_id:'section_ring',revision:1,kind:'mesh'}),ringSource=prepare(ringEvaluation);
+    const measure=(settings,part_ids)=>call('cad_measure',{...ringSource.identity,query:{action:'section',...sectionGeometry(settings),...(part_ids?{part_ids}:{})}});
+    test('actual native annular cap preserves holes, exact area and source picking through its bore',()=>{
+      const settings=sectionSettings(5),result=measure(settings),raw=JSON.stringify(ringEvaluation),model=withSection(ringEvaluation,result,settings);
+      assert.ok(Math.abs(result.report.area_mm2-21*Math.PI)<1e-6);assert.equal(result.report.regions.length,1);assert.equal(result.report.regions[0].wire_count,2);assert.ok(model.section.indices.length>0);
+      const ringPoint=[3/ringSource.span,0,(5-ringSource.center[2])/ringSource.span],borePoint=[0,0,(5-ringSource.center[2])/ringSource.span];
+      assert.equal(at(model,ringPoint).section,true);assert.equal(at(model,ringPoint).id,null);
+      const bore=at(model,borePoint);assert.ok(bore.id);assert.equal(model.geometries.face.get(bore.id).part_id,'backing');assert.equal(bore.section,undefined);
+      const hidden=withSection(ringEvaluation,result,settings,['housing']);assert.equal(at(hidden,ringPoint).section,undefined);assert.equal(hidden.section.indices.length,0);assert.equal(JSON.stringify(ringEvaluation),raw);
+      const {canvas,stats}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(ringEvaluation);renderer.setPresentation(settings);renderer.setSection(result);flush();assert.ok(renderer.resources.capFaceCount>0&&renderer.resources.capEdgeCount>0);assert.match(renderer.capture(),/^data:image\/png/);renderer.destroy();assert.equal(stats.createdBuffers,stats.deletedBuffers);
+    });
+    test('native exploded section aligns scoped source caps with displayed plane and canonical overrides',()=>{
+      const settings=sectionSettings(7);settings.explode={distance_mm:2,directions:[{part_id:'housing',direction:[0,0,1]},{part_id:'backing',direction:[0,0,-1]}]};
+      const result=measure(settings,['housing']),model=withSection(ringEvaluation,result,settings);assert.equal(result.report.coverage,'explicit_leaf_subset');assert.ok(Math.abs(result.report.sections[0].source_plane_offset_mm-5)<1e-8);
+      for(let i=2;i<model.section.positions.length;i+=3)assert.ok(Math.abs(model.section.positions[i]-(7-ringSource.center[2])/ringSource.span)<1e-8);
+      const reordered=structuredClone(settings);reordered.explode.directions.reverse();reordered.clip.keep='positive';assert.equal(validateSection(result,ringSource,reordered),result);
+      const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(ringEvaluation);renderer.setPresentation(settings);renderer.setSection(result);const changed=structuredClone(settings);changed.explode.distance_mm=3;renderer.setPresentation(changed);assert.equal(renderer.sectionResult,null);assert.equal(renderer.resources.capFaces,null);renderer.destroy();
+    });
+    test('actual native tangent and outside sections never invent filled material caps',()=>{
+      for(const settings of [sectionSettings(1e12),{clip:{normal:[1,0,0],offset_mm:5,keep:'negative'},explode:{distance_mm:0,directions:[]}}]) {
+        const result=measure(settings,['housing']),model=withSection(ringEvaluation,result,settings);assert.equal(result.report.regions.length,0);assert.equal(model.section.indices.length,0);
+        if(settings.clip.normal[0]===1){assert.equal(result.report.status,'tangent');assert.ok(result.report.curves.length>0);assert.ok(model.section.edges.length>0);assert.ok(result.report.boundary_length_mm>9.99);}else assert.equal(result.report.status,'empty');
+      }
+    });
+    test('actual native point tangency remains contact data with no invented cap or curve',()=>{
+      const n=1/Math.sqrt(3),settings={clip:{normal:[n,n,n],offset_mm:10*n,keep:'negative'},explode:{distance_mm:0,directions:[]}},result=measure(settings,['backing']),model=withSection(ringEvaluation,result,settings);
+      assert.equal(result.report.status,'tangent');assert.equal(result.report.regions.length,0);assert.equal(result.report.curves.length,0);assert.equal(result.report.sections[0].contact_points.length,1);assert.equal(model.section.indices.length,0);assert.equal(model.section.edges.length,0);
     });
     // Edge polylines and face triangulations are sampled independently within
     // the kernel's linear deflection, so curved edges can sit slightly behind

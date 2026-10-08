@@ -231,13 +231,13 @@ int main() {
       require(hits()==Json::array({false,false}) && !diagnostics.at("projection_hit"),"Cold views are both projected");
       const auto keys=diagnostics.at("projection_keys");
       require(keys.size()==2 && keys[0]!=keys[1],"Each view has its own projection key");
-      require(entries(root)==3,"One geometry entry and one projection entry per view");
+      require(entries(root)==5,"Two feature entries, one model entry and one projection entry per view");
       const auto front_entry=read_cache(root,keys[0].get<std::string>());
       require(front_entry && front_entry->at("views").size()==1,"A projection entry holds exactly one view");
       evaluate_model(views.path,model,request(Json::array({front,top,right})),&diagnostics);
       require(hits()==Json::array({true,true,false}) && !diagnostics.at("projection_hit"),"Adding a view projects only that view");
       require(diagnostics.at("projection_keys")[0]==keys[0] && diagnostics.at("projection_keys")[1]==keys[1],"Existing views keep their keys");
-      require(entries(root)==4 && read_cache(root,keys[0].get<std::string>())==front_entry,"Existing entries are reused unchanged");
+      require(entries(root)==6 && read_cache(root,keys[0].get<std::string>())==front_entry,"Existing feature/model/view entries are reused unchanged");
       evaluate_model(views.path,model,request(Json::array({top,front})),&diagnostics);
       require(hits()==Json::array({true,true}) && diagnostics.at("projection_hit"),"Reordering views reuses their projections");
       evaluate_model(views.path,model,request(Json::array({front,right})),&diagnostics);
@@ -253,7 +253,9 @@ int main() {
       const auto cold_three=evaluate_model(cold_workspace.path,model,request_three,&diagnostics);
       require(hits()==Json::array({false,false,false}),"A fresh workspace projects every view");
       const auto assembled=evaluate_model(views.path,model,request_three,&diagnostics);
-      require(diagnostics.at("projection_hit") && assembled==cold_three,"Per-view cache entries reproduce a cold drawing exactly");
+      require(diagnostics.at("projection_hit"),"Per-view cache entries are reused");
+      equivalent(assembled.at("summary"),cold_three.at("summary"));
+      require(assembled.at("drawing")==cold_three.at("drawing"),"Per-view cache entries reproduce every cold drawing artifact exactly");
     }
     {
       // Uncached views of one drawing are projected by separate worker processes
@@ -267,6 +269,9 @@ int main() {
       const auto fast=evaluate_model(parallel.path,model,three,&diagnostics);
       require(diagnostics.at("projection_workers").get<int>()>=2,"Uncached views are projected by several workers");
       require(diagnostics.at("projection_hits")==Json::array({false,false,false}) && !diagnostics.at("projection_hit"),"Cold views are all reported as projected");
+      require(diagnostics.at("projection_features").size()==3,"Each cold projection worker records its dependency decisions");
+      for(const auto& worker:diagnostics.at("projection_features"))
+        require(worker.at("feature_hits")==Json({{"base",false},{"bore",false}}),"Cold independent workers build the complete feature graph");
       {
         // Occupy three of the four worker slots: only the coordinator's own is left.
         directory(serial.path/".workers");
@@ -289,7 +294,11 @@ int main() {
       evaluate_model(partial.path,model,request(Json::array({front})),&diagnostics);
       const auto assembled=evaluate_model(partial.path,model,three,&diagnostics);
       require(diagnostics.at("projection_hits")==Json::array({true,false,false}) && diagnostics.at("projection_workers").get<int>()>=2,"Missing views are projected in parallel beside cached ones");
-      require(assembled==fast,"A partly cached drawing equals a cold one");
+      require(diagnostics.at("projection_features").size()==2,"Only missing views have new projection-worker evidence");
+      for(const auto& worker:diagnostics.at("projection_features"))
+        require(worker.at("feature_hits")==Json({{"base",true},{"bore",true}}),"New projection workers restore previously published exact dependencies");
+      equivalent(assembled.at("summary"),fast.at("summary"));
+      require(assembled.at("drawing")==fast.at("drawing"),"A partly cached drawing reproduces every cold artifact exactly");
       // One failing view fails the whole drawing with that view named, and nothing is published.
       Temp failing;
       try { evaluate_model(failing.path,model,request(Json::array({front,bad,top})),&diagnostics); require(false,"A failing view must fail the drawing"); }

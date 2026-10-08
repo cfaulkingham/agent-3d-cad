@@ -278,4 +278,87 @@ with tempfile.TemporaryDirectory(prefix='cad-robot-') as workspace:
     check(job['state']=='succeeded', 'Robot export works through bounded jobs')
     check(Path(job['result']['path']).read_bytes() == Path(results['urdf']['path']).read_bytes(), 'Historical export preserves frames after later pose commit')
     check(call('cad_read', dict(document_id='robot'))['revision']==2, 'Historical export preserves current HEAD')
+
+    # Three-level composition: repeated articulated definitions, independently
+    # posed definitions, moving whole subassemblies and multiple grounded roots.
+    # Expected placements come from native geometry, never exported frame data.
+    nested = copy.deepcopy(model)
+    alternate = copy.deepcopy(model['features'][1]);alternate['id'] = 'other_mechanism'
+    for mate in alternate['mates']:
+        if mate['id'] == 'hinge': mate['angle_deg'] = -10
+        if mate['id'] == 'shaft': mate['travel_mm'] = 2
+    nested['features'].append(alternate)
+    machine = dict(id='machine', type='assembly', parts=[
+        dict(id='left', input='mechanism', placement=dict(translation=[10,80,-20], rotation=dict(origin=[3,4,2],axis=[1,2,3],angle_deg=17))),
+        dict(id='right', input='mechanism'), dict(id='other',input='other_mechanism'),
+        dict(id='spare', input='box',placement=dict(translation=[200,30,-20]))], mates=[
+        dict(id='swing',type='revolute',parent='left',child='right',angle_deg=-15,angle_limits_deg=[-80,80],
+             parent_frame=plane([20,2,7],(1,0,0),(0,0,1)),child_frame=plane([1,-2,4],(0,1,0)),offset=[1,2,-3]),
+        dict(id='lift',type='cylindrical',parent='right',child='other',angle_deg=5,angle_limits_deg=[-30,30],travel_mm=7,travel_limits_mm=[-10,25],
+             parent_frame=plane([5,6,7],(0,1,0)),child_frame=plane([-1,2,3]))],
+        poses=[dict(id='park',values=[dict(mate_id=m,coordinate=c,value=v) for m,c,v in [('swing','angle_deg',0),('lift','angle_deg',0),('lift','travel_mm',2)]])])
+    nested['features'] += [machine,dict(id='station',type='assembly',parts=[dict(id='setup',input='machine',placement=dict(translation=[-20,3,11],rotation=dict(origin=[0,0,0],axis=[1,0,0],angle_deg=42)))])]
+    nested['output'] = 'station'
+    # Compare with the actual JSON request, where datum-frame tuples are arrays.
+    nested = json.loads(json.dumps(nested))
+    call('cad_create',dict(document_id='nested_robot',model=nested))
+
+    def exported_name(kind, occurrence):
+        return kind+'_'+occurrence if '/' not in occurrence else 'nested_'+kind+''.join('_'+str(len(s))+'_'+s for s in occurrence.split('/'))
+
+    props = []
+    inertials = []
+    physical = options['inertials'][0]
+    for occurrence in ['setup/left','setup/right','setup/other']:
+        props += [dict(p,mate_id=occurrence+'/'+p['mate_id']) for p in options['joint_properties']]
+        inertials += [dict(physical,link=exported_name('part',occurrence+'/'+p['id'])) for p in model['features'][1]['parts']]
+        inertials.append(dict(physical,link=exported_name('carrier',occurrence+'/shaft')))
+    props += [dict(mate_id='setup/'+m,coordinate=c,effort=8,velocity=.1) for m,c in [('swing','angle_deg'),('lift','angle_deg'),('lift','travel_mm')]]
+    inertials += [dict(physical,link=exported_name('part','setup/spare')),dict(physical,link=exported_name('carrier','setup/lift'))]
+    for fmt in ['urdf','sdf']:
+        opts = dict(format=fmt,joint_properties=props,inertials=inertials)
+        result = call('cad_robot_export',dict(document_id='nested_robot',revision=1,robot=opts))
+        root = Path(result['directory']);sdf,links,joints = read_robot(Path(result['path']))
+        check(len(links)==23+(not sdf), 'Only 19 real leaves, four cylindrical carriers and the URDF world frame')
+        check(len([j for j in joints.values() if j['kind']!='fixed'])==15, 'Every nested and parent moving coordinate retained')
+        check(len(list((root/'meshes').glob('*.stl')))==1, 'All composed occurrences reuse their true leaf mesh')
+        check(len(links)==len(set(links)) and len(joints)==len(set(joints)), 'Nested XML identifiers remain unique')
+        check(len([j for j in joints.values() if 'mimic' in j])==8, 'Authored couplings and repeated definition coordinates preserved')
+        ledger=json.loads((root/'robot.json').read_text())
+        check(len(ledger['frames']['assemblies'])==5, 'Ledger preserves root and every subassembly frame')
+        check(len(ledger['frames']['pose_sources'])==5, 'Every definition-scoped named pose is exported')
+
+        def compare_nested(supplied, operations, label):
+            worlds,_=forward(joints,supplied)
+            native=call('cad_preview',dict(document_id='nested_robot',expected_revision=1,operations=operations,kind='mesh'))
+            for part in native['summary']['assembly']['parts']:
+                name=exported_name('part',part['id']);visual=links[name].find('visual')
+                visual_origin=sdf_origin(visual.find('pose')) if sdf else urdf_origin(visual.find('origin'))
+                actual=mul(worlds[name],visual_origin)
+                expected=[part['transform'][i:i+4] for i in range(0,16,4)]
+                for i in range(3): expected[i][3]/=1000
+                error=max(abs(actual[i][j]-expected[i][j]) for i in range(4) for j in range(4))
+                check(error<3e-10,f'nested {fmt}/{label}/{part["id"]}: independent FK, error={error}, actual={actual}, expected={expected}')
+
+        for values in [(30,6,-10,2,-15,5,7),(-20,-2,70,11,37,-11,16),(100,18,0,0,-60,21,-3)]:
+            a,t,b,u,s,r,z=values
+            controls=[('mechanism','setup/left','hinge','angle_deg',a,30),('mechanism','setup/left','shaft','travel_mm',t,6),
+                      ('other_mechanism','setup/other','hinge','angle_deg',b,-10),('other_mechanism','setup/other','shaft','travel_mm',u,2),
+                      ('machine','setup','swing','angle_deg',s,-15),('machine','setup','lift','angle_deg',r,5),('machine','setup','lift','travel_mm',z,7)]
+            supplied={exported_name('mate',p+'/'+m)+('_angle' if c=='angle_deg' else '_travel'):(math.radians(v-rest) if c=='angle_deg' else (v-rest)/1000) for _,p,m,c,v,rest in controls}
+            edits=[dict(op='set_joint_value',assembly_id=d,mate_id=m,coordinate=c,value=v) for d,_,m,c,v,_ in controls]
+            compare_nested(supplied,edits,str(values))
+        for definition,pose_id in [('mechanism','home'),('mechanism','extended'),('other_mechanism','home'),('other_mechanism','extended'),('machine','park')]:
+            name=exported_name('pose',definition+'/'+pose_id)
+            if sdf: supplied=ledger['poses'][name]
+            else:
+                state=ET.parse(root/'model.srdf').getroot().find(f'group_state[@name="{name}"]')
+                check(state is not None,'Namespaced child pose exists in SRDF')
+                supplied={j.get('name'):float(j.get('value')) for j in state.findall('joint')}
+                check(all('mimic' not in joints[j] for j in supplied),'Composed presets never override shared/mimic coordinates')
+            compare_nested(supplied,[dict(op='apply_pose',assembly_id=definition,pose_id=pose_id)],name)
+        before=set(saved.iterdir())
+        call('cad_robot_export',dict(document_id='nested_robot',revision=1,robot=dict(opts,joint_properties=props[:-1])),'invalid_argument')
+        check(set(saved.iterdir())==before,'Missing composed physical data publishes no partial bundle')
+    check(call('cad_read',dict(document_id='nested_robot'))['model']==nested,'Composed export and all child pose previews preserve editable source')
 print(f'robot export: {checks} independent XML/FK/artifact checks passed')

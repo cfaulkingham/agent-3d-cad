@@ -114,9 +114,11 @@ jobs:
             $exe = Join-Path $PWD 'build/Release/agent-3d-cad.exe'
             $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH"
           }
-          python tests/schema_conformance.py $exe
+          $fixture = Join-Path (Split-Path $exe) 'cad_slicer_fixture'
+          if ($IsWindows) { $fixture += '.exe' }
+          python tests/schema_conformance.py $exe $fixture
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/mcp_sdk_smoke.py $exe
+          python tests/mcp_sdk_smoke.py $exe $fixture
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/robot_export_test.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }

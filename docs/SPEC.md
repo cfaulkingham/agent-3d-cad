@@ -23,7 +23,7 @@ per-view DXFs, and saves parameterized drawing recipes. See `DRAWINGS.md` for
 the supported drafting subset; this extends the original exclusions below.
 
 Assembly extension (2026-10-06): the user authorized multiple editable parts,
-placement, mates, and exploded drawings. M6 adds one-level assembly features with
+placement, mates, and exploded drawings. M6 began with one-level assembly features with
 named source-part instances, deterministic rigid datum mates, and view-specific
 drawing explosions. See `ASSEMBLIES.md` for the current contract and limitations.
 
@@ -45,7 +45,52 @@ independent STEP/STL/PDF/SVG/DXF outputs. No Electron runtime or end-user langua
 installation is permitted. See `DISTRIBUTION.md` for release gates and platform
 runtime prerequisites.
 
+Presentation extension (2026-10-08): saved live clipping planes and exploded leaf
+inspection are independent of source geometry and revision history. CPU picking
+and GPU rendering share displayed coordinates; exact measurements and topology
+references stay source-qualified. This initial uncapped visual clipping is not
+exact section geometry. See `PRESENTATION.md` for its implemented contract.
+
+Measurement extension (2026-10-08): `cad_measure` computes exact source-pose
+face/edge/leaf-pair distances, closest-point witnesses, supported analytic angles
+and material overlap. Bounded assembly queries state all-leaf or subset coverage.
+Current evaluation/source/build identity and unique geometric reference recovery
+qualify results; no stable enumeration naming is claimed. Durable native jobs
+and the live panel preserve geometry/history and retire obsolete evaluations.
+See `MEASUREMENTS.md` for tolerances, coverage and failure semantics.
+
+Section extension (2026-10-08): the same `cad_measure` service intersects native
+B-reps with a displayed-world plane, accounting for visual exploded offsets
+without editing source placements. Exact curves, tangent contacts and material
+caps retain holes and explicitly summed per-solid areas. Derived section IDs
+are review data, never source topology references. A separate durable live slot
+retires changed plane/placement/source results. See `SECTIONS.md` for bounds,
+qualification and viewer behavior; executed evidence remains in HANDOFF.
+
 ## 1. Product outcome
+
+Fabrication extension (2026-10-08): revision-qualified native manufacturing
+packages preserve complete editable source, unique leaf exact/mesh/drawing
+artifacts, saved assembly transforms, BOM/purchasing identity and explicit caller
+process assumptions. Atomic generation preserves history. `MANUFACTURING.md`
+defines the implemented package contract. Native exact/sampled process checks,
+bounded source review and saved-pose clearance/interference are in
+`FABRICATION_REVIEW.md`, with explicit unsupported checks. Sourced STEP identity
+and original supplier artifacts are in `PURCHASED_PARTS.md`; discovery remains
+an agent/catalog workflow.
+`GCODE_REVIEW.md` describes native stateful static inspection of caller-supplied
+plain G-code with explicit bounds/temperatures/initial state, preserved bytes
+and atomic review packages. Caller-supplied review alone does not establish
+slicing provenance. `SLICING.md` defines the implemented native OrcaSlicer 2.4.2
+plan/run workflow: explicit installed executable/profile identity, fixed argv,
+bounded cancellable processes, actual output/effective settings and atomic
+source-qualified packages. `PRINTER_HANDOFF.md` defines portable offline printer
+plans and re-verification; upload and physical start remain separate workflows.
+Appearance/presets, saved inspection notes and declarative native playback are
+implemented in `APPEARANCE.md`, `ANNOTATIONS.md` and `PLAYBACK.md`. External file
+review is a bounded read-only representation in `ARTIFACT_REVIEW.md`, with no
+recovered editable history. `COMPOSITION_FABRICATION_REVIEW.md` records the
+combined implementation scope; HANDOFF records its validation status.
 
 Release focus (2026-10-07): 1.0 targets ChatGPT desktop and Claude Desktop plugins
 with the embedded viewer and local CAD engine. Standalone Tauri and CLI onboarding
@@ -122,9 +167,17 @@ Each mate defines one child's complete placement relative to its parent using
 explicit source-coordinate datum frames, an offset and a rotation. The graph
 is a forest: at most one incoming mate per child, no cycles, and no explicit
 placement on mated children. Roots are grounded by their placement. Ambiguous
-constraints never trigger a guessed solver result. Assembly inputs and ordinary
-solid operations consuming assemblies are rejected in this initial scope;
+constraints never trigger a guessed solver result. Nested assembly inputs retain
+their child transforms and occurrence hierarchy. Ordinary
+solid operations consuming assemblies are rejected;
 geometry edits happen on the upstream source features.
+
+Revision-pinned components embed the captured source document and its checksum,
+then materialize the selected dependency closure as local editable features.
+Explicit scalar bindings connect source dimensions to consumer parameters. Only
+capture/update reads the source workspace; normal rebuilds remain self-contained.
+Updates preserve the component root ID and require explicit replacement of local
+edits. See `COMPONENTS.md` for ownership, integrity and bounded provenance.
 
 Assembly BOM rows group instances by source input. Quantities derive from part
 membership; saved metadata may supply explicit item numbers, part numbers,
@@ -145,6 +198,10 @@ STL is an approximate mesh output whose coordinates use the document unit.
 Artifacts must remain usable independently of source documents and service
 memory. Imported STEP will initially be an opaque imported feature, not an
 inferred reconstruction of the originating feature tree.
+Optional purchasing provenance binds caller supplier/part/source identity to
+the verified raw STEP bytes. Unchanged rigid copies and pinned component reuse
+retain that identity; geometry modifications do not imply the unchanged purchase.
+Native CAD does not fetch supplier URLs or execute catalog-supplied code.
 
 ## 4. Transaction and persistence invariants
 
@@ -236,8 +293,10 @@ not a manufacturability certificate. Later DFM checks must be separately named.
 
 The original baseline supports one output shape, possibly containing multiple
 valid solids. M6 adds a named assembly output containing distinct positioned
-part instances, with up to 64 parts and 63 mates per assembly and 256 assembly
-parts across a document. Interference does not fuse parts; measurements sum
+part instances, with up to 64 direct parts and 63 mates per assembly and 256 declared
+parts across a document. Nested composition permits eight occurrence levels,
+1,024 expanded leaves per assembly and 4,096 summed across assembly definitions.
+Interference does not fuse parts; measurements sum
 their volumes, including overlap. Exchanges preserve positioned solid geometry;
 the saved document retains editable part and mate semantics. Drawing explosion
 offsets only affect the selected projection, never the model or mate solution.
@@ -271,8 +330,9 @@ Only successful workers stage reusable results; coordinators check cancellation
 before atomically publishing cache entries. Cache writes never publish HEAD or
 artifacts. Checksummed entries are optional, bounded and evicted oldest-first;
 missing, damaged or unavailable entries rebuild. Losing the cache must not lose
-editable documents. This is whole-model and per-view caching, not incremental feature
-rebuilding or a source of persistent topology naming.
+editable documents. Dependency-level feature caches now complement whole-model
+and per-view caches; `DEPENDENCY_CACHE.md` defines fingerprints, invalidation and
+bounded publication. Cached shapes do not establish persistent topology naming.
 
 ## 8. Distribution and viewer direction
 
@@ -298,8 +358,10 @@ scripts, Python API compatibility, or automatic conversion of old scripts.
 These may be added according to user workflows after the editable core works.
 The current protocol supersedes these historical exclusions for M3 modeling,
 M5 drawings, M6 assemblies and the modeling/motion extension. General
-sketch/assembly constraint solving, dynamics, nested assemblies and remote hosting remain outside the implemented
-scope.
+sketch/assembly constraint solving, dynamics and remote hosting remain outside
+the implemented scope. Nested composition, child Motion-panel controls and
+composed robot graphs and revision-pinned cross-document components are
+implemented. Component snapshots and explicit updates are in `COMPONENTS.md`.
 
 ## 10. Completion evidence
 

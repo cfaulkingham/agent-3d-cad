@@ -1,6 +1,7 @@
 #include "agentcad/cache.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/kernel.hpp"
+#include "agentcad/model.hpp"
 #include <algorithm>
 #include <fstream>
 #include <vector>
@@ -32,8 +33,33 @@ Json unpack(const std::string& bytes, const std::string& key) {
   return parse_json(payload,cache_entry_bytes);
 }
 }
+Json feature_cache_keys(const Json& model) {
+  Json keys=Json::object();
+  for(const auto& feature:model.at("features")) {
+    auto intent=feature;
+    // These declarations affect current BOM/preset summaries, never the shape.
+    // Validation still checks every named pose, including on a complete hit.
+    if(feature.at("type")=="assembly") {intent.erase("bom");intent.erase("poses");}
+    if(feature.at("type")=="import_step")intent.erase("purchase");
+    Json parameters=Json::object(),dependencies=Json::object();
+    std::function<void(const Json&)> collect=[&](const Json& value) {
+      if(value.is_object()) {
+        if(value.contains("parameter")) {
+          const auto name=text_field(value,"parameter");parameters[name]=model.at("parameters").at(name);
+        } else for(const auto& item:value.items())collect(item.value());
+      } else if(value.is_array())for(const auto& item:value)collect(item);
+    };
+    collect(intent);
+    const auto dependency=[&](const std::string& id){dependencies[id]=keys.at(id);};
+    for(const auto* field:{"input","left","right"})if(feature.contains(field))dependency(text_field(feature,field));
+    if(feature.contains("sections"))for(const auto& section:feature.at("sections"))dependency(section.get<std::string>());
+    if(feature.at("type")=="assembly")for(const auto& part:feature.at("parts"))dependency(text_field(part,"input"));
+    keys[text_field(feature,"id")]=key_for({{"kind","feature"},{"feature",intent},{"parameters",parameters},{"dependencies",dependencies}});
+  }
+  return keys;
+}
 std::string geometry_cache_key(const Json& model) {
-  return key_for({{"kind","geometry"},{"model",model}});
+  return key_for({{"kind","geometry"},{"output",model.at("output")},{"features",feature_cache_keys(model)}});
 }
 std::string projection_cache_key(const std::string& geometry_key, const Json& projection) {
   return key_for({{"kind","projection"},{"geometry",geometry_key},{"projection",projection}});

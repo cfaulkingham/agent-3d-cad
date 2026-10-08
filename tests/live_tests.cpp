@@ -88,6 +88,60 @@ void device_name_tests() {
     "Listing skips an unaddressable directory");
 #endif
 }
+void appearance_preset_tests() {
+  Temporary temporary;Service service(temporary.path);auto model=box();
+  model["features"].push_back({{"id","assembly"},{"type","assembly"},{"parts",Json::array({{{"id","left"},{"input","base"}},{{"id","right"},{"input","base"},{"placement",{{"translation",{30,0,0}}}}}})}});model["output"]="assembly";
+  call(service,"cad_create",{{"document_id","appearance"},{"model",model}});call(service,"cad_open",{{"document_id","appearance"},{"view_id","review"}});auto shown=ready(service,"review");auto eid=shown.at("evaluation_id");
+  const auto original_head=read_text(temporary.path/"documents/appearance/HEAD.json");
+  Json style={{"default_color",{0.2,0.3,0.4}},{"parts",Json::array({{{"part_id","left"},{"color",{1,0,0}}},{{"part_id","right"},{"color",{0,1,0}}}})}};
+  Json presentation={{"clip",{{"normal",{0,0,1}},{"offset_mm",3},{"keep","negative"}}},{"explode",{{"distance_mm",0},{"directions",Json::array()}}}};
+  Json context={{"action","context"},{"view_id","review"},{"evaluation_id",eid},{"selection",nullptr},{"appearance",style},{"presentation",presentation},{"camera",{{"yaw",0.2},{"pitch",0.3},{"zoom",2},{"pan",{0.1,0.2}}}},{"hidden_part_ids",Json::array({"left"})}};
+  auto current=call(service,"cad_viewer",context);require(current.at("appearance")==style&&current.at("presets").empty(),"Native context persists default and leaf RGB appearance");
+  require(ready(service,"review",eid.get<std::string>()).at("camera")==context.at("camera"),"Ready sync returns current saved camera for lost preset ACK reconciliation");
+  const auto preset=[&](const std::string& operation,const std::string& name=""){Json args={{"action","preset"},{"view_id","review"},{"evaluation_id",eid},{"operation",operation}};if(operation!="list")args["name"]=name;return call(service,"cad_viewer",args);};
+  current=preset("save","Cutaway");require(current.at("presets").size()==1&&current.at("presets")[0].at("camera")==context.at("camera")&&current.at("presets")[0].at("appearance")==style,"Preset captures complete persisted view settings");
+  Json section={{"action","section"},{"view_id","review"},{"evaluation_id",eid},{"query",{{"action","section"},{"plane",{{"normal",{0,0,1}},{"offset_mm",3}}}}}};
+  auto started=call(service,"cad_viewer",section);const auto job_id=started.at("job_id");
+  for(int i=0;i<1000;++i){auto job=call(service,"cad_job",{{"action","get"},{"job_id",job_id}});if(job.at("state")=="succeeded")break;require(job.at("state")=="queued"||job.at("state")=="running","Section admission completes for appearance preservation test");std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+  require(call(service,"cad_job",{{"action","get"},{"job_id",job_id}}).at("state")=="succeeded","Native section completed before appearance mutation");
+  auto alternate=context;alternate["appearance"]["parts"][0]["color"]={0,0,1};current=call(service,"cad_viewer",alternate);
+  require(current.at("section").at("job_id")==job_id,"Appearance update retains geometrically qualified section");
+  current=preset("apply","Cutaway");require(current.at("appearance")==style&&current.at("section").at("job_id")==job_id&&current.at("selection").is_null(),"Applying matching preset restores appearance while preserving exact section");
+  alternate["presentation"]["clip"]["offset_mm"]=4;alternate["camera"]["zoom"]=3;call(service,"cad_viewer",alternate);preset("save","Other plane");current=preset("apply","Cutaway");
+  require(current.at("presentation")==presentation&&current.at("camera")==context.at("camera")&&!current.contains("section"),"Applying another plane restores view without reviving retired native section");
+  started=call(service,"cad_viewer",section);const auto retired_job=started.at("job_id");current=preset("apply","Other plane");
+  require(!current.contains("section")&&current.at("presentation").at("clip").at("offset_mm")==4,"Applying a preset with another plane detaches an admitted section job");
+  Json retired;
+  for(int i=0;i<1000;++i){retired=call(service,"cad_job",{{"action","get"},{"job_id",retired_job}});if(retired.at("state")!="queued"&&retired.at("state")!="running"&&retired.at("state")!="cancelling")break;std::this_thread::sleep_for(std::chrono::milliseconds(2));}
+  require(retired.at("state")=="cancelled"||retired.at("state")=="succeeded","Preset retirement cancels outside publication locks while retaining a completed historical winner");preset("apply","Cutaway");
+
+  const auto state_path=temporary.path/"views/review/state.json";const auto before_invalid=read_text(state_path);
+  for(const auto& color:Json::array({Json::array({-1,0,0}),Json::array({0,2,0}),Json::array({0,0}),Json::array({"red",0,0})})){auto bad=context;bad["appearance"]["parts"][0]["color"]=color;fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});}
+  auto bad=context;bad["appearance"]["parts"][0]["part_id"]="missing";fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});bad=context;bad["appearance"]["parts"].push_back(bad["appearance"]["parts"][0]);fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});
+  bad=context;bad["appearance"]["opacity"]=0.5;fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});
+  for(const auto& name:std::vector<std::string>{"",std::string(65,'a'),"  ","bad\tname"})fails("invalid_argument",[&]{preset("save",name);});
+  fails("not_found",[&]{preset("apply","absent");});fails("not_found",[&]{preset("delete","absent");});require(read_text(state_path)==before_invalid,"Invalid appearance and preset requests are atomic");
+  preset("delete","Other plane");for(int i=0;i<15;++i)preset("save","View "+std::to_string(i));require(preset("list").at("presets").size()==16,"Preset list is bounded at sixteen");fails("limit_exceeded",[&]{preset("save","Overflow");});require(preset("save","Cutaway").at("presets").size()==16,"Existing preset can be replaced at limit");
+  require(read_text(temporary.path/"documents/appearance/HEAD.json")==original_head,"Appearance and all preset operations preserve raw source HEAD");
+  Service restarted(temporary.path);current=call(restarted,"cad_context",{{"view_id","review"}});require(current.at("appearance")==style&&current.at("presets").size()==16,"Appearance and presets survive native restart");
+  auto replacement=model.at("features").back();replacement["parts"]=Json::array({replacement.at("parts")[1]});call(restarted,"cad_apply",{{"document_id","appearance"},{"expected_revision",1},{"operations",Json::array({{{"op","replace_feature"},{"id","assembly"},{"feature",replacement}}})}});
+  shown=ready(restarted,"review");eid=shown.at("evaluation_id");require(shown.at("appearance").at("parts").size()==1&&shown.at("appearance").at("parts")[0].at("part_id")=="right"&&shown.at("hidden_part_ids").empty(),"Revision refresh prunes missing appearance and visibility owners");
+  const auto old_saved=call(restarted,"cad_context",{{"view_id","review"}});require(old_saved.at("stale")==true&&old_saved.at("revision")==1&&old_saved.contains("camera"),"Source refresh retains explicitly stale saved context for ordinary reads");
+  for(const auto& operation:std::vector<std::string>{"list","save","delete"}) {
+    Json args={{"action","preset"},{"operation",operation},{"view_id","review"},{"evaluation_id",eid}};if(operation!="list")args["name"]="Cutaway";
+    const auto action=call(restarted,"cad_viewer",args);require(action.at("document_id")=="appearance"&&action.at("revision")==2&&action.at("evaluation_id")==eid&&action.at("feature_id")=="assembly"&&action.at("stale")==false,"Every preset operation responds with its current qualified source headers");
+    require(action.at("selection").is_null()&&!action.contains("camera")&&!action.contains("resolved_selection"),"Preset response drops old source camera and selection without adopting stale context");
+    require(call(restarted,"cad_context",{{"view_id","review"}}).at("evaluation_id")==old_saved.at("evaluation_id"),"Preset response qualification does not rewrite ordinary stale saved context");
+  }
+  call(restarted,"cad_viewer",{{"action","preset"},{"operation","save"},{"name","Cutaway"},{"view_id","review"},{"evaluation_id",eid}});
+  current=call(restarted,"cad_viewer",{{"action","preset"},{"operation","apply"},{"name","Cutaway"},{"view_id","review"},{"evaluation_id",eid}});require(current.at("appearance").at("parts").size()==1&&current.at("hidden_part_ids").empty(),"Stored presets prune missing owners on revision refresh before strict apply");
+  call(restarted,"cad_apply",{{"document_id","appearance"},{"expected_revision",2},{"operations",Json::array({{{"op","set_output"},{"feature_id","base"}}})}});shown=ready(restarted,"review");eid=shown.at("evaluation_id");
+  const auto new_feature=call(restarted,"cad_viewer",{{"action","preset"},{"operation","list"},{"view_id","review"},{"evaluation_id",eid}});
+  require(new_feature.at("revision")==3&&new_feature.at("feature_id")=="base"&&new_feature.at("evaluation_id")==eid&&new_feature.at("stale")==false,"Preset response uses current output feature after a source feature switch");
+  require(call(restarted,"cad_context",{{"view_id","review"}}).at("feature_id")=="assembly","Ordinary stale context preserves its historical feature instead of mixing current display identity");
+  call(restarted,"cad_create",{{"document_id","other"},{"model",box()}});call(restarted,"cad_show",{{"view_id","review"},{"document_id","other"}});shown=ready(restarted,"review");require(shown.at("presets").empty()&&shown.at("appearance").at("parts").empty()&&shown.at("appearance").at("default_color")==Json::array({0.66,0.75,0.8}),"Retargeting clears document-scoped presets and colors");
+  fails("stale_selection",[&]{call(restarted,"cad_viewer",{{"action","preset"},{"operation","save"},{"name","Old"},{"view_id","review"},{"evaluation_id",eid}});});
+}
 void visibility_tests() {
   Temporary temporary;Service service(temporary.path);auto model=box();
   const Json assembly={{"id","assembly"},{"type","assembly"},{"parts",Json::array({
@@ -110,6 +164,25 @@ void visibility_tests() {
   const auto alpha=pick_for("alpha"),beta=pick_for("beta");
   auto context_args=[&](Json selection,Json hidden) {return Json{{"action","context"},{"view_id","visibility"},{"evaluation_id",initial},{"selection",selection},{"hidden_part_ids",hidden}};};
   auto saved=call(service,"cad_viewer",context_args(nullptr,Json::array({"beta","gamma"})));
+  const Json directions=Json::array({Json{{"part_id","alpha"},{"direction",{-1,0,0}}},Json{{"part_id","gamma"},{"direction",{0,0,1}}}});
+  const Json presentation={{"clip",{{"normal",{1,0,0}},{"offset_mm",10},{"keep","positive"}}},
+    {"explode",{{"distance_mm",12},{"directions",directions}}}};
+  auto presented=context_args(nullptr,Json::array({"beta","gamma"}));presented["presentation"]=presentation;
+  saved=call(service,"cad_viewer",presented);
+  require(saved.at("presentation")==presentation,"Native context records world clipping and explicit exploded leaf directions");
+  require(chunks(service,"visibility",initial)==full,"Presentation does not alter frozen source geometry or evaluation identity");
+  for(int mode=0;mode<7;++mode) {
+    auto invalid=presented;
+    if(mode==0)invalid["presentation"]["clip"]["normal"]={0,0,0};
+    if(mode==1)invalid["presentation"]["clip"]["normal"]={2,0,0};
+    if(mode==2)invalid["presentation"]["clip"]["keep"]="both";
+    if(mode==3)invalid["presentation"]["explode"]["distance_mm"]=-1;
+    if(mode==4)invalid["presentation"]["explode"]["directions"][0]["part_id"]="missing";
+    if(mode==5)invalid["presentation"]["explode"]["directions"].push_back(invalid["presentation"]["explode"]["directions"][0]);
+    if(mode==6)invalid["presentation"]["script"]="bad";
+    fails("invalid_argument",[&]{call(service,"cad_viewer",invalid);});
+  }
+  require(call(service,"cad_context",{{"view_id","visibility"}})==saved,"Invalid presentation rolls back saved view and context atomically");
   require(saved.at("hidden_part_ids")==Json::array({"beta","gamma"}),"Hide and isolate state reports exact part IDs");
   require(call(service,"cad_read",{{"document_id","assembly"}}).at("model")==model,"Visibility never edits source intent");
   Service reopened(temporary.path);
@@ -144,16 +217,20 @@ void visibility_tests() {
   fails("stale_selection",[&]{call(reopened,"cad_viewer",context_args(nullptr,Json::array()));});
   shown=ready(reopened,"visibility");
   require(shown.at("revision")==2&&shown.at("hidden_part_ids")==Json::array({"beta","gamma"}),"Same-document revision preserves existing part visibility");
+  require(shown.at("presentation")==presentation,"Same-document revision preserves presentation without reviving old picks");
   auto reduced=assembly;reduced["parts"].erase(2);
   call(reopened,"cad_apply",{{"document_id","assembly"},{"expected_revision",2},
     {"operations",Json::array({{{"op","replace_feature"},{"id","assembly"},{"feature",reduced}}})}});
   require(call(reopened,"cad_context",{{"view_id","visibility"}}).at("hidden_part_ids")==Json::array({"beta","gamma"}),"Removed part remains masked until new display publishes");
   shown=ready(reopened,"visibility");
   require(shown.at("revision")==3&&shown.at("hidden_part_ids")==Json::array({"beta"}),"New display prunes only disappeared part IDs");
+  auto pruned=presentation;pruned["explode"]["directions"].erase(1);require(shown.at("presentation")==pruned,"New display prunes only removed exploded occurrence directions");
   stale=call(reopened,"cad_context",{{"view_id","visibility"}});
   require(stale.at("stale").get<bool>()&&stale.at("revision")==1&&stale.at("hidden_part_ids")==Json::array({"beta"}),"Old pick cannot overwrite current display visibility");
   call(reopened,"cad_show",{{"document_id","other"},{"view_id","visibility"}});
   require(call(reopened,"cad_context",{{"view_id","visibility"}}).at("hidden_part_ids").empty(),"Retargeting a document clears visibility immediately");
+  const auto reset=call(reopened,"cad_context",{{"view_id","visibility"}}).at("presentation");
+  require(reset.at("clip").is_null()&&reset.at("explode").at("distance_mm")==0,"Retargeting resets clipping and explosion with the document");
   require(ready(reopened,"visibility").at("hidden_part_ids").empty(),"Single-part view has empty hidden-part state");
   call(reopened,"cad_show",{{"document_id","assembly"},{"view_id","visibility"}});
   shown=ready(reopened,"visibility");require(shown.at("hidden_part_ids").empty(),"Returning to document does not revive prior view masks");
@@ -323,12 +400,15 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==20,"legacy, drawing, BOM, robot export and five live tools remain published");
+  require(definitions.size()==28,"legacy, drawings, BOM, manufacturing/geometry/G-code review, printer handoff, slicing, measurement, robot export, external artifact review and live tools remain published");
+  require(std::any_of(definitions.begin(),definitions.end(),[](const Json& tool){return tool.at("name")=="cad_printer_handoff";}),"native offline printer handoff is included in discovery");
+  for(const auto* name:{"cad_artifact","cad_artifact_show"})require(std::any_of(definitions.begin(),definitions.end(),[&](const Json& tool){return tool.at("name")==name;}),std::string(name)+" is included in discovery");
   for(const auto& tool:definitions) {
     if(tool.at("name")=="cad_open")require(tool.at("_meta").at("ui").at("resourceUri")==viewer_app_uri,"open tool advertises MCP App resource");
     if(tool.at("name")=="cad_show")require(!tool.contains("_meta"),"show updates existing view without opening another app");
     if(tool.at("name")=="cad_viewer")require(tool.at("_meta").at("ui").at("visibility")==Json::array({"app"}),"viewer plumbing advertises app-only visibility");
   }
+  appearance_preset_tests();
   visibility_tests();
   device_name_tests();
   retention_tests();

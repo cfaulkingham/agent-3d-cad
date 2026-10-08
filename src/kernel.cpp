@@ -1,5 +1,8 @@
 #include "agentcad/kernel.hpp"
+#include "agentcad/measurement.hpp"
+#include "agentcad/section.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/robot.hpp"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
@@ -40,6 +43,11 @@
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
+#include <BRepLProp_SLProps.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
+#include "agentcad/fabrication.hpp"
+#include <limits>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRep_Tool.hxx>
@@ -117,7 +125,9 @@ struct FeatureGeometry {
   Json provenance;
   std::vector<AssemblyPart> parts;
   Json mates = Json::array();
+  Json tree = Json::array();
   Json motion;
+  std::map<std::string,gp_Trsf> placements;
   std::vector<std::string> face_parts, edge_parts;
   explicit FeatureGeometry(const TopoDS_Shape& value) : shape(value) {
     TopExp::MapShapes(shape, TopAbs_FACE, faces);
@@ -129,6 +139,7 @@ struct BuiltModel::Impl {
   TopoDS_Shape shape;
   std::string output;
   std::map<std::string, FeatureGeometry> features;
+  Json model;
   const FeatureGeometry& feature(const std::string& id) const {
     const auto found = features.find(id.empty() ? output : id);
     if (found == features.end()) throw Error("not_found", "Unknown feature: " + id);
@@ -359,9 +370,13 @@ Json matrix(const gp_Trsf& transform) {
   for (const auto value:{0,0,0,1}) result.push_back(value);
   return result;
 }
-FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
-                               const std::map<std::string,FeatureGeometry>& sources,
-                               Json& history,bool& history_truncated) {
+struct AssemblyPlan {
+  std::vector<AssemblyPart> parts;
+  std::map<std::string,gp_Trsf> placements;
+  Json tree=Json::array(),mates=Json::array(),motion;
+};
+AssemblyPlan assembly_plan(const Json& feature,const Json& parameters,
+                           const std::map<std::string,FeatureGeometry>& sources) {
   const auto& parts=feature.at("parts");
   const auto motion=assembly_motion(feature,parameters);
   std::map<std::string,Json> coordinates;
@@ -413,47 +428,74 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
     }
     if (!progress) throw Error("invalid_model","Assembly mate graph cannot be resolved");
   }
-  BRep_Builder builder; TopoDS_Compound compound; builder.MakeCompound(compound);
-  std::vector<AssemblyPart> resolved;
-  std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> operations;
-  for (const auto& part:parts) {
+  AssemblyPlan plan;plan.placements=transforms;
+  if(!motion.at("dofs").empty())plan.motion=motion;
+  for(const auto& part:parts) {
     const auto id=text_field(part,"id"),input=text_field(part,"input");
-    try {
-      // copyGeom=true keeps repeated, coincident parts independent, including
-      // identity placements. No Boolean operation changes their solid volumes.
-      auto operation=std::make_unique<BRepBuilderAPI_Transform>(sources.at(input).shape,transforms.at(id),true);
-      if (!operation->IsDone()) throw Error("kernel_failure","Assembly part placement failed",{{"part_id",id}});
-      check_shape(operation->Shape());
-      resolved.push_back({id,input,transforms.at(id),operation->Shape()});
-      builder.Add(compound,operation->Shape());
-      operations.push_back(std::move(operation));
-    } catch (const Error& e) {
-      auto details=e.details; details["part_id"]=id; throw Error(e.code,e.what(),details);
-    } catch (const Standard_Failure& e) { throw occt_error(e,{{"part_id",id}}); }
+    const auto& source=sources.at(input);
+    plan.tree.push_back({{"id",id},{"input",input},{"assembly_id",feature.at("id")},{"parent_id",""},
+      {"kind",source.parts.empty()?"part":"assembly"}});
+    for(auto node:source.tree) {
+      node["id"]=id+"/"+text_field(node,"id");
+      node["parent_id"]=text_field(node,"parent_id").empty()?id:id+"/"+text_field(node,"parent_id");
+      plan.tree.push_back(std::move(node));
+    }
+    if(source.parts.empty())plan.parts.push_back({id,input,transforms.at(id),{}});
+    else for(const auto& leaf:source.parts)
+      plan.parts.push_back({id+"/"+leaf.id,leaf.input,transforms.at(id)*leaf.transform,{}});
   }
-  check_shape(compound);
-  FeatureGeometry result(compound); result.parts=std::move(resolved);
-  if (!motion.at("dofs").empty()) result.motion=motion;
-  result.face_parts.resize(result.faces.Extent()+1); result.edge_parts.resize(result.edges.Extent()+1);
-  for (std::size_t p=0;p<result.parts.size();++p) {
-    const auto& part=result.parts[p];
+  if(feature.contains("mates"))for(const auto& mate:feature.at("mates"))
+    plan.mates.push_back({{"id",mate.at("id")},{"type",mate.at("type")},{"parent",mate.at("parent")},{"child",mate.at("child")}});
+  return plan;
+}
+Json assembly_parts(const std::vector<AssemblyPart>& parts) {
+  Json result=Json::array();
+  for(const auto& part:parts)result.push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)}});
+  return result;
+}
+void assembly_ownership(FeatureGeometry& result,const std::string& code) {
+  result.face_parts.resize(result.faces.Extent()+1);result.edge_parts.resize(result.edges.Extent()+1);
+  for(const auto& part:result.parts) {
     const FeatureGeometry geometry(part.shape);
-    for (const auto& [source,target,owners]:std::initializer_list<std::tuple<const ShapeMap*,const ShapeMap*,std::vector<std::string>*>>{
+    for(const auto& [source,target,owners]:std::initializer_list<std::tuple<const ShapeMap*,const ShapeMap*,std::vector<std::string>*>>{
         {&geometry.faces,&result.faces,&result.face_parts},{&geometry.edges,&result.edges,&result.edge_parts}}) {
-      for (int i=1;i<=source->Extent();++i) {
+      for(int i=1;i<=source->Extent();++i) {
         const int index=target->FindIndex((*source)(i));
-        if (!index || !(*owners)[index].empty()) throw Error("kernel_failure","Assembly topology ownership is ambiguous",{{"part_id",part.id}});
+        if(!index||!(*owners)[index].empty())throw Error(code,"Assembly topology ownership is ambiguous",{{"part_id",part.id}});
         (*owners)[index]=part.id;
       }
     }
-    const auto start=history.size();
-    record_history(*operations[p],sources.at(part.input),part.input,result,history,history_truncated);
-    for (std::size_t i=start;i<history.size();++i) history[i]["part_id"]=part.id;
   }
-  for (const auto* owners:{&result.face_parts,&result.edge_parts})
-    for (std::size_t i=1;i<owners->size();++i) if ((*owners)[i].empty()) throw Error("kernel_failure","Assembly topology has no owning part");
-  if (feature.contains("mates")) for (const auto& mate:feature.at("mates"))
-    result.mates.push_back({{"id",mate.at("id")},{"type",mate.at("type")},{"parent",mate.at("parent")},{"child",mate.at("child")}});
+  for(const auto* owners:{&result.face_parts,&result.edge_parts})
+    for(std::size_t i=1;i<owners->size();++i)if((*owners)[i].empty())throw Error(code,"Assembly topology has no owning part");
+}
+FeatureGeometry assemble_geometry(const TopoDS_Shape& shape,AssemblyPlan plan,const std::string& code="kernel_failure") {
+  FeatureGeometry result(shape);result.parts=std::move(plan.parts);
+  result.placements=std::move(plan.placements);result.tree=std::move(plan.tree);
+  result.motion=std::move(plan.motion);result.mates=std::move(plan.mates);
+  assembly_ownership(result,code);return result;
+}
+FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
+                               const std::map<std::string,FeatureGeometry>& sources,
+                               Json& history,bool& history_truncated) {
+  auto plan=assembly_plan(feature,parameters,sources);
+  BRep_Builder builder;TopoDS_Compound compound;builder.MakeCompound(compound);
+  std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> operations;
+  for(auto& part:plan.parts) {
+    try {
+      auto operation=std::make_unique<BRepBuilderAPI_Transform>(sources.at(part.input).shape,part.transform,true);
+      if(!operation->IsDone())throw Error("kernel_failure","Assembly part placement failed");
+      check_shape(operation->Shape());part.shape=operation->Shape();builder.Add(compound,part.shape);
+      operations.push_back(std::move(operation));
+    }catch(const Error& error){auto details=error.details;details["part_id"]=part.id;throw Error(error.code,error.what(),details);}
+    catch(const Standard_Failure& error){throw occt_error(error,{{"part_id",part.id}});}
+  }
+  check_shape(compound);auto result=assemble_geometry(compound,std::move(plan));
+  for(std::size_t p=0;p<result.parts.size();++p) {
+    const auto& part=result.parts[p];const auto start=history.size();
+    record_history(*operations[p],sources.at(part.input),part.input,result,history,history_truncated);
+    for(std::size_t i=start;i<history.size();++i)history[i]["part_id"]=part.id;
+  }
   return result;
 }
 Json feature_provenance(const Json& feature,const Json& history,bool history_truncated) {
@@ -468,6 +510,48 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
     {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
   if (feature.at("type")=="import_step") result["content_sha256"]=feature.at("sha256");
   return result;
+}
+Json snapshot_feature(const FeatureGeometry& geometry,std::size_t limit=32*1024*1024) {
+  SnapshotBuffer buffer(limit);std::ostream stream(&buffer);
+  BRepTools::Write(geometry.shape,stream,false,false,TopTools_FormatVersion_CURRENT);
+  if(!stream)throw Error("limit_exceeded","Feature snapshot exceeds cache budget");
+  Json entry={{"brep",std::move(buffer.bytes)},{"faces",geometry.faces.Extent()},
+    {"edges",geometry.edges.Extent()},{"provenance",geometry.provenance}};
+  if(!geometry.parts.empty()) {entry["assembly"]=true;entry["parts"]=assembly_parts(geometry.parts);}
+  return entry;
+}
+FeatureGeometry restore_feature(const Json& feature,const Json& parameters,
+                               const std::map<std::string,FeatureGeometry>& sources,const Json& entry) {
+  const auto type=text_field(feature,"type");
+  std::istringstream stream(entry.at("brep").get<std::string>());
+  TopoDS_Shape shape;BRepTools::Read(shape,stream,BRep_Builder{});
+  if(stream.fail()||shape.IsNull())throw Error("cache_miss","Cannot read cached feature B-rep");
+  if(type!="sketch")check_shape(shape);
+  else if(shape.ShapeType()!=TopAbs_FACE||!BRepCheck_Analyzer(shape).IsValid())throw Error("cache_miss","Invalid cached sketch");
+  FeatureGeometry geometry(shape);
+  if(type=="assembly") {
+    if(!entry.value("assembly",false)||shape.ShapeType()!=TopAbs_COMPOUND)throw Error("cache_miss","Missing cached assembly compound");
+    auto plan=assembly_plan(feature,parameters,sources);
+    if(entry.at("parts")!=assembly_parts(plan.parts))throw Error("cache_miss","Cached assembly occurrence transforms differ from saved intent");
+    TopoDS_Iterator children(shape);
+    for(auto& part:plan.parts) {
+      if(!children.More())throw Error("cache_miss","Cached assembly is missing an occurrence");
+      part.shape=children.Value();children.Next();const auto& source=sources.at(part.input);
+      if(count(part.shape,TopAbs_FACE)!=source.faces.Extent()||count(part.shape,TopAbs_EDGE)!=source.edges.Extent()
+          ||count(part.shape,TopAbs_SOLID)!=count(source.shape,TopAbs_SOLID))
+        throw Error("cache_miss","Cached occurrence topology differs from its source",{{"part_id",part.id}});
+    }
+    if(children.More())throw Error("cache_miss","Cached assembly has extra occurrences");
+    // Ownership comes from the actual deserialized children, never old indices.
+    geometry=assemble_geometry(shape,std::move(plan),"cache_miss");
+  }else if(entry.contains("assembly"))throw Error("cache_miss","Unexpected cached assembly marker");
+  if(geometry.faces.Extent()!=entry.at("faces")||geometry.edges.Extent()!=entry.at("edges"))
+    throw Error("cache_miss","Cached topology count mismatch");
+  const auto& provenance=entry.at("provenance");
+  if(!provenance.at("history").is_array()||provenance.at("history").size()>10000||!provenance.at("history_truncated").is_boolean()
+      ||provenance!=feature_provenance(feature,provenance.at("history"),provenance.at("history_truncated").get<bool>()))
+    throw Error("cache_miss","Cached feature provenance differs from saved intent");
+  geometry.provenance=provenance;return geometry;
 }
 struct CurveWire {
   TopoDS_Wire wire;
@@ -674,8 +758,10 @@ TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp
 }
 }
 
-BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
+BuiltModel::BuiltModel(const Json& model) : BuiltModel(model,FeatureCache{}) {}
+BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std::make_unique<Impl>()) {
   validate_model(model);
+  impl_->model=model;
   std::map<std::string, TopoDS_Shape> shapes;
   std::map<std::string, gp_Ax2> planes;
   const auto& parameters = model.at("parameters");
@@ -683,6 +769,25 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
     const auto id = text_field(feature, "id");
     const auto type = text_field(feature, "type");
     try {
+      if(cache.diagnostics)(*cache.diagnostics)["feature_hits"][id]=false;
+      if(cache.load&&cache.keys.contains(id)) {
+        std::unique_ptr<FeatureGeometry> restored;
+        std::optional<gp_Ax2> plane;
+        try {
+          if(auto saved=cache.load(cache.keys.at(id).get<std::string>())) {
+            if(saved->at("feature_id")!=id)throw Error("cache_miss","Cached feature identity differs");
+            restored=std::make_unique<FeatureGeometry>(restore_feature(feature,parameters,impl_->features,saved->at("snapshot")));
+            if(type=="sketch")plane=parameter_plane(feature.at("workplane"),parameters);
+          }
+        }catch(const std::exception&) {restored.reset();}
+        // Publish to this process's feature map only after restoration succeeds.
+        if(restored) {
+          shapes.emplace(id,restored->shape);impl_->features.emplace(id,std::move(*restored));
+          if(plane)planes.emplace(id,*plane);
+          if(cache.diagnostics)(*cache.diagnostics)["feature_hits"][id]=true;
+          continue;
+        }
+      }
       TopoDS_Shape shape;
       std::unique_ptr<FeatureGeometry> assembly;
       Json history=Json::array();
@@ -888,6 +993,10 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       shapes.emplace(id, shape);
       impl_->features.emplace(id,assembly ? std::move(*assembly) : FeatureGeometry(shape));
       impl_->features.at(id).provenance=feature_provenance(feature,history,history_truncated);
+      if(cache.stage&&cache.keys.contains(id)) {
+        try {cache.stage(cache.keys.at(id).get<std::string>(),{{"feature_id",id},{"snapshot",snapshot_feature(impl_->features.at(id))}});}
+        catch(const std::exception&) { /* Serialization is optional; the valid design still succeeds. */ }
+      }
     } catch (const Error& e) {
       auto details = e.details; details["feature_id"] = id;
       throw Error(e.code, e.what(), details);
@@ -898,59 +1007,27 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
   impl_->output = text_field(model, "output");
   impl_->shape = shapes.at(impl_->output);
 }
-BuiltModel::BuiltModel(const Json& model, const Json& snapshot) : impl_(std::make_unique<Impl>()) {
-  validate_model(model);
+BuiltModel::BuiltModel(const Json& model,const Json& snapshot) : impl_(std::make_unique<Impl>()) {
+  validate_model(model);impl_->model=model;
   try {
-    if(snapshot.at("features").size()!=model.at("features").size())
-      throw Error("cache_miss","Cached feature count mismatch");
+    if(snapshot.at("format")!=2||snapshot.at("features").size()!=model.at("features").size())
+      throw Error("cache_miss","Cached feature format/count mismatch");
     for(const auto& feature:model.at("features")) {
       const auto id=text_field(feature,"id");
-      const auto& entry=snapshot.at("features").at(id);
-      if (feature.at("type")=="assembly") {
-        if (!entry.value("assembly",false)) throw Error("cache_miss","Missing cached assembly marker");
-        // Recompute placements and ownership from saved intent and restored
-        // exact input shapes. B-rep deserialization cannot prove old enumeration
-        // IDs still denote the same part, so none are trusted from the cache.
-        Json history=Json::array(); bool truncated=false;
-        auto geometry=build_assembly(feature,model.at("parameters"),impl_->features,history,truncated);
-        if (geometry.faces.Extent()!=entry.at("faces") || geometry.edges.Extent()!=entry.at("edges"))
-          throw Error("cache_miss","Cached assembly topology count mismatch");
-        geometry.provenance=feature_provenance(feature,history,truncated);
-        impl_->features.emplace(id,std::move(geometry));
-        continue;
-      }
-      std::istringstream stream(entry.at("brep").get<std::string>());
-      TopoDS_Shape shape; BRepTools::Read(shape,stream,BRep_Builder{});
-      if(stream.fail() || shape.IsNull()) throw Error("cache_miss","Cannot read cached B-rep");
-      if(feature.at("type")!="sketch") check_shape(shape);
-      else if(!BRepCheck_Analyzer(shape).IsValid()) throw Error("cache_miss","Invalid cached sketch");
-      auto& geometry=impl_->features.emplace(id,FeatureGeometry(shape)).first->second;
-      if(geometry.faces.Extent()!=entry.at("faces") || geometry.edges.Extent()!=entry.at("edges"))
-        throw Error("cache_miss","Cached topology count mismatch");
-      geometry.provenance=entry.at("provenance");
+      impl_->features.emplace(id,restore_feature(feature,model.at("parameters"),impl_->features,snapshot.at("features").at(id)));
     }
-    impl_->output=text_field(model,"output");
-    impl_->shape=impl_->features.at(impl_->output).shape;
-  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
+    impl_->output=text_field(model,"output");impl_->shape=impl_->features.at(impl_->output).shape;
+  }catch(const Standard_Failure& error){throw occt_error(error,Json::object(),"cache_miss");}
 }
 Json BuiltModel::snapshot() const {
   try {
-    Json features=Json::object(); std::size_t bytes=0;
+    Json features=Json::object();std::size_t bytes=0;
     for(const auto& [id,geometry]:impl_->features) {
-      if (!geometry.parts.empty()) {
-        features[id]={{"assembly",true},{"faces",geometry.faces.Extent()},{"edges",geometry.edges.Extent()}};
-        continue;
-      }
-      SnapshotBuffer buffer(32*1024*1024-bytes); std::ostream stream(&buffer);
-      // Tessellation is derived data. Store exact curves, surfaces and topology.
-      BRepTools::Write(geometry.shape,stream,false,false,TopTools_FormatVersion_CURRENT);
-      auto brep=std::move(buffer.bytes); bytes+=brep.size();
-      if(!stream || bytes>32*1024*1024) throw Error("limit_exceeded","Geometry snapshot exceeds cache budget");
-      features[id]={{"brep",std::move(brep)},{"faces",geometry.faces.Extent()},
-        {"edges",geometry.edges.Extent()},{"provenance",geometry.provenance}};
+      auto entry=snapshot_feature(geometry,32*1024*1024-bytes);
+      bytes+=entry.at("brep").get_ref<const std::string&>().size();features[id]=std::move(entry);
     }
-    return {{"features",std::move(features)}};
-  } catch(const Standard_Failure& e) { throw occt_error(e,Json::object(),"cache_miss"); }
+    return {{"format",2},{"features",std::move(features)}};
+  }catch(const Standard_Failure& error){throw occt_error(error,Json::object(),"cache_miss");}
 }
 BuiltModel::~BuiltModel() = default;
 BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
@@ -973,8 +1050,10 @@ Json BuiltModel::summary(const std::string& feature_id) const {
       {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
       {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},
       {"edge_count", count(shape, TopAbs_EDGE)}};
+    if(impl_->model.contains("components"))result["components"]=component_status(impl_->model);
     if (!geometry.parts.empty()) {
-      result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
+      result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates},{"tree",geometry.tree}};
+      result["assembly"]["mechanisms"]=assembly_mechanisms(impl_->model,feature_id.empty()?impl_->output:feature_id);
       if (!geometry.motion.is_null()) result["assembly"]["motion"]=geometry.motion;
       for (const auto& part:geometry.parts) {
         GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
@@ -984,6 +1063,96 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     }
     return result;
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+}
+
+Json BuiltModel::measure(const Json& query,const Json& evaluated_topology,const std::string& feature_id) const {
+  validate_measurement_query(query);
+  if(query.at("action")=="section")return section(query,feature_id);
+  const auto selected=feature_id.empty()?impl_->output:feature_id;
+  try {
+    const auto& geometry=impl_->feature(selected);
+    std::optional<Json> current_topology;
+    const auto resolve=[&](const Json& target)->TopoDS_Shape{
+      const auto kind=text_field(target,"kind");
+      if(kind=="part"){
+        const auto id=text_field(target,"part_id");for(const auto& part:geometry.parts)if(part.id==id)return part.shape;
+        throw Error("selection_missing","Measurement leaf occurrence is absent",{{"part_id",id}});
+      }
+      const auto entity=text_field(target,"entity_id");const auto* list=kind=="face"?"faces":"edges";
+      if(evaluated_topology.value("feature_id",std::string{})!=selected||!evaluated_topology.contains(list))throw Error("stale_selection","Measurement topology does not match its evaluated feature");
+      const Json* original=nullptr;
+      for(const auto& item:evaluated_topology.at(list))if(item.at("id")==entity){if(original)throw Error("selection_ambiguous","Evaluation repeats a measurement entity");original=&item;}
+      if(!original)throw Error("selection_missing","Measurement entity is absent from the evaluation",{{"entity_id",entity}});
+      if(kind=="edge"&&original->value("degenerate",false))throw Error("selection_missing","Degenerate edges cannot be measured");
+      if(!current_topology)current_topology=topology(selected);
+      int match=0,matches=0,index=0;
+      for(const auto& item:current_topology->at(list)){++index;if(measurement_descriptor_matches(*original,item)){match=index;++matches;}}
+      if(matches!=1)throw Error(matches?"selection_ambiguous":"stale_selection","Cannot uniquely recover the evaluated measurement geometry",{{"entity_id",entity},{"matches",matches}});
+      return kind=="face"?geometry.faces(match):geometry.edges(match);
+    };
+    Json requested=Json::array(),part_ids=Json::array();std::string coverage="explicit_pair";
+    if(query.at("action")=="pair")requested.push_back(query.at("targets"));
+    else {
+      if(geometry.parts.size()<2)throw Error("invalid_argument","Assembly clearance needs at least two leaf occurrences");
+      if(query.contains("part_ids")){part_ids=query.at("part_ids");coverage="explicit_leaf_subset";}
+      else {if(geometry.parts.size()>measurement_part_limit)throw Error("limit_exceeded","All-pairs clearance exceeds 23 leaves; choose an explicit subset",{{"leaves",geometry.parts.size()},{"leaf_limit",measurement_part_limit},{"pair_limit",measurement_pair_limit}});
+        for(const auto& part:geometry.parts)part_ids.push_back(part.id);coverage="all_assembly_leaves";}
+      for(std::size_t a=0;a<part_ids.size();++a)for(std::size_t b=a+1;b<part_ids.size();++b)
+        requested.push_back(Json::array({{{"kind","part"},{"part_id",part_ids[a]}},{{"kind","part"},{"part_id",part_ids[b]}}}));
+    }
+    Json pairs=Json::array();double minimum=std::numeric_limits<double>::max();std::size_t interference=0;bool too_close=false;
+    std::map<std::string,TopoDS_Shape> shapes;
+    const auto cached_shape=[&](const Json& target)->const TopoDS_Shape&{const auto key=target.dump();auto found=shapes.find(key);if(found==shapes.end())found=shapes.emplace(key,resolve(target)).first;return found->second;};
+    for(const auto& targets:requested){
+      const auto& a=cached_shape(targets[0]);const auto& b=cached_shape(targets[1]);
+      BRepExtrema_DistShapeShape distance;distance.SetMultiThread(false);distance.LoadS1(a);distance.LoadS2(b);distance.SetDeflection(measurement_distance_tolerance);distance.Perform();
+      if(!distance.IsDone()||distance.NbSolution()<1||!std::isfinite(distance.Value())||distance.Value()<0)throw Error("kernel_failure","Exact measurement distance did not produce finite witnesses");
+      const auto gap=distance.Value();minimum=std::min(minimum,gap);Json witnesses=Json::array();int rejected=0;
+      const auto supported=[&](const gp_Pnt& p,const TopoDS_Shape& shape){
+        BRepExtrema_DistShapeShape check;check.SetMultiThread(false);check.LoadS1(BRepBuilderAPI_MakeVertex(p).Vertex());check.LoadS2(shape);
+        check.SetDeflection(measurement_distance_tolerance);check.Perform();
+        return check.IsDone()&&std::isfinite(check.Value())&&check.Value()<=measurement_distance_tolerance;
+      };
+      for(int i=1;i<=std::min<int>(distance.NbSolution(),measurement_witness_limit);++i){
+        const auto& pa=distance.PointOnShape1(i);const auto& pb=distance.PointOnShape2(i);
+        bool finite=true;for(const auto* p:{&pa,&pb})finite=finite&&std::isfinite(p->X())&&std::isfinite(p->Y())&&std::isfinite(p->Z());
+        if(!finite||std::abs(pa.Distance(pb)-gap)>measurement_distance_tolerance||!supported(pa,a)||!supported(pb,b)){++rejected;continue;}
+        witnesses.push_back({{"a_mm",point(pa)},{"b_mm",point(pb)}});
+      }
+      if(witnesses.empty())throw Error("kernel_failure","Exact measurement has no independently qualified closest-point witness");
+      Json item={{"targets",targets},{"distance_mm",gap},{"witnesses",witnesses},{"solution_count",distance.NbSolution()},
+        {"rejected_witness_count",rejected},{"witnesses_truncated",distance.NbSolution()>static_cast<int>(witnesses.size())},{"intersection_volume_mm3",nullptr},{"interference",nullptr}};
+      if(targets[0].at("kind")=="part"&&targets[1].at("kind")=="part"){
+        BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> arguments,tools;arguments.Append(a);tools.Append(b);
+        common.SetArguments(arguments);common.SetTools(tools);common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();
+        if(!common.IsDone()||common.HasErrors())throw Error("kernel_failure","Exact measurement intersection failed");
+        double volume=0;
+        if(!common.Shape().IsNull())for(TopExp_Explorer it(common.Shape(),TopAbs_SOLID);it.More();it.Next()){
+          GProp_GProps properties;BRepGProp::VolumeProperties(it.Current(),properties,true);volume+=std::max(0.0,properties.Mass());}
+        if(!std::isfinite(volume))throw Error("kernel_failure","Exact intersection volume is non-finite");
+        item["intersection_volume_mm3"]=volume;item["interference"]=volume>measurement_volume_tolerance;
+        if(item.at("interference")==true)++interference;
+      }
+      const auto analytic_axis=[](const TopoDS_Shape& shape)->std::optional<std::pair<gp_Dir,bool>>{
+        if(shape.ShapeType()==TopAbs_FACE){BRepAdaptor_Surface surface(TopoDS::Face(shape));if(surface.GetType()==GeomAbs_Plane)return std::pair{surface.Plane().Axis().Direction(),true};}
+        if(shape.ShapeType()==TopAbs_EDGE){BRepAdaptor_Curve curve(TopoDS::Edge(shape));if(curve.GetType()==GeomAbs_Line)return std::pair{curve.Line().Direction(),false};}
+        return std::nullopt;
+      };
+      const auto axis_a=analytic_axis(a),axis_b=analytic_axis(b);
+      if(axis_a&&axis_b){const auto cosine=std::clamp(std::abs(axis_a->first.Dot(axis_b->first)),0.0,1.0);const bool mixed=axis_a->second!=axis_b->second;
+        item["angle_deg"]=(mixed?std::asin(cosine):std::acos(cosine))*180/std::numbers::pi;
+        item["angle_method"]=mixed?"line_to_plane":axis_a->second?"unoriented_plane_normals":"unoriented_line_directions";}
+      if(query.contains("minimum_clearance_mm")&&gap+measurement_distance_tolerance<query.at("minimum_clearance_mm").get<double>())too_close=true;
+      pairs.push_back(std::move(item));
+    }
+    Json report={{"schema_version",1},{"units","mm"},{"action",query.at("action")},{"method","exact_BRep_minimum_distance"},{"coordinate_space","committed_source_pose"},
+      {"coverage",coverage},{"part_ids",part_ids},{"pairs",pairs},{"minimum_distance_mm",minimum},{"interference_count",interference},
+      {"status",interference||too_close?"fail":query.contains("minimum_clearance_mm")?"pass":"measured"},
+      {"distance_tolerance_mm",measurement_distance_tolerance},{"intersection_volume_tolerance_mm3",measurement_volume_tolerance}};
+    if(query.contains("minimum_clearance_mm"))report["minimum_clearance_mm"]=query.at("minimum_clearance_mm");
+    return report;
+  }catch(const Error& error){auto details=error.details;details["feature_id"]=selected;throw Error(error.code,error.what(),details);}
+  catch(const Standard_Failure& error){throw occt_error(error,{{"feature_id",selected}});}
 }
 
 Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limits) const {
@@ -1085,6 +1254,408 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
     }
     return result;
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+}
+
+
+Json BuiltModel::section(const Json& query,const std::string& feature_id) const {
+  validate_section_query(query);const auto selected=feature_id.empty()?impl_->output:feature_id;
+  try {
+    const auto& geometry=impl_->feature(selected);const auto data=summary(selected);
+    const auto n=query.at("plane").at("normal").get<std::array<double,3>>();const auto offset=query.at("plane").at("offset_mm").get<double>();
+    const auto explode=query.value("explode",Json{{"distance_mm",0},{"directions",Json::array()}});const auto distance=number(explode.at("distance_mm"));
+    const auto& box=data.at("bounds_mm");std::array<double,3> center{};double span=0;
+    for(std::size_t k=0;k<3;++k){const auto lo=box.at("min")[k].get<double>(),hi=box.at("max")[k].get<double>();center[k]=lo+(hi-lo)/2;span=std::max(span,hi-lo);}
+    std::map<std::string,std::array<double,3>> directions,shifts;
+    for(const auto& item:explode.at("directions"))directions.emplace(text_field(item,"part_id"),item.at("direction").get<std::array<double,3>>());
+    std::map<std::string,TopoDS_Shape> leaves;for(const auto& part:geometry.parts)leaves.emplace(part.id,part.shape);
+    if(leaves.empty()&&(distance>0||!directions.empty()||query.contains("part_ids")))throw Error("invalid_argument","Section leaf scopes and exploded offsets require an assembly");
+    for(const auto& [id,unused]:directions)if(!leaves.contains(id))throw Error("selection_missing","Section direction names an absent leaf",{{"part_id",id}});
+    std::size_t ordinal=0;for(const auto& [id,shape]:leaves){
+      std::array<double,3> v{};
+      if(directions.contains(id))v=directions.at(id);
+      else {const auto b=bounds(shape);for(std::size_t k=0;k<3;++k)v[k]=(b.at("min")[k].get<double>()+(b.at("max")[k].get<double>()-b.at("min")[k].get<double>())/2-center[k])/span;
+        if(std::hypot(v[0],v[1],v[2])<1e-12){v={0,0,0};v[ordinal%3]=ordinal%2?-1:1;}}
+      const auto length=std::hypot(v[0],v[1],v[2]);for(auto& component:v)component=component/length*distance;shifts[id]=v;++ordinal;
+    }
+    std::vector<std::pair<Json,TopoDS_Shape>> sources;std::string coverage="feature_solids";
+    if(leaves.empty())sources.emplace_back(nullptr,geometry.shape);
+    else if(query.contains("part_ids")){coverage="explicit_leaf_subset";for(const auto& value:query.at("part_ids")){const auto id=value.get<std::string>();if(!leaves.contains(id))throw Error("selection_missing","Section subset names an absent leaf",{{"part_id",id}});sources.emplace_back(value,leaves.at(id));}}
+    else {coverage="all_assembly_leaves";for(const auto& part:geometry.parts)sources.emplace_back(part.id,part.shape);}
+    Json sections=Json::array(),regions=Json::array(),curves=Json::array(),positions=Json::array(),triangles=Json::array(),triangle_regions=Json::array();
+    double total_area=0,total_length=0;std::size_t total_solids=0,total_points=0,total_contacts=0;
+    const auto finite=[&](const gp_Pnt& p,double plane_offset){
+      if(!std::isfinite(p.X())||!std::isfinite(p.Y())||!std::isfinite(p.Z())||std::max({std::abs(p.X()),std::abs(p.Y()),std::abs(p.Z())})>1e12||std::abs(n[0]*p.X()+n[1]*p.Y()+n[2]*p.Z()-plane_offset)>section_point_tolerance_mm)
+        throw Error("kernel_failure","Section point is non-finite, outside coordinate bounds or off its source plane");
+      return point(p);
+    };
+    for(const auto& [owner,source]:sources){
+      const auto shift=owner.is_null()?std::array<double,3>{0,0,0}:shifts.at(owner.get<std::string>());const auto plane_offset=offset-n[0]*shift[0]-n[1]*shift[1]-n[2]*shift[2];
+      double area=0,length=0;const auto region_start=regions.size(),curve_start=curves.size();Json contacts=Json::array();
+      ShapeMap solids;TopExp::MapShapes(source,TopAbs_SOLID,solids);if(solids.IsEmpty())throw Error("invalid_argument","Exact sections require source solids");
+      if(total_solids+solids.Extent()>section_part_limit)throw Error("limit_exceeded","Section exceeds its aggregate 1024-solid budget");total_solids+=solids.Extent();
+      for(int solid=1;solid<=solids.Extent();++solid){
+        const auto b=bounds(solids(solid));double lo=0,hi=0;for(std::size_t k=0;k<3;++k){const auto a=n[k]*b.at("min")[k].get<double>(),z=n[k]*b.at("max")[k].get<double>();lo+=std::min(a,z);hi+=std::max(a,z);}
+        if(plane_offset<lo-1e-7||plane_offset>hi+1e-7)continue;
+        const auto square=n[0]*n[0]+n[1]*n[1]+n[2]*n[2];const gp_Pln plane(gp_Pnt(n[0]*plane_offset/square,n[1]*plane_offset/square,n[2]*plane_offset/square),gp_Dir(n[0],n[1],n[2]));
+        const auto face=BRepBuilderAPI_MakeFace(plane).Face();NCollection_List<TopoDS_Shape> arguments,tools;arguments.Append(solids(solid));tools.Append(face);
+        BRepAlgoAPI_Section intersection;intersection.SetArguments(arguments);intersection.SetTools(tools);intersection.SetNonDestructive(true);intersection.SetRunParallel(false);intersection.Approximation(false);intersection.Build();
+        if(!intersection.IsDone()||intersection.HasErrors())throw Error("kernel_failure","Native source-plane intersection failed");
+        ShapeMap edges;TopExp::MapShapes(intersection.Shape(),TopAbs_EDGE,edges);
+        if(regions.size()+curves.size()+edges.Extent()+total_contacts>section_entity_limit)throw Error("limit_exceeded","Section exceeds its aggregate entity budget");
+        for(int index=1;index<=edges.Extent();++index){
+          const auto edge=TopoDS::Edge(edges(index));auto item=edge_descriptor(edge,1);item["id"]="section-"+std::to_string(curves.size()+1);item["part_id"]=owner;item["solid_index"]=solid;item["points"]=Json::array();
+          if(item.at("degenerate").get<bool>()){
+            ShapeMap vertices;TopExp::MapShapes(edge,TopAbs_VERTEX,vertices);
+            if(vertices.IsEmpty())throw Error("kernel_failure","Degenerate section edge has no native contact vertex");
+            item["center_mm"]=finite(BRep_Tool::Pnt(TopoDS::Vertex(vertices(1))),plane_offset);
+          }else{
+            const auto center=item.at("center_mm").get<std::array<double,3>>();item["center_mm"]=finite(gp_Pnt(center[0],center[1],center[2]),plane_offset);
+          }
+          if(!item.at("degenerate").get<bool>()){
+            BRepAdaptor_Curve curve(edge);GCPnts_QuasiUniformDeflection sampling(curve,section_deflection_mm);if(!sampling.IsDone())throw Error("kernel_failure","Section curve tessellation failed");
+            if(total_points+sampling.NbPoints()>section_point_limit)throw Error("limit_exceeded","Section exceeds its aggregate edge-point budget");total_points+=sampling.NbPoints();
+            for(int i=1;i<=sampling.NbPoints();++i)item["points"].push_back(finite(sampling.Value(i),plane_offset));
+          }
+          const auto value=item.at("length_mm").get<double>();if(!std::isfinite(value)||value<0)throw Error("kernel_failure","Section curve length is invalid");length+=value;curves.push_back(std::move(item));
+        }
+        ShapeMap edge_vertices,vertices;for(int i=1;i<=edges.Extent();++i)if(!BRep_Tool::Degenerated(TopoDS::Edge(edges(i))))TopExp::MapShapes(edges(i),TopAbs_VERTEX,edge_vertices);
+        TopExp::MapShapes(intersection.Shape(),TopAbs_VERTEX,vertices);
+        for(int i=1;i<=vertices.Extent();++i)if(!edge_vertices.Contains(vertices(i))){
+          if(regions.size()+curves.size()+total_contacts+1>section_entity_limit)throw Error("limit_exceeded","Section exceeds its contact-point budget");
+          contacts.push_back(finite(BRep_Tool::Pnt(TopoDS::Vertex(vertices(i))),plane_offset));++total_contacts;
+        }
+        BRepAlgoAPI_Common material;material.SetArguments(arguments);material.SetTools(tools);material.SetNonDestructive(true);material.SetRunParallel(false);material.Build();
+        if(!material.IsDone()||material.HasErrors())throw Error("kernel_failure","Section material intersection failed");
+        ShapeMap faces;TopExp::MapShapes(material.Shape(),TopAbs_FACE,faces);
+        if(regions.size()+curves.size()+faces.Extent()+total_contacts>section_entity_limit)throw Error("limit_exceeded","Section exceeds its aggregate entity budget");
+        for(int i=1;i<=faces.Extent();++i){
+          const auto cap=TopoDS::Face(faces(i));if(!BRepCheck_Analyzer(cap).IsValid())throw Error("kernel_failure","Section material face is invalid");
+          GProp_GProps surface,boundary;BRepGProp::SurfaceProperties(cap,surface);BRepGProp::LinearProperties(cap,boundary);
+          if(!std::isfinite(surface.Mass())||surface.Mass()<=0||!std::isfinite(boundary.Mass())||boundary.Mass()<0)throw Error("kernel_failure","Section cap measures are invalid");
+          const auto id="cap-"+std::to_string(regions.size()+1);regions.push_back({{"id",id},{"part_id",owner},{"solid_index",solid},{"area_mm2",surface.Mass()},{"perimeter_mm",boundary.Mass()},{"center_mm",finite(surface.CentreOfMass(),plane_offset)},{"wire_count",count(cap,TopAbs_WIRE)}});area+=surface.Mass();
+          BRepMesh_IncrementalMesh tessellation(cap,section_deflection_mm,false,.5,false);if(!tessellation.IsDone())throw Error("kernel_failure","Section cap tessellation failed");
+          TopLoc_Location location;const auto mesh=BRep_Tool::Triangulation(cap,location);if(mesh.IsNull())throw Error("kernel_failure","Section cap has no triangulation");
+          const auto base=positions.size();if(base+mesh->NbNodes()>section_vertex_limit||triangles.size()+mesh->NbTriangles()>section_triangle_limit)throw Error("limit_exceeded","Section exceeds aggregate mesh bounds");
+          for(int node=1;node<=mesh->NbNodes();++node)positions.push_back(finite(mesh->Node(node).Transformed(location.Transformation()),plane_offset));
+          for(int t=1;t<=mesh->NbTriangles();++t){int a,b,c;mesh->Triangle(t).Get(a,b,c);if(cap.Orientation()==TopAbs_REVERSED)std::swap(b,c);triangles.push_back({base+a-1,base+b-1,base+c-1});triangle_regions.push_back(id);}
+        }
+      }
+      total_area+=area;total_length+=length;sections.push_back({{"part_id",owner},{"source_plane_offset_mm",plane_offset},{"displacement_mm",shift},{"area_mm2",area},{"boundary_length_mm",length},
+        {"region_count",regions.size()-region_start},{"curve_count",curves.size()-curve_start},{"contact_points",contacts},{"status",area>0?"area":curves.size()>curve_start||!contacts.empty()?"tangent":"empty"}});
+    }
+    if(!std::isfinite(total_area)||!std::isfinite(total_length))throw Error("kernel_failure","Section totals are non-finite");
+    Json result={{"schema_version",1},{"units","mm"},{"action","section"},{"method","native_BRep_planar_section"},{"coordinate_space","committed_source_pose"},{"plane_coordinate_space","displayed_world_mm"},
+      {"coverage",coverage},{"area_semantics","sum_of_solid_sections"},{"plane",query.at("plane")},{"explode",explode},{"sections",sections},{"regions",regions},{"curves",curves},
+      {"mesh",{{"positions",positions},{"triangles",triangles},{"triangle_regions",triangle_regions},{"linear_deflection_mm",section_deflection_mm}}},
+      {"area_mm2",total_area},{"boundary_length_mm",total_length},{"status",total_area>0?"area":!curves.empty()||total_contacts?"tangent":"empty"},{"selection_lifetime","section_result"},{"tolerance_mm",1e-7},{"point_tolerance_mm",section_point_tolerance_mm}};
+    if(result.dump().size()>section_bytes_limit)throw Error("limit_exceeded","Section report exceeds 8 MiB");return result;
+  }catch(const Error& e){auto details=e.details;details["feature_id"]=selected;throw Error(e.code,e.what(),details);}
+  catch(const Standard_Failure& e){throw occt_error(e,{{"feature_id",selected}});}
+}
+
+namespace {
+constexpr double fabrication_tolerance=1e-6;
+Json fabrication_check(const std::string& id,const std::string& status,const std::string& method,
+                       const std::string& reason,Json evidence=Json::object()) {
+  return {{"id",id},{"status",status},{"method",method},{"reason",reason},{"evidence",std::move(evidence)}};
+}
+std::string fabrication_status(const Json& checks) {
+  bool unknown=false;
+  for(const auto& c:checks){if(c.at("status")=="fail")return "fail";if(c.at("status")=="unknown")unknown=true;}
+  return unknown||checks.empty()?"unknown":"pass";
+}
+struct FabricationFrame {
+  gp_Dir x,y,z;gp_Trsf transform;
+  explicit FabricationFrame(const Json& profile):
+    x(profile.at("orientation").at("x_direction")[0].get<double>(),profile.at("orientation").at("x_direction")[1].get<double>(),profile.at("orientation").at("x_direction")[2].get<double>()),
+    y(0,1,0),
+    z(profile.at("orientation").at("build_direction")[0].get<double>(),profile.at("orientation").at("build_direction")[1].get<double>(),profile.at("orientation").at("build_direction")[2].get<double>()) {
+    y=gp_Dir(gp_Vec(z).Crossed(gp_Vec(x)));x=gp_Dir(gp_Vec(y).Crossed(gp_Vec(z)));
+    transform.SetTransformation(gp_Ax3(gp_Pnt(0,0,0),z,x));
+  }
+  double height(const gp_Pnt& p)const{return gp_Vec(gp_Pnt(0,0,0),p).Dot(gp_Vec(z));}
+};
+Json fabrication_mesh_checks(const Json& mesh,const Json& profile,double bed_height) {
+  using Cell=std::array<long long,3>;
+  std::map<Cell,std::vector<std::size_t>> cells;std::vector<gp_Pnt> welded;
+  std::vector<std::size_t> ids;ids.reserve(mesh.at("positions").size());
+  for(const auto& p:mesh.at("positions")) {
+    gp_Pnt position(p[0].get<double>(),p[1].get<double>(),p[2].get<double>());
+    Cell cell={static_cast<long long>(std::floor(position.X()/fabrication_tolerance)),
+      static_cast<long long>(std::floor(position.Y()/fabrication_tolerance)),static_cast<long long>(std::floor(position.Z()/fabrication_tolerance))};
+    std::optional<std::size_t> found;
+    for(int a=-1;a<=1&&!found;++a)for(int b=-1;b<=1&&!found;++b)for(int c=-1;c<=1&&!found;++c) {
+      const auto it=cells.find({cell[0]+a,cell[1]+b,cell[2]+c});
+      if(it!=cells.end())for(const auto id:it->second)if(position.Distance(welded[id])<=fabrication_tolerance){found=id;break;}
+    }
+    if(!found){found=welded.size();welded.push_back(position);cells[cell].push_back(*found);}ids.push_back(*found);
+  }
+  struct Edge {std::size_t count=0;int balance=0;};
+  std::map<std::array<std::size_t,2>,Edge> edges;
+  std::size_t degenerate=0,overhangs=0,bed_faces=0;
+  double volume=0,area=0,overhang_area=0,max_angle=0;
+  Json witnesses=Json::array();const FabricationFrame frame(profile);
+  const auto origin=welded.empty()?gp_Pnt(0,0,0):welded.front();
+  for(std::size_t i=0;i<mesh.at("triangles").size();++i) {
+    const auto& t=mesh.at("triangles")[i];std::array<std::size_t,3> v={ids.at(t[0].get<std::size_t>()),ids.at(t[1].get<std::size_t>()),ids.at(t[2].get<std::size_t>())};
+    const auto& a=welded[v[0]];const auto& b=welded[v[1]];const auto& c=welded[v[2]];
+    const auto cross=gp_Vec(a,b).Crossed(gp_Vec(a,c));const auto twice_area=cross.Magnitude();area+=twice_area/2;
+    volume+=gp_Vec(origin,a).Dot(gp_Vec(origin,b).Crossed(gp_Vec(origin,c)))/6;
+    if(v[0]==v[1]||v[1]==v[2]||v[2]==v[0]||twice_area<=fabrication_tolerance*fabrication_tolerance){++degenerate;continue;}
+    for(int j=0;j<3;++j){auto u=v[j],w=v[(j+1)%3];const auto forward=u<w;if(!forward)std::swap(u,w);auto& edge=edges[{u,w}];++edge.count;edge.balance+=forward?1:-1;}
+    if(profile.at("process")=="fdm") {
+      if(std::abs(frame.height(a)-bed_height)<=fabrication_tolerance&&std::abs(frame.height(b)-bed_height)<=fabrication_tolerance&&std::abs(frame.height(c)-bed_height)<=fabrication_tolerance){++bed_faces;continue;}
+      const auto cosine=cross.Dot(gp_Vec(frame.z))/twice_area;
+      const auto angle=std::asin(std::clamp(-cosine,0.0,1.0))*180/std::acos(-1.0);max_angle=std::max(max_angle,angle);
+      if(profile.contains("overhang_angle_deg")&&angle>profile.at("overhang_angle_deg").get<double>()+1e-6) {
+        ++overhangs;overhang_area+=twice_area/2;
+        if(witnesses.size()<32)witnesses.push_back({{"triangle_index",i},{"face_id",mesh.at("triangle_faces")[i]},
+          {"point_mm",{(a.X()+b.X()+c.X())/3,(a.Y()+b.Y()+c.Y())/3,(a.Z()+b.Z()+c.Z())/3}},{"angle_from_vertical_deg",angle}});
+      }
+    }
+  }
+  std::size_t boundary=0,nonmanifold=0,winding=0;
+  for(const auto& [key,edge]:edges){if(edge.count==1)++boundary;else if(edge.count!=2)++nonmanifold;else if(edge.balance!=0)++winding;}
+  Json checks=Json::array({fabrication_check("mesh_topology",degenerate||boundary||nonmanifold||winding||volume<=0?"fail":"pass",
+    "native_tessellation_welded_edge_incidence","Topology and winding of the measured mesh only; not a self-intersection certificate.",
+    {{"linear_deflection_mm",mesh.at("linear_deflection_mm")},{"angular_deflection_rad",mesh.at("angular_deflection_rad")},
+     {"weld_tolerance_mm",fabrication_tolerance},{"triangle_count",mesh.at("triangles").size()},{"welded_vertices",welded.size()},
+     {"degenerate_triangles",degenerate},{"boundary_edges",boundary},{"nonmanifold_edges",nonmanifold},{"inconsistent_edges",winding},
+     {"signed_volume_mm3",volume},{"area_mm2",area}}),
+    fabrication_check("mesh_self_intersections","unknown","not_evaluated","Triangle/triangle self-intersection and slicer repair have not been evaluated.")});
+  if(profile.at("process")=="fdm")checks.push_back(fabrication_check("fdm_overhang",
+    !profile.contains("overhang_angle_deg")?"unknown":overhangs?"fail":"pass","all_native_mesh_triangles",
+    profile.contains("overhang_angle_deg")?"Triangles exceeding the supplied angle; support design and slicing remain unevaluated.":"No overhang angle was supplied.",
+    {{"max_angle_from_vertical_deg",max_angle},{"triangles_exceeding_limit",overhangs},{"area_exceeding_limit_mm2",overhang_area},
+     {"bed_contact_triangles_excluded",bed_faces},{"bed_translation_mm",-bed_height},{"witnesses",witnesses},{"witnesses_truncated",overhangs>witnesses.size()}}));
+  return checks;
+}
+struct FabricationSample {gp_Pnt p;gp_Dir n;int face;};
+std::vector<FabricationSample> fabrication_samples(const FeatureGeometry& geometry,std::size_t limit) {
+  std::vector<FabricationSample> samples;const auto faces=geometry.faces.Extent();
+  // Evenly distribute the finite budget over faces, with two interior UV samples
+  // per admitted face. UV centroids are reclassified against the exact trim.
+  const auto admitted=std::min<std::size_t>(faces,(limit+1)/2);
+  for(std::size_t slot=0;slot<admitted&&samples.size()<limit;++slot) {
+    const auto index=1+static_cast<int>(slot*faces/admitted);const auto face=TopoDS::Face(geometry.faces(index));
+    TopLoc_Location location;const auto triangles=BRep_Tool::Triangulation(face,location);
+    if(triangles.IsNull()||!triangles->HasUVNodes())continue;
+    BRepAdaptor_Surface surface(face);
+    for(int pick=0;pick<2&&samples.size()<limit;++pick) {
+      const auto start=1+(triangles->NbTriangles()*(pick?3:1))/4;
+      for(int attempt=0;attempt<std::min(8,triangles->NbTriangles());++attempt) {
+        const auto tri=1+(start-1+attempt)%triangles->NbTriangles();int a,b,c;triangles->Triangle(tri).Get(a,b,c);
+        const auto ua=triangles->UVNode(a),ub=triangles->UVNode(b),uc=triangles->UVNode(c);
+        const gp_Pnt2d uv((ua.X()+ub.X()+uc.X())/3,(ua.Y()+ub.Y()+uc.Y())/3);
+        if(BRepClass_FaceClassifier(face,uv,1e-9,true).State()!=TopAbs_IN)continue;
+        BRepLProp_SLProps props(surface,uv.X(),uv.Y(),1,1e-9);if(!props.IsNormalDefined())continue;
+        auto n=props.Normal();if(face.Orientation()==TopAbs_REVERSED)n.Reverse();
+        const auto p=surface.Value(uv.X(),uv.Y());
+        bool duplicate=false;for(const auto& old:samples)if(old.face==index&&p.Distance(old.p)<fabrication_tolerance)duplicate=true;
+        if(!duplicate)samples.push_back({p,n,index});break;
+      }
+    }
+  }
+  return samples;
+}
+bool fabrication_inside(const TopoDS_Shape& shape,const gp_Pnt& p) {
+  for(TopExp_Explorer it(shape,TopAbs_SOLID);it.More();it.Next())if(BRepClass3d_SolidClassifier(it.Current(),p,1e-8).State()==TopAbs_IN)return true;
+  return false;
+}
+std::optional<double> fabrication_ray(IntCurvesFace_ShapeIntersector& ray,const gp_Pnt& p,const gp_Dir& direction,double length) {
+  ray.Perform(gp_Lin(p,direction),fabrication_tolerance,length);
+  if(!ray.IsDone())throw Error("kernel_failure","Exact fabrication ray intersection failed");
+  double nearest=length+1;
+  for(int i=1;i<=ray.NbPnt();++i)if(ray.WParameter(i)>=fabrication_tolerance)nearest=std::min(nearest,ray.WParameter(i));
+  return nearest<=length?std::optional<double>(nearest):std::nullopt;
+}
+Json fabrication_surface_checks(const FeatureGeometry& geometry,const Json& profile,const Json& oriented_bounds,
+                                const std::vector<FabricationSample>& samples) {
+  const FabricationFrame frame(profile);const auto process=text_field(profile,"process");
+  const auto lo=oriented_bounds.at("min").get<std::array<double,3>>(),hi=oriented_bounds.at("max").get<std::array<double,3>>();
+  const auto length=std::hypot(hi[0]-lo[0],hi[1]-lo[1],hi[2]-lo[2])+1;
+  IntCurvesFace_ShapeIntersector ray;ray.Load(geometry.shape,1e-8);
+  double minimum=std::numeric_limits<double>::max(),draft_min=90;
+  std::size_t chords=0,thin=0,draft_count=0,draft_bad=0,undercuts=0,access_count=0,blocked=0,unresolved=0,parting_samples=0;
+  Json wall_witnesses=Json::array(),mold_witnesses=Json::array(),access_witnesses=Json::array();std::set<int> covered;
+  for(const auto& sample:samples) {
+    covered.insert(sample.face);
+    auto inward=sample.n;inward.Reverse();
+    if(fabrication_inside(geometry.shape,sample.p.Translated(gp_Vec(inward)*fabrication_tolerance))) {
+      const auto chord=fabrication_ray(ray,sample.p,inward,length);
+      if(chord&&fabrication_inside(geometry.shape,sample.p.Translated(gp_Vec(inward)*(*chord/2)))) {
+        ++chords;minimum=std::min(minimum,*chord);
+        if(profile.contains("minimum_wall_mm")&&*chord+fabrication_tolerance<profile.at("minimum_wall_mm").get<double>()) {
+          ++thin;if(wall_witnesses.size()<32)wall_witnesses.push_back({{"face_id","face-"+std::to_string(sample.face)},
+            {"point_mm",point(sample.p)},{"inward_direction",direction(inward)},{"chord_mm",*chord}});
+        }
+      }else ++unresolved;
+    }else ++unresolved;
+    if(process=="cnc"&&sample.n.Dot(frame.z)>1e-7) {
+      ++access_count;const auto hit=fabrication_ray(ray,sample.p,frame.z,length);
+      if(hit){++blocked;if(access_witnesses.size()<32)access_witnesses.push_back({{"face_id","face-"+std::to_string(sample.face)},{"point_mm",point(sample.p)},{"obstruction_distance_mm",*hit}});}
+    }
+    if(process=="molding"&&profile.contains("parting_plane_mm")) {
+      const auto height=frame.height(sample.p)-profile.at("parting_plane_mm").get<double>();
+      if(std::abs(height)<=fabrication_tolerance){++parting_samples;continue;}
+      auto pull=frame.z;if(height<0)pull.Reverse();
+      const auto dot=std::clamp(sample.n.Dot(pull),-1.0,1.0);
+      const auto draft=std::asin(dot)*180/std::acos(-1.0);
+      ++draft_count;draft_min=std::min(draft_min,draft);
+      const auto hit=fabrication_ray(ray,sample.p,pull,length);
+      const auto undercut=dot < -1e-7||hit.has_value();
+      if(undercut)++undercuts;
+      const auto insufficient=profile.contains("minimum_draft_deg")&&draft+1e-6<profile.at("minimum_draft_deg").get<double>();
+      if(insufficient)++draft_bad;
+      if((undercut||insufficient)&&mold_witnesses.size()<32)mold_witnesses.push_back({{"face_id","face-"+std::to_string(sample.face)},
+        {"point_mm",point(sample.p)},{"pull_direction",direction(pull)},{"draft_deg",draft},{"undercut",undercut}});
+    }
+  }
+  Json coverage={{"samples",samples.size()},{"sampled_faces",covered.size()},{"total_faces",geometry.faces.Extent()},
+    {"sampling","up_to_two_exact_trimmed_UV_points_per_admitted_face"},{"maximum_samples",fabrication_sample_limit}};
+  Json wall=coverage;wall["measured_chords"]=chords;wall["unresolved_chords"]=unresolved;wall["below_limit"]=thin;wall["witnesses"]=wall_witnesses;
+  wall["witnesses_truncated"]=thin>wall_witnesses.size();if(chords)wall["minimum_sampled_chord_mm"]=minimum;
+  Json checks=Json::array({fabrication_check("sampled_wall_thickness",
+    !profile.contains("minimum_wall_mm")||!chords?"unknown":thin?"fail":unresolved?"unknown":"pass",
+    "exact_inward_normal_ray_chords_at_finite_UV_samples","Only sampled normal chords are measured; thin regions between samples can be missed.",wall),
+    fabrication_check("global_minimum_wall","unknown","not_evaluated","Finite surface samples do not prove the global minimum wall thickness.")});
+  if(process=="cnc") {
+    Json radii=Json::array();std::size_t unsupported=0,too_small=0;
+    for(int i=1;i<=geometry.faces.Extent();++i) {
+      const auto face=TopoDS::Face(geometry.faces(i));BRepAdaptor_Surface surface(face);
+      if(surface.GetType()!=GeomAbs_Cylinder)continue;
+      const auto cylinder=surface.Cylinder();
+      const auto sample=std::find_if(samples.begin(),samples.end(),[&](const auto& s){return s.face==i;});
+      if(sample==samples.end()){++unsupported;continue;}
+      gp_Vec radial(cylinder.Location(),sample->p);radial-=gp_Vec(cylinder.Axis().Direction())*radial.Dot(gp_Vec(cylinder.Axis().Direction()));
+      if(radial.Dot(gp_Vec(sample->n))>=0)continue;
+      if(std::abs(cylinder.Axis().Direction().Dot(frame.z))<1-1e-7){++unsupported;continue;}
+      radii.push_back({{"face_id","face-"+std::to_string(i)},{"radius_mm",cylinder.Radius()}});
+      if(profile.contains("tool_radius_mm")&&cylinder.Radius()+fabrication_tolerance<profile.at("tool_radius_mm").get<double>())++too_small;
+    }
+    checks.push_back(fabrication_check("cnc_internal_cylinder_radius",!profile.contains("tool_radius_mm")||radii.empty()?"unknown":too_small?"fail":unsupported?"unknown":"pass",
+      "exact_axial_concave_cylindrical_faces","Checks axial cylindrical concavities only, not all pocket corners or swept cutter reach.",
+      {{"cylinders",radii},{"below_tool_radius",too_small},{"unsupported_cylinders",unsupported}}));
+    checks.push_back(fabrication_check("cnc_point_access",!access_count?"unknown":blocked?"fail":"pass","exact_axial_rays_at_upward_facing_samples",
+      "Point visibility from the stated tool axis; cutter radius, stock, fixtures and toolpaths remain unevaluated.",
+      {{"coverage",coverage},{"samples_examined",access_count},{"blocked_samples",blocked},{"witnesses",access_witnesses}}));
+    checks.push_back(fabrication_check("cnc_toolpath_and_stock","unknown","not_evaluated","Swept cutter access, non-cylindrical internal corners, stock and fixtures have not been evaluated."));
+  } else if(process=="sheet_laser") {
+    std::size_t unsupported=0,invalid=0,caps_min=0,caps_max=0;Json faces=Json::array();
+    for(int i=1;i<=geometry.faces.Extent();++i) {
+      const auto face=TopoDS::Face(geometry.faces(i));BRepAdaptor_Surface surface(face);
+      const auto kind=surface.GetType();bool bad=false,unknown=false;
+      if(kind==GeomAbs_Plane) {
+        const auto plane=surface.Plane();const auto dot=std::abs(plane.Axis().Direction().Dot(frame.z));
+        if(dot>1-1e-9) {
+          const auto z=frame.height(plane.Location());
+          if(std::abs(z-lo[2])<=fabrication_tolerance)++caps_min;
+          else if(std::abs(z-hi[2])<=fabrication_tolerance)++caps_max;
+          else bad=true;
+        } else if(dot>1e-9)bad=true;
+      }else if(kind==GeomAbs_Cylinder)bad=std::abs(surface.Cylinder().Axis().Direction().Dot(frame.z))<1-1e-9;
+      else if(kind==GeomAbs_SurfaceOfExtrusion)bad=std::abs(surface.Direction().Dot(frame.z))<1-1e-9;
+      else if(kind==GeomAbs_Cone||kind==GeomAbs_Sphere||kind==GeomAbs_Torus)bad=true;
+      else unknown=true;
+      if(bad)++invalid;if(unknown)++unsupported;
+      if((bad||unknown)&&faces.size()<32)faces.push_back({{"face_id","face-"+std::to_string(i)},{"surface_kind",surface_kind(kind)},{"unsupported",unknown}});
+    }
+    const auto prismatic=invalid?"fail":unsupported?"unknown":caps_min&&caps_max?"pass":"fail";
+    checks.push_back(fabrication_check("sheet_prismatic",prismatic,"exact_caps_and_parallel_plane_cylinder_extrusion_walls",
+      "Constant-height sheet extrusion in the supplied orientation; unsupported surface types remain unknown.",
+      {{"thickness_mm",hi[2]-lo[2]},{"bottom_caps",caps_min},{"top_caps",caps_max},{"nonprismatic_faces",invalid},{"unsupported_faces",unsupported},{"witnesses",faces}}));
+    const auto stock=profile.contains("sheet_thickness_mm");
+    checks.push_back(fabrication_check("sheet_stock_thickness",!stock||std::string(prismatic)!="pass"?"unknown":
+      std::abs(hi[2]-lo[2]-profile.at("sheet_thickness_mm").get<double>())<=profile.at("sheet_thickness_tolerance_mm").get<double>()+fabrication_tolerance?"pass":"fail",
+      "exact_oriented_height_of_verified_prismatic_shape","Stock comparison requires an explicit nominal thickness and allowance.",
+      {{"measured_thickness_mm",hi[2]-lo[2]}}));
+    checks.push_back(fabrication_check("sheet_kerf_bends_and_material","unknown","not_evaluated","Kerf, bend development, material, machine and vendor acceptance have not been evaluated."));
+  } else if(process=="molding") {
+    const auto measured=draft_count>0;Json evidence={{"coverage",coverage},{"measured_samples",draft_count},{"on_parting_plane_samples_skipped",parting_samples},
+      {"insufficient_draft_samples",draft_bad},{"undercut_samples",undercuts},{"witnesses",mold_witnesses}};
+    if(measured)evidence["minimum_sampled_signed_draft_deg"]=draft_min;
+    checks.push_back(fabrication_check("molding_sampled_draft",!profile.contains("minimum_draft_deg")||!measured?"unknown":draft_bad?"fail":"pass",
+      "exact_surface_normals_at_finite_UV_samples","Signed draft from the supplied build/pull axis; both sides pull away from the stated parting plane.",evidence));
+    checks.push_back(fabrication_check("molding_sampled_undercuts",!measured?"unknown":undercuts?"fail":"pass","exact_normals_and_axial_rays_at_finite_UV_samples",
+      "Only sampled normals and pull rays are checked; global release, cores and tooling remain unevaluated.",evidence));
+    checks.push_back(fabrication_check("molding_global_release_and_flow","unknown","not_evaluated","Global mold release, parting surfaces, cores, shrinkage, fill and material have not been evaluated."));
+  }
+  return checks;
+}
+}
+
+Json BuiltModel::fabrication_review(const Json& options,const std::string& feature_id)const {
+  validate_fabrication_options(options);
+  const auto selected=feature_id.empty()?impl_->output:feature_id;
+  try {
+    const auto& geometry=impl_->feature(selected);if(!count(geometry.shape,TopAbs_SOLID))throw Error("invalid_argument","Fabrication review requires solid output",{{"feature_id",selected}});
+    std::map<std::string,Json> sources,overrides;
+    if(geometry.parts.empty())sources[selected]=Json::array({selected});
+    else for(const auto& part:geometry.parts){if(!sources.contains(part.input))sources[part.input]=Json::array();sources[part.input].push_back(part.id);}
+    if(sources.size()>fabrication_part_limit)throw Error("limit_exceeded","Too many fabrication source parts");
+    for(const auto& part:options.value("parts",Json::array())) {
+      const auto id=text_field(part,"feature_id");if(!sources.contains(id))throw Error("invalid_argument","Part process profile must name a selected leaf source",{{"feature_id",id}});
+      overrides[id]=part.at("profile");
+    }
+    Json result={{"schema_version",1},{"status","unknown"},{"coordinate_policy","source_features_and_saved_occurrences"},
+      {"selection_lifetime","report"},{"geometric_tolerance_mm",fabrication_tolerance},{"checks",Json::array()},{"parts",Json::array()},
+      {"guidance",{{"basis","caller_limits_only"},{"sources",Json::array()}}}};
+    std::size_t total_triangles=0,samples_left=fabrication_total_samples;
+    for(const auto& [id,paths]:sources) {
+      try {
+        const auto& part=impl_->feature(id);const auto& profile=overrides.contains(id)?overrides.at(id):options.at("profile");const FabricationFrame frame(profile);
+        const auto transformed=BRepBuilderAPI_Transform(part.shape,frame.transform,true).Shape();const auto box=bounds(transformed);
+        Json size=Json::array();bool fits=true;for(int axis=0;axis<3;++axis){const auto extent=box.at("max")[axis].get<double>()-box.at("min")[axis].get<double>();size.push_back(extent);
+          if(profile.contains("build_envelope_mm")&&extent>profile.at("build_envelope_mm")[axis].get<double>()+fabrication_tolerance)fits=false;}
+        Json checks=Json::array({fabrication_check("build_envelope",!profile.contains("build_envelope_mm")?"unknown":fits?"pass":"fail","exact_oriented_BRep_bounds",
+          "Source coordinates expressed in the supplied build frame; extents assume translation to the bed minimum, without rotation search, supports or fixtures.",
+          {{"bounds_mm",box},{"size_mm",size},{"normalized_basis",Json::array({direction(frame.x),direction(frame.y),direction(frame.z)})}})});
+        const auto triangles=mesh(id);total_triangles+=triangles.at("triangles").size();
+        if(total_triangles>200000)throw Error("limit_exceeded","Fabrication review exceeds its aggregate triangle budget");
+        for(const auto& check:fabrication_mesh_checks(triangles,profile,box.at("min")[2].get<double>()))checks.push_back(check);
+        const auto samples=fabrication_samples(part,std::min(samples_left,fabrication_sample_limit));samples_left-=samples.size();
+        for(const auto& check:fabrication_surface_checks(part,profile,box,samples))checks.push_back(check);
+        if(profile.at("process")=="fdm")checks.push_back(fabrication_check("fdm_slicing_and_material","unknown","not_evaluated","Supports, material, machine/profile compatibility and actual slicing have not been evaluated."));
+        result["parts"].push_back({{"feature_id",id},{"quantity",paths.size()},{"part_ids",paths},{"profile",profile},{"status",fabrication_status(checks)},{"checks",checks}});
+      }catch(const Error& error){auto details=error.details;details["feature_id"]=id;throw Error(error.code,error.what(),details);}
+    }
+    Json pairs=options.value("clearance_pairs",Json::array());bool complete=!options.contains("clearance_pairs");
+    const auto auto_pair_limit=23; // 23*22/2 = 253, within the exact pair budget.
+    if(complete&&geometry.parts.size()<=auto_pair_limit)for(std::size_t a=0;a<geometry.parts.size();++a)for(std::size_t b=a+1;b<geometry.parts.size();++b)pairs.push_back({{"a",geometry.parts[a].id},{"b",geometry.parts[b].id}});
+    if(complete&&geometry.parts.size()>auto_pair_limit)complete=false;
+    Json measured=Json::array();std::size_t interference=0,too_close=0;double minimum=std::numeric_limits<double>::max();
+    for(const auto& pair:pairs) {
+      const auto a=text_field(pair,"a"),b=text_field(pair,"b");
+      const auto find=[&](const std::string& id)->const TopoDS_Shape&{for(const auto& part:geometry.parts)if(part.id==id)return part.shape;throw Error("invalid_argument","Clearance pair requires a selected leaf occurrence",{{"part_id",id}});};
+      const auto& sa=find(a);const auto& sb=find(b);
+      BRepExtrema_DistShapeShape distance;distance.SetMultiThread(false);distance.LoadS1(sa);distance.LoadS2(sb);distance.SetDeflection(1e-7);distance.Perform();
+      if(!distance.IsDone())throw Error("kernel_failure","Exact occurrence distance failed",{{"a",a},{"b",b}});
+      BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> arguments,tools;arguments.Append(sa);tools.Append(sb);
+      common.SetArguments(arguments);common.SetTools(tools);common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();
+      if(!common.IsDone())throw Error("kernel_failure","Exact occurrence intersection failed",{{"a",a},{"b",b}});
+      // Common can contain only a touching face/edge. Integrate solids only:
+      // an open face's divergence integral is not common material volume.
+      double overlap=0;
+      if(!common.Shape().IsNull())for(TopExp_Explorer it(common.Shape(),TopAbs_SOLID);it.More();it.Next()) {
+        GProp_GProps volume;BRepGProp::VolumeProperties(it.Current(),volume,true);overlap+=std::max(0.0,volume.Mass());
+      }
+      const auto gap=distance.Value();minimum=std::min(minimum,gap);
+      const auto intersects=overlap>1e-9;if(intersects)++interference;
+      if(options.contains("minimum_clearance_mm")&&(intersects||gap+fabrication_tolerance<options.at("minimum_clearance_mm").get<double>()))++too_close;
+      Json item={{"a",a},{"b",b},{"distance_mm",gap},{"intersection_volume_mm3",overlap},{"interference",intersects}};
+      if(distance.NbSolution()){item["point_a_mm"]=point(distance.PointOnShape1(1));item["point_b_mm"]=point(distance.PointOnShape2(1));}
+      measured.push_back(item);
+    }
+    const auto has_pairs=!measured.empty();Json evidence={{"pairs",measured},{"scope",complete?"all_selected_occurrences":"explicit_or_unmeasured_pairs"},
+      {"selected_occurrences",geometry.parts.size()},{"pair_limit",fabrication_pair_limit},{"intersection_volume_tolerance_mm3",1e-9}};
+    if(has_pairs)evidence["minimum_distance_mm"]=minimum;
+    result["checks"].push_back(fabrication_check("assembly_interference",!has_pairs?"unknown":interference?"fail":"pass","exact_BRep_pair_common_volume",
+      has_pairs?"Positive common material volume for the recorded saved-pose pairs.":"No occurrence pairs measured; more than 23 occurrences require explicit bounded pairs.",evidence));
+    result["checks"].push_back(fabrication_check("assembly_clearance",!has_pairs||!options.contains("minimum_clearance_mm")?"unknown":too_close?"fail":"pass","exact_BRep_pair_minimum_distance",
+      "Checks the recorded saved-pose pairs against the caller's gap; touching is allowed only at a supplied zero gap.",evidence));
+    auto aggregate=result.at("checks");for(const auto& part:result.at("parts"))aggregate.push_back({{"status",part.at("status")}});
+    result["status"]=fabrication_status(aggregate);return result;
+  }catch(const Standard_Failure& error){throw occt_error(error,{{"feature_id",selected}});}
 }
 
 namespace {
@@ -1375,14 +1946,16 @@ struct DrawingView {
 };
 }
 
-Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
+Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::string& feature_id) const {
   fields(spec,{"views"},{"hidden_lines"});
   if (!spec.at("views").is_array() || spec.at("views").empty() || spec.at("views").size()>6)
     throw Error("invalid_argument", "A drawing requires 1 to 6 views");
   if (spec.contains("hidden_lines") && !spec.at("hidden_lines").is_boolean())
     throw Error("invalid_argument", "hidden_lines must be boolean");
   const bool hidden = spec.value("hidden_lines",true);
-  topology_limit(impl_->feature(""),QueryLimits{});
+  const auto selected=feature_id.empty()?impl_->output:feature_id;
+  const auto& selected_geometry=impl_->feature(selected);
+  topology_limit(selected_geometry,QueryLimits{});
   DrawingBudget budget;
   std::size_t projection_bytes=0;
   if (exact_projections) *exact_projections=Json::array();
@@ -1396,14 +1969,14 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
     if (!ids.insert(id).second) throw Error("invalid_argument", "Drawing view IDs must be unique", {{"view_id",id}});
     try {
       const auto orientation = text_field(view,"orientation");
-      TopoDS_Shape view_shape=impl_->shape;
-      auto view_parts=impl_->feature("").parts;
+      TopoDS_Shape view_shape=selected_geometry.shape;
+      auto view_parts=selected_geometry.parts;
       if (view.contains("explode")) {
-        const auto& geometry=impl_->feature("");
+        const auto& geometry=selected_geometry;
         if (geometry.parts.empty()) throw Error("invalid_argument","Exploded views require an assembly output");
         const auto& explode=view.at("explode");
-        if (!explode.is_array() || explode.empty() || explode.size()>64)
-          throw Error("invalid_argument","Exploded views require 1 to 64 part translations");
+        if (!explode.is_array() || explode.empty() || explode.size()>assembly_leaf_limit)
+          throw Error("invalid_argument","Exploded views require 1 to 1024 leaf occurrence translations");
         std::map<std::string,gp_Trsf> translations;
         for (const auto& item:explode) {
           fields(item,{"part_id","translation"});
@@ -1440,10 +2013,10 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections) const {
       const auto frame = drawing_frame(orientation,axis);
       Json projected_anchors;
       if (view.contains("balloon_anchors")) {
-        if (orientation=="section") throw Error("invalid_argument","Section balloons are not supported",{{"feature_id",impl_->output}});
+        if (orientation=="section") throw Error("invalid_argument","Section balloons are not supported",{{"feature_id",selected}});
         anchor_count+=view.at("balloon_anchors").size();
-        if (anchor_count>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",impl_->output}});
-        projected_anchors=balloon_anchors(view.at("balloon_anchors"),view_parts,view_shape,frame,impl_->output);
+        if (anchor_count>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",selected}});
+        projected_anchors=balloon_anchors(view.at("balloon_anchors"),view_parts,view_shape,frame,selected);
       }
       DrawingView projected(budget);
       Json regions=Json::array();
@@ -1554,44 +2127,83 @@ Json BuiltModel::robot_frames(const Json& model,const std::string& feature_id) c
   const auto id=feature_id.empty()?impl_->output:feature_id;
   const auto& geometry=impl_->feature(id);
   if(geometry.parts.empty()) throw Error("invalid_argument","Robot export requires an assembly",{{"feature_id",id}});
-  const Json* assembly=nullptr;
-  for(const auto& feature:model.at("features")) if(feature.at("id")==id) assembly=&feature;
-  if(!assembly || assembly->at("type")!="assembly") throw Error("invalid_argument","Robot export requires an assembly",{{"feature_id",id}});
+  std::map<std::string,const Json*> definitions;
+  for(const auto& feature:model.at("features")) definitions.emplace(text_field(feature,"id"),&feature);
   const auto& parameters=model.at("parameters");
-  std::map<std::string,const Json*> incoming;
-  if(assembly->contains("mates")) for(const auto& mate:assembly->at("mates")) incoming[text_field(mate,"child")]=&mate;
   std::map<std::string,gp_Trsf> world;
-  Json result={{"feature_id",id},{"links",Json::array()},{"joints",Json::array()},{"motion",assembly_motion(*assembly,parameters)}};
+  auto result=composed_robot_motion(model,id);
+  result["feature_id"]=id;result["links"]=Json::array();result["joints"]=Json::array();result["assemblies"]=Json::array();
+  const auto qualify=[](const std::string& path,const std::string& name){return path.empty()?name:path+"/"+name;};
+  // Each assembly's source frame is rigidly attached to its grounded roots.
+  // Use the lexically first root's ultimate leaf as its physical anchor. Other
+  // roots attach rigidly to that leaf. No fictitious assembly body or mass is
+  // introduced, and every moving child still has exactly one incoming joint.
+  std::function<std::string(const std::string&,const std::string&)> anchor=[&](const std::string& source,const std::string& path) {
+    const auto& feature=*definitions.at(source);
+    if (feature.at("type")!="assembly") return path;
+    std::set<std::string> children;
+    for (const auto& mate:feature.value("mates",Json::array())) children.insert(text_field(mate,"child"));
+    const Json* root=nullptr;
+    for (const auto& part:feature.at("parts")) if (!children.contains(text_field(part,"id")) && (!root || part.at("id")<root->at("id"))) root=&part;
+    if (!root) throw Error("invalid_model","Assembly has no grounded root",{{"feature_id",source}});
+    return anchor(text_field(*root,"input"),qualify(path,text_field(*root,"id")));
+  };
+  struct Joint {std::string parent,child,mate,type;};
+  std::vector<Joint> pending;
   try {
-    for(const auto& part:geometry.parts) {
-      const auto frame=incoming.contains(part.id)?local_frame(incoming.at(part.id)->at("child_frame"),parameters):gp_Trsf{};
-      world[part.id]=part.transform*frame;
-      result["links"].push_back({{"name","part_"+part.id},{"part_id",part.id},{"input",part.input},
-        {"world",matrix(world.at(part.id))},{"mesh_origin",matrix(frame.Inverted())}});
-    }
-    for(const auto& part:geometry.parts) {
-      if(!incoming.contains(part.id)) {
-        result["joints"].push_back({{"name","root_"+part.id},{"type","fixed"},{"parent","world"},{"child","part_"+part.id},{"origin",matrix(world.at(part.id))}});
+    for (const auto& part:geometry.parts) world[part.id]=part.transform;
+    std::function<void(const std::string&,const std::string&,const gp_Trsf&)> visit;
+    visit=[&](const std::string& source,const std::string& path,const gp_Trsf& parent_transform) {
+      const auto& feature=*definitions.at(source);const auto& local=impl_->feature(source);
+      const auto grounded=anchor(source,path);
+      result["assemblies"].push_back({{"assembly_id",source},{"path",path},{"anchor_part_id",grounded},{"world",matrix(parent_transform)}});
+      std::map<std::string,const Json*> incoming;
+      std::map<std::string,std::string> representatives;
+      if (feature.contains("mates")) for (const auto& mate:feature.at("mates")) incoming.emplace(text_field(mate,"child"),&mate);
+      for (const auto& part:feature.at("parts")) representatives[text_field(part,"id")]=anchor(text_field(part,"input"),qualify(path,text_field(part,"id")));
+      for (const auto& part:feature.at("parts")) {
+        const auto pid=text_field(part,"id"),input=text_field(part,"input"),occurrence=qualify(path,pid),leaf=representatives.at(pid);
+        const auto placement=parent_transform*local.placements.at(pid);
+        if (incoming.contains(pid)) {
+          const auto& mate=*incoming.at(pid);
+          world[leaf]=placement*local_frame(mate.at("child_frame"),parameters);
+          pending.push_back({representatives.at(text_field(mate,"parent")),leaf,qualify(path,text_field(mate,"id")),text_field(mate,"type")});
+        } else if (path.empty() || leaf!=grounded) pending.push_back({path.empty()?std::string():grounded,leaf,"","rigid"});
+        if (definitions.at(input)->at("type")=="assembly") visit(input,occurrence,placement);
+      }
+    };
+    visit(id,"",gp_Trsf{});
+    for (const auto& part:geometry.parts) result["links"].push_back({{"name",robot_name("part",part.id)},{"part_id",part.id},{"input",part.input},
+      {"world",matrix(world.at(part.id))},{"mesh_origin",matrix(world.at(part.id).Inverted()*part.transform)}});
+    std::set<std::string> attached;
+    for (const auto& spec:pending) {
+      if (!attached.insert(spec.child).second) throw Error("kernel_failure","Composed robot link has multiple parents",{{"part_id",spec.child}});
+      const auto parent=spec.parent.empty()?std::string("world"):robot_name("part",spec.parent),child=robot_name("part",spec.child);
+      const auto parent_world=spec.parent.empty()?gp_Trsf{}:world.at(spec.parent);
+      const auto child_world=world.at(spec.child),origin=parent_world.Inverted()*child_world;
+      if (spec.mate.empty()) {
+        result["joints"].push_back({{"name",robot_name("root",spec.child)},{"type","fixed"},{"parent",parent},{"child",child},{"origin",matrix(origin)}});
         continue;
       }
-      const auto& mate=*incoming.at(part.id);const auto mid=text_field(mate,"id"),type=text_field(mate,"type"),parent=text_field(mate,"parent");
-      auto origin=world.at(parent).Inverted()*world.at(part.id);
+      const auto& mid=spec.mate;const auto& type=spec.type;
       auto joint=[&](const std::string& suffix,const std::string& kind,const std::string& p,const std::string& c,const gp_Trsf& placement,const std::string& coordinate) {
-        Json item={{"name","mate_"+mid+suffix},{"type",kind},{"parent",p},{"child",c},{"origin",matrix(placement)},{"mate_id",mid}};
+        Json item={{"name",robot_name("mate",mid)+suffix},{"type",kind},{"parent",p},{"child",c},{"origin",matrix(placement)},{"mate_id",mid}};
         if(!coordinate.empty()) item["coordinate"]=coordinate;
         result["joints"].push_back(std::move(item));
       };
       if(type=="cylindrical") {
         double travel=0;
-        for(const auto& dof:geometry.motion.at("dofs")) if(dof.at("mate_id")==mid && dof.at("coordinate")=="travel_mm") travel=dof.at("value");
+        for(const auto& dof:result.at("motion").at("dofs")) if(dof.at("mate_id")==mid && dof.at("coordinate")=="travel_mm") travel=dof.at("value");
         gp_Trsf shift;shift.SetTranslation(gp_Vec(0,0,travel));
-        const auto carrier=world.at(part.id)*shift.Inverted();const auto name="carrier_"+mid;
+        const auto carrier=child_world*shift.Inverted();const auto name=robot_name("carrier",mid);
         result["links"].push_back({{"name",name},{"carrier_for",mid},{"world",matrix(carrier)}});
-        joint("_angle","revolute","part_"+parent,name,world.at(parent).Inverted()*carrier,"angle_deg");
-        joint("_travel","prismatic",name,"part_"+part.id,shift,"travel_mm");
+        joint("_angle","revolute",parent,name,parent_world.Inverted()*carrier,"angle_deg");
+        joint("_travel","prismatic",name,child,shift,"travel_mm");
       } else joint(type=="revolute"?"_angle":type=="slider"?"_travel":"_fixed",type=="slider"?"prismatic":type=="rigid"?"fixed":"revolute",
-        "part_"+parent,"part_"+part.id,origin,type=="revolute"?"angle_deg":type=="slider"?"travel_mm":"");
+        parent,child,origin,type=="revolute"?"angle_deg":type=="slider"?"travel_mm":"");
     }
+    if (attached.size()!=geometry.parts.size()) throw Error("kernel_failure","Composed robot does not cover every physical leaf");
+    if (result.at("links").size()>robot_link_limit) throw Error("limit_exceeded","Robot export permits at most 8192 links");
     return result;
   } catch(const Standard_Failure& e) {throw occt_error(e,{{"feature_id",id}});}
 }

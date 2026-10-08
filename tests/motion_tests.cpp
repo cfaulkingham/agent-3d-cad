@@ -2,6 +2,7 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/jobs.hpp"
+#include "geometry_equivalence.hpp"
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -206,6 +207,100 @@ void live_motion() {
   near(shown.at("summary").at("assembly").at("motion").at("dofs")[0].at("value"),20);
 }
 }
+void nested_live_motion() {
+  const auto root=temporary_file(fs::temp_directory_path());fs::remove(root);directory(root);
+  struct Cleanup{fs::path path;~Cleanup(){std::error_code ignored;fs::remove_all(path,ignored);}} cleanup{root};
+  auto doc=coupled();auto alternate=doc["features"].back();alternate["id"]="alternate";doc["features"].push_back(alternate);
+  auto unreachable=alternate;unreachable["id"]="unused";doc["features"].push_back(unreachable);
+  doc["features"].push_back(parse_json(R"({"id":"machine","type":"assembly","parts":[
+    {"id":"left","input":"mechanism","placement":{"translation":[20,0,0]}},
+    {"id":"right","input":"mechanism","placement":{"translation":[80,0,0]}},
+    {"id":"other","input":"alternate","placement":{"translation":[140,0,0]}}]})"));
+  doc["output"]="machine";
+  Service service(root);service.call("cad_create",{{"document_id","moving"},{"model",doc}});
+  service.call("cad_open",{{"document_id","moving"},{"view_id","moving"}});
+  auto shown=ready(service);
+  const auto& scopes=shown.at("summary").at("assembly").at("mechanisms");
+  require(scopes.size()==2 && scopes[0].at("assembly_id")=="mechanism" && scopes[0].at("occurrences")==Json({"left","right"}),"Nested view exposes shared mechanism definitions and all affected paths");
+  auto action=[&](const std::string& name,Json fields=Json::object()) {
+    fields["action"]=name;fields["view_id"]="moving";fields["evaluation_id"]=shown.at("evaluation_id");return live_call(service,fields);
+  };
+  const auto values=Json::array({value("hinge","angle_deg",45),value("shaft","travel_mm",3)});
+  fails("invalid_argument",[&]{action("motion_preview",{{"assembly_id","unused"},{"values",values}});});
+  action("motion_preview",{{"assembly_id","mechanism"},{"values",values}});shown=ready(service);
+  require(shown.at("feature_id")=="machine" && shown.at("draft")==true,"Child motion previews the complete parent composition");
+  action("motion_preview",{{"assembly_id","alternate"},{"pose_id","home"}});shown=ready(service);
+  require(shown.at("preview_operations").size()==3,"Previewing a second mechanism retains the first mechanism's draft");
+  const auto expected=apply_operations(doc,shown.at("preview_operations"));
+  require(shown.at("summary")==BuiltModel(expected).summary(),"Combined child poses retain all parent transforms and source scope");
+  require(service.call("cad_read",{{"document_id","moving"}}).at("revision")==1,"Composed live preview preserves HEAD");
+  auto invalid=values;invalid[0]["value"]=500;
+  fails("invalid_model",[&]{action("motion_preview",{{"assembly_id","mechanism"},{"values",invalid}});});
+  require(ready(service).at("evaluation_id")==shown.at("evaluation_id"),"Invalid child pose preserves the entire composed draft");
+  action("motion_save",{{"assembly_id","mechanism"},{"pose_id","nested_review"}});shown=ready(service);
+  require(shown.at("revision")==2 && shown.at("draft")==false,"Composed draft saves atomically as one revision");
+  const auto record=service.call("cad_read",{{"document_id","moving"}});
+  for(const auto& feature:record.at("model").at("features")) if(feature.at("type")=="assembly" && feature.contains("poses")) {
+    bool named=false;for(const auto& pose:feature.at("poses")) if(pose.at("id")=="nested_review") named=true;
+    require(named==(feature.at("id")=="mechanism"),"Named pose belongs only to the selected definition");
+  }
+  require(test::geometry_equivalent(shown.at("summary").at("assembly").at("parts"),BuiltModel(expected).summary().at("assembly").at("parts")),"Saving the child preset does not alter the combined geometry or ownership");
+  action("motion_preview",{{"assembly_id","mechanism"},{"pose_id","home"}});shown=ready(service);
+  action("motion_reset");shown=ready(service);
+  require(shown.at("revision")==2 && !shown.at("draft").get<bool>(),"Reset works even when the displayed parent has no own moving joint");
+  require(service.call("cad_read",{{"document_id","moving"},{"revision",1}}).at("model")==doc,"Composition history retains original shared poses");
+}
+void upgraded_live_motion() {
+  const auto root=temporary_file(fs::temp_directory_path());fs::remove(root);directory(root);
+  struct Cleanup{fs::path path;~Cleanup(){std::error_code ignored;fs::remove_all(path,ignored);}} cleanup{root};
+  Service service(root);const auto doc=coupled();
+  service.call("cad_create",{{"document_id","moving"},{"model",doc}});
+  service.call("cad_open",{{"document_id","moving"},{"view_id","moving"}});
+  auto shown=ready(service);const auto committed=shown;
+  const auto path=root/"views"/"moving"/"state.json";
+  auto action=[&](const std::string& name,Json fields=Json::object()) {
+    fields["action"]=name;fields["view_id"]="moving";fields["evaluation_id"]=shown.at("evaluation_id");return live_call(service,fields);
+  };
+  const Json camera={{"yaw",.4},{"pitch",.3},{"zoom",2},{"pan",{.1,.2}}};
+  action("context",{{"selection",nullptr},{"camera",camera},{"hidden_part_ids",{"sleeve"}},{"prompt","Keep this review"}});
+  auto wait_job=[&](Json job) {
+    for(int i=0;i<3000;++i) {
+      const auto result=live_call(service,{{"action","get"},{"job_id",job}},"cad_job");
+      if(result.at("state")=="succeeded")return;
+      require(result.at("state")=="queued"||result.at("state")=="running","Upgrade fixture job succeeds");
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    throw std::runtime_error("Upgrade fixture job timed out");
+  };
+  const auto old_job=live_call(service,{{"action","submit"},{"request_id","old_view_read"},{"tool","cad_query"},
+    {"arguments",{{"document_id","moving"},{"revision",1},{"kind","mesh"}}}},"cad_job");
+  wait_job(old_job.at("job_id"));
+  auto state=parse_json(read_text(path));state.erase("build");state["display"].erase("build");
+  state["pending"]={{"revision",1},{"job_id",old_job.at("job_id")}};
+  atomic_text(path,state.dump());
+  require(service.call("cad_context",{{"view_id","moving"}}).at("stale")==true,"Legacy frozen view reports stale before sync even at the same HEAD");
+  fails("stale_selection",[&]{mesh(service,shown.at("evaluation_id"));});
+  Service upgraded(root);shown=ready(upgraded);
+  require(shown.at("evaluation_id")!=committed.at("evaluation_id") && shown.at("summary")==committed.at("summary"),"Upgrade regenerates committed view with equivalent geometry");
+  const auto old_result=live_call(service,{{"action","get"},{"job_id",old_job.at("job_id")}},"cad_job");
+  require(shown.at("evaluation_id")!=old_result.at("result").at("evaluation_id"),"Completed read from a previous build cannot republish");
+  require(shown.at("hidden_part_ids")==Json({"sleeve"}) && service.call("cad_context",{{"view_id","moving"}}).at("camera")==camera,"Upgrade retains visibility and camera");
+  action("motion_preview",{{"pose_id","home"}});shown=ready(service);const auto draft=shown;
+  state=parse_json(read_text(path));state["build"]="previous-native-build";state["display"]["build"]="previous-native-build";
+  atomic_text(path,state.dump());
+  shown=ready(upgraded);
+  require(shown.at("draft")==true && shown.at("evaluation_id")!=draft.at("evaluation_id") &&
+    test::geometry_equivalent(shown.at("summary"),draft.at("summary")) && shown.at("preview_operations")==draft.at("preview_operations"),"Build change re-evaluates the exact unsaved pose without discarding it");
+  require(service.call("cad_read",{{"document_id","moving"}}).at("revision")==1,"View migration never creates a model revision");
+  action("motion_save",{{"pose_id","upgrade_review"}});
+  state=parse_json(read_text(path));require(state.at("motion").at("saving")==true,"Save is admitted before build change");
+  const auto saving=state.at("pending").at("job_id");
+  state["build"]="previous-native-build";state["display"]["build"]="previous-native-build";atomic_text(path,state.dump());
+  wait_job(saving);shown=ready(upgraded);
+  require(shown.at("revision")==2 && shown.at("draft")==false,"Upgrade reconciles admitted save once before refreshing");
+  require(service.call("cad_read",{{"document_id","moving"},{"revision",1}}).at("model")==doc,"Upgrading a view and saving preserve historical intent");
+  require(ready(upgraded).at("evaluation_id")==shown.at("evaluation_id"),"Current build then reuses its ready frozen view");
+}
 void cancelled_motion() {
   const auto root=temporary_file(fs::temp_directory_path());fs::remove(root);directory(root);
   struct Cleanup{fs::path path;~Cleanup(){std::error_code ignored;fs::remove_all(path,ignored);}} cleanup{root};
@@ -243,6 +338,6 @@ void cancelled_motion() {
   const auto query=service.call("cad_query",{{"document_id","moving"},{"revision",1}});
   near(query.at("summary").at("assembly").at("motion").at("dofs")[0].at("value"),90);
 }
-int main(){try{configure_kernel_logging();geometry();validation();service();live_motion();cancelled_motion();std::cout<<checks<<" motion checks passed\n";return 0;}
+int main(){try{configure_kernel_logging();geometry();validation();service();live_motion();nested_live_motion();upgraded_live_motion();cancelled_motion();std::cout<<checks<<" motion checks passed\n";return 0;}
 catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}
 catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

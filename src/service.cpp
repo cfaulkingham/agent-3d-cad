@@ -8,7 +8,15 @@
 #include "agentcad/drawing.hpp"
 #include "agentcad/bom.hpp"
 #include "agentcad/robot.hpp"
+#include "agentcad/manufacturing.hpp"
+#include "agentcad/fabrication.hpp"
+#include "agentcad/gcode.hpp"
+#include "agentcad/printer.hpp"
+#include "agentcad/slicer.hpp"
+#include "agentcad/measurement.hpp"
+#include "agentcad/artifact_review.hpp"
 #include <fstream>
+#include <cctype>
 #include <random>
 #include <set>
 
@@ -24,7 +32,8 @@ Json summary_schema() {
   return object({{"valid",{{"const",true}}},{"units",{{"const","mm"}}},{"volume_mm3",number},{"area_mm2",number},
     {"center_of_mass_mm",point},{"bounds_mm",object({{"min",point},{"max",point}},{"min","max"})},
     {"solid_count",integer},{"face_count",integer},{"edge_count",integer},
-    {"assembly",{{"$ref","#/$defs/assembly_summary"}}}},
+    {"assembly",{{"$ref","#/$defs/assembly_summary"}}},
+    {"components",array({{"$ref","#/$defs/component_status"}},64)}},
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
 }
 std::string evaluation_id() {
@@ -52,6 +61,7 @@ Json save_evaluation(const fs::path& root,const Json& record,Json result,bool dr
   result["feature_id"]=result.at("topology").at("feature_id");
   const auto dir=root/"evaluations";directory(dir);
   auto metadata=result;metadata.erase("mesh");
+  metadata["_native_build"]=AGENTCAD_CACHE_BUILD;metadata["_model_sha256"]=sha256(record.at("model").dump());
   const auto eid=result.at("evaluation_id").get<std::string>();
   write_artifact(dir/(eid+".json"),metadata.dump());
   if(viewer) {
@@ -68,10 +78,41 @@ Json save_evaluation(const fs::path& root,const Json& record,Json result,bool dr
 }
 
 Json tool_definitions() {
-  const Json id={{"type","string"},{"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
-  const Json revision={{"type","integer"},{"minimum",1},{"maximum",9007199254740991ULL}};
+  const Json id={{"$ref","#/$defs/model_id"}};
+  const Json revision={{"$ref","#/$defs/revision"}};
   const Json text={{"type","string"}};
-  const auto definitions=model_definitions();
+  auto definitions=model_definitions();
+  definitions["revision"]={{"type","integer"},{"minimum",1},{"maximum",9007199254740991ULL}};
+  definitions["drawing_spec"]=drawing_schema();
+  definitions["manufacturing_options"]=manufacturing_options_schema();
+  definitions.update(fabrication_definitions());
+  definitions.update(gcode_definitions());
+  definitions.update(printer_definitions());
+  definitions.update(slicer_definitions());
+  definitions.update(measurement_definitions());
+  definitions.update(artifact_review_definitions());
+  definitions["artifact_arguments"]={{"type","object"},{"oneOf",Json::array({
+    Json{{"$ref","#/$defs/artifact_review_arguments"}},
+    object({{"action",{{"const","verify"}}},{"review_path",{{"type","string"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}},{"action","review_path","expected_sha256"})})}};
+  const Json hash={{"type","string"},{"pattern","^[a-f0-9]{64}$"}},bytes={{"type","integer"},{"minimum",1},{"maximum",gcode_bytes_limit}};
+  definitions["gcode_result"]=object({{"document_id",id},{"revision",revision},{"feature_id",id},
+    {"kernel_version",{{"const","8.0.1"}}},{"model_sha256",hash},{"native_build",text},
+    {"gcode_sha256",hash},{"gcode_bytes",{{"type","integer"},{"minimum",0},{"maximum",gcode_bytes_limit}}},{"path",text},{"artifact_path",text},{"source_path",text},
+    {"report_sha256",hash},{"report_bytes",bytes},{"report",{{"$ref","#/$defs/gcode_report"}}}},
+    {"document_id","revision","feature_id","kernel_version","model_sha256","native_build","gcode_sha256","gcode_bytes","path","artifact_path","source_path","report_sha256","report_bytes","report"});
+  const Json slice_identity={{"document_id",id},{"revision",revision},{"feature_id",id},{"kernel_version",{{"const","8.0.1"}}},
+    {"model_sha256",hash},{"native_build",text},{"directory",text},{"path",text},{"physical_print_started",{{"const",false}}}};
+  auto slice_plan=slice_identity;slice_plan["action"]={{"const","plan"}};slice_plan["sha256"]=hash;slice_plan["execution"]={{"type","object"}};
+  auto slice_run=slice_identity;slice_run["action"]={{"const","run"}};slice_run["gcode_path"]=text;slice_run["gcode_sha256"]=hash;
+  slice_run["gcode_bytes"]=bytes;slice_run["plan_sha256"]=hash;slice_run["report"]={{"$ref","#/$defs/gcode_report"}};
+  auto closed_required=[](const Json& properties){Json required=Json::array();for(const auto& item:properties.items())required.push_back(item.key());return object(properties,required);};
+  definitions["slice_result"]={{"type","object"},{"oneOf",Json::array({closed_required(slice_plan),closed_required(slice_run)})}};
+  definitions["fabrication_result"]=object({{"document_id",id},{"revision",revision},{"feature_id",id},
+    {"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
+    {"model_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"native_build",text},
+    {"report",{{"$ref","#/$defs/fabrication_report"}}},{"path",text},
+    {"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"bytes",{{"type","integer"},{"minimum",1},{"maximum",67108864}}}},
+    {"document_id","revision","feature_id","kernel_version","units","model_sha256","native_build","report","path","sha256","bytes"});
   const Json operations={{"type","array"},{"minItems",1},{"maxItems",256},{"items",{{"$ref","#/$defs/operation"}}}};
   const Json reference_properties={{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},
     {"kind",{{"type","string"},{"enum",{"face","edge"}}}},{"entity_id",id}};
@@ -98,22 +139,47 @@ Json tool_definitions() {
     tool("cad_read","Read saved editable intent. Omit revision to read HEAD.",
       {{"document_id",id},{"revision",revision}},{"document_id"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model"}),true),
-    tool("cad_apply","Build an atomic semantic edit and commit only if expected_revision still matches. Failures preserve HEAD.",
+    tool("cad_apply","Build atomic semantic edits, including revision-pinned editable components, and commit only if expected_revision still matches. Failures preserve HEAD.",
       {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"request_id",id}},
       {"document_id","expected_revision","operations"},object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_restore","Rebuild a historical model as a new revision. History remains immutable; expected_revision must match HEAD.",
       {{"document_id",id},{"expected_revision",revision},{"source_revision",revision},{"request_id",id}},
       {"document_id","expected_revision","source_revision"},object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
-    tool("cad_import","Create a document from a local STEP file up to 512 KiB. Source content and SHA-256 are saved in an opaque imported feature for reproducible rebuilds.",
-      {{"document_id",id},{"path",text},{"request_id",id}}, {"document_id","path"},
+    tool("cad_import","Create a document from a local STEP file up to 512 KiB. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Does not fetch URLs or infer editable history.",
+      {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
       {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh"}}}},{"feature_id",id}},
       {"document_id","revision"},object(identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
+    tool("cad_measure","Measure committed B-reps: face/edge/leaf pair distances, analytic angles, common material volume, or planar section curves and material caps. Clearance queries cover at most 23 leaves. Section queries use an explicit displayed-world plane and optional exploded leaf offsets; distance queries always use the saved source pose. Reject stale/draft/build-mismatched references and ambiguous recovery.",
+      {{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},{"query",{{"$ref","#/$defs/measurement_query"}}}},
+      {"document_id","revision","evaluation_id","feature_id","query"},definitions.at("measurement_result"),true),
     tool("cad_export","Export a committed revision as independent STEP or binary STL using mm coordinates.",
       {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}}},{"document_id","revision","format"},
       object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}}},
         {"document_id","revision","format","path","bytes","units"}),false),
+    tool("cad_manufacture","Export a revision-qualified manufacturing package with editable source, unique leaf STEP/STL/drawings, saved assembly placement, BOM/purchasing data, explicit process assumptions and a portable SHA-256 manifest. Defaults to both solid formats and native drawings. Does not perform process certification, slicing or physical printing.",
+      {{"document_id",id},{"revision",revision},{"feature_id",id},{"options",{{"$ref","#/$defs/manufacturing_options"}}}}, {"document_id","revision"},
+      object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"units",{{"const","mm"}}},
+        {"directory",text},{"path",text},{"model_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
+        {"part_count",{{"type","integer"},{"minimum",1},{"maximum",manufacturing_part_limit}}},
+        {"artifact_count",{{"type","integer"},{"minimum",3},{"maximum",manufacturing_file_limit}}},
+        {"bytes",{{"type","integer"},{"minimum",1},{"maximum",manufacturing_bytes_limit}}},
+        {"artifacts",array(object({{"format",{{"enum",{"step","stl","pdf","svg","dxf","json","csv"}}}},
+          {"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}},
+          {"format","path","bytes","sha256"}),manufacturing_file_limit)}},
+        {"document_id","revision","kernel_version","feature_id","units","directory","path","model_sha256","part_count","artifact_count","bytes","artifacts"}),false),
+    tool("cad_fabrication_review","Measure a committed revision against explicit FDM, CNC, sheet/laser or molding inputs. Reports exact or sampled evidence, unknown unsupported checks, saved-pose interference/clearance and a hashed JSON artifact. Assembly parts are reviewed in source coordinates. Does not certify production or start hardware.",
+      {{"document_id",id},{"revision",revision},{"feature_id",id},{"options",{{"$ref","#/$defs/fabrication_options"}}}},{"document_id","revision","options"},
+      {{"type","object"},{"$ref","#/$defs/fabrication_result"}},false),
+    tool("cad_gcode_review","Inspect checksummed local plain G-code against explicit machine/material/initial state. Preserve original bytes and a native static report; firmware unknowns remain unknown. The caller declares its CAD association. Never slices, executes G-code or starts hardware.",
+      {{"document_id",id},{"revision",revision},{"feature_id",id},{"path",text},{"expected_sha256",hash},{"options",{{"$ref","#/$defs/gcode_options"}}}},
+      {"document_id","revision","path","expected_sha256","options"},{{"type","object"},{"$ref","#/$defs/gcode_result"}},false),
+    tool("cad_printer_handoff","Prepare or re-verify a checksummed offline printer handoff package from plain G-code, explicit machine/profile/material inputs and a caller-declared committed CAD association. Recompute native static findings; physical readiness remains unknown. Never contacts, uploads to or starts hardware.",
+      {},{},{{"type","object"},{"$ref","#/$defs/printer_result"}},false),
+    tool("cad_slice","Plan then execute installed OrcaSlicer 2.4.2 for one committed source solid. Explicit checksummed executable and resolved native machine/process/filament profiles, fixed argv, private settings, bounded cancellable native processes, actual G-code review and portable provenance. Run requires the reviewed plan hash. Never contacts printers.",
+      {{"document_id",id},{"revision",revision},{"action",{{"enum",{"plan","run"}}}},{"feature_id",id},{"options",{{"$ref","#/$defs/slice_options"}}},{"plan_path",text},{"expected_sha256",hash}},
+      {"document_id","revision","action"},{{"type","object"},{"$ref","#/$defs/slice_result"}},false),
     tool("cad_robot_export","Export a committed assembly as URDF with paired SRDF, or SDF 1.12, plus local STL meshes and a frame/coordinate ledger. Exported zero reproduces the saved pose; limits, named poses and couplings are converted to SI. Requires explicit effort/velocity for every moving coordinate. SDF additionally requires inertials for every part and cylindrical carrier. No physical properties or planning configuration are inferred.",
       {{"document_id",id},{"revision",revision},{"feature_id",id},{"robot",robot_options_schema()}},{"document_id","revision","robot"},
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},
@@ -129,7 +195,7 @@ Json tool_definitions() {
         {"artifacts",{{"type","array"},{"minItems",2},{"maxItems",2},{"items",object({{"format",{{"enum",{"json","csv"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}}}, {"format","path","bytes"})}}}},
         {"document_id","revision","kernel_version","units","bom","artifacts","path"}),false),
     tool("cad_drawing","Generate a vector drawing of a committed revision, including exploded assembly views, bills of materials and geometry-checked numbered balloons. Measured dimensions, explicit tolerances, aligned layouts, hidden-line views, hatched sections, PDF/SVG sheets and per-view 1:1 mm DXF. Save the recipe to regenerate after edits; never changes the model.",
-      {{"document_id",id},{"revision",revision},{"drawing",drawing_schema()}},{"document_id","revision"},
+      {{"document_id",id},{"revision",revision},{"drawing",{{"$ref","#/$defs/drawing_spec"}}}},{"document_id","revision"},
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
         {"scale",{{"type","number"},{"exclusiveMinimum",0}}},
         {"sheet_mm",{{"type","array"},{"items",{{"type","number"},{"exclusiveMinimum",0}}},{"minItems",2},{"maxItems",2}}},
@@ -143,7 +209,7 @@ Json tool_definitions() {
           {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),10)},
         {"dimensions",array(drawing_dimension_result_schema(),32)},
         {"bom",{{"$ref","#/$defs/bom"}}},
-        {"balloons",array(object({{"view",id},{"part_id",id},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
+        {"balloons",array(object({{"view",id},{"part_id",occurrence_schema()},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
           {"anchor_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}},
           {"label_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}}},
           {"view","part_id","item_number","anchor_mm","label_mm"}),64)}},
@@ -162,6 +228,8 @@ Json tool_definitions() {
       object({{"document_id",id},{"from_revision",revision},{"to_revision",revision},{"parameters",{{"type","object"}}},
         {"features",array(id,512)},{"output_changed",{{"type","boolean"}}},{"volume_delta_mm3",{{"type","number"}}},{"area_delta_mm2",{{"type","number"}}}},
         {"document_id","from_revision","to_revision","parameters","features","output_changed","volume_delta_mm3","area_delta_mm2"}),true),
+    tool("cad_artifact","Review original STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF as bounded, source-hashed read-only geometry/data, or verify a portable captured review. Explicit units and reference hashes are required. No editable document/history, original face selectors or executed artifact code. Submit review through cad_job for large inputs.",
+      {{"action",{{"type","string"}}}},{"action"},{{"type","object"},{"$ref","#/$defs/artifact_review_result"}},false),
     tool("cad_job","Submit, inspect, list or cancel a durable job. Submit a tool and arguments with request_id; retries return the same job. Geometry runs in bounded native workers.",
       {{"action",{{"enum",{"submit","get","cancel","list"}}}},{"request_id",id},{"job_id",id},{"tool",text},{"arguments",{{"type","object"}}},
         {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array())}},
@@ -169,12 +237,26 @@ Json tool_definitions() {
   });
   const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},
     {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array());
-  const std::set<std::string> job_tools={"cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  for(auto& definition:tools)if(definition.at("name")=="cad_artifact") {
+    definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/artifact_arguments"},{"$defs",definitions}};
+  }
+  for(auto& definition:tools)if(definition.at("name")=="cad_slice") {
+    definition["inputSchema"]={{"type","object"},{"oneOf",Json::array({
+      object({{"document_id",id},{"revision",revision},{"action",{{"const","plan"}}},{"feature_id",id},{"options",{{"$ref","#/$defs/slice_options"}}}},{"document_id","revision","action","options"}),
+      object({{"document_id",id},{"revision",revision},{"action",{{"const","run"}}},{"plan_path",text},{"expected_sha256",hash}},{"document_id","revision","action","plan_path","expected_sha256"})})},{"$defs",definitions}};
+  }
+  for(auto& definition:tools)if(definition.at("name")=="cad_printer_handoff")
+    definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
+  const std::set<std::string> job_tools={"cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
+  std::set<std::string> result_contracts;
   for(const auto& definition:tools) {
     const auto name=definition.at("name").get<std::string>();if(!job_tools.contains(name))continue;
     auto input=definition.at("inputSchema");input.erase("$defs");
-    auto output=definition.at("outputSchema");output.erase("$defs");results.push_back(output);
+    auto output=definition.at("outputSchema");output.erase("$defs");
+    // Mutations share an identical committed-record contract. An anyOf only
+    // needs each distinct result once; retain every tool's input discriminator.
+    if(result_contracts.insert(output.dump()).second)results.push_back(output);
     submits.push_back(object({{"action",{{"const","submit"}}},{"request_id",id},{"tool",{{"const",name}}},{"arguments",input},{"budget",budgets}},
       {"action","request_id","tool","arguments"}));
   }
@@ -187,26 +269,234 @@ Json tool_definitions() {
     {"updated_at_unix_ms",{{"type","integer"}}},{"retried",{{"type","boolean"}}},
     {"result",{{"anyOf",results}}},{"error",object({{"code",text},{"message",text},{"details",{{"type","object"}}}},{"code","message","details"})}},
     {"job_id","request_id","tool","budget","state","progress","submitted_at_unix_ms"});
-  tools.back()["outputSchema"]={{"type","object"},{"oneOf",Json::array({job,object({{"jobs",array(job,1000)},{"limit",{{"const",1000}}}},{"jobs","limit"})})},{"$defs",definitions}};
+  // Get/submit/cancel and list return the same job contract. Reference it once
+  // so adding a document capability does not duplicate every nested result.
+  auto job_definitions=definitions;job_definitions["job"]=job;
+  const Json job_reference={{"$ref","#/$defs/job"}};
+  tools.back()["outputSchema"]={{"type","object"},{"oneOf",Json::array({job_reference,
+    object({{"jobs",array(job_reference,1000)},{"limit",{{"const",1000}}}},{"jobs","limit"})})},{"$defs",job_definitions}};
   for (auto& definition : live_tool_definitions()) tools.push_back(std::move(definition));
   // Each standalone schema keeps only the model definitions it references.
-  for (auto& definition : tools) for (const auto* key : {"inputSchema","outputSchema"}) prune_definitions(definition[key]);
+  for(auto& definition:tools)for(const auto* key:{"inputSchema","outputSchema"}) {
+    auto& schema=definition[key];prune_definitions(schema);
+    // Intern profitable repeated schema subtrees within each standalone schema.
+    // Every constraint is retained; only structurally identical nodes share a
+    // reference. This keeps discovery bounded as fabrication contracts grow.
+    std::map<std::string,std::pair<Json,std::size_t>> repeated;
+    const auto eligible=[](const Json& value) {
+      if(!value.is_object()||value.contains("$defs")||value.dump().size()<24)return false;
+      if(value.contains("type")&&(value.at("type").is_string()||value.at("type").is_array()))return true;
+      for(const auto* keyword:{"oneOf","anyOf","allOf","enum"})if(value.contains(keyword)&&value.at(keyword).is_array())return true;
+      return false;
+    };
+    std::function<void(const Json&)> count=[&](const Json& value) {
+      if(eligible(value)){auto& item=repeated[value.dump()];item.first=value;++item.second;}
+      if(value.is_array())for(const auto& child:value)count(child);
+      else if(value.is_object())for(const auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")count(item.value());
+    };
+    count(schema);std::map<std::string,std::string> names;Json shared=Json::object();
+    const auto alias=[](std::size_t ordinal) {
+      constexpr std::string_view alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+      std::string result;
+      do{result.insert(result.begin(),alphabet[ordinal%alphabet.size()]);ordinal/=alphabet.size();}while(ordinal);
+      return result;
+    };
+    for(const auto& [raw,item]:repeated){
+      auto name=alias(names.size());
+      while(schema.contains("$defs")&&schema.at("$defs").contains(name))name+="_";
+      const Json reference={{"$ref","#/$defs/"+name}};
+      const auto reference_bytes=reference.dump().size();
+      if(raw.size()>reference_bytes&&item.second>(raw.size()+name.size()+4)/(raw.size()-reference_bytes)) {
+        names[raw]=name;shared[name]=item.first;
+      }
+    }
+    std::function<void(Json&,bool)> replace=[&](Json& value,bool root) {
+      if(!root&&eligible(value))if(const auto found=names.find(value.dump());found!=names.end()){value={{"$ref","#/$defs/"+found->second}};return;}
+      if(value.is_array())for(auto& child:value)replace(child,false);
+      else if(value.is_object())for(auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")replace(item.value(),false);
+    };
+    replace(schema,true);
+    for(auto& item:shared.items()){replace(item.value(),true);schema["$defs"][item.key()]=std::move(item.value());}
+    prune_definitions(schema);
+    // A parent alias can absorb occurrences counted before replacement. Price
+    // each generated alias from its actual stored references and final body,
+    // inlining the smallest unprofitable body before recounting. Original named
+    // definitions and const/enum/default literals are never renamed or edited.
+    for(;;) {
+      std::map<std::string,std::size_t> references;
+      std::function<void(const Json&)> count_references=[&](const Json& value) {
+        if(value.is_array())for(const auto& child:value)count_references(child);
+        else if(value.is_object()) {
+          if(value.contains("$ref")&&value.at("$ref").is_string()) {
+            const auto& ref=value.at("$ref").get_ref<const std::string&>();
+            if(ref.starts_with("#/$defs/"))++references[ref.substr(8)];
+          }
+          for(const auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")count_references(item.value());
+        }
+      };
+      count_references(schema);
+      std::string remove;std::size_t smallest=std::string::npos;
+      for(const auto& item:shared.items())if(schema.contains("$defs")&&schema.at("$defs").contains(item.key())) {
+        const auto body_bytes=schema.at("$defs").at(item.key()).dump().size();
+        const auto reference_bytes=Json{{"$ref","#/$defs/"+item.key()}}.dump().size();
+        const bool profitable=body_bytes>reference_bytes&&references[item.key()]>
+          (body_bytes+item.key().size()+4)/(body_bytes-reference_bytes);
+        if(!profitable&&body_bytes<smallest){remove=item.key();smallest=body_bytes;}
+      }
+      if(remove.empty())break;
+      const auto body=schema.at("$defs").at(remove);schema["$defs"].erase(remove);shared.erase(remove);
+      const Json reference={{"$ref","#/$defs/"+remove}};
+      std::function<void(Json&)> inline_reference=[&](Json& value) {
+        if(value==reference){value=body;return;}
+        if(value.is_array())for(auto& child:value)inline_reference(child);
+        else if(value.is_object())for(auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")inline_reference(item.value());
+      };
+      inline_reference(schema);prune_definitions(schema);
+    }
+    // Every standalone definition name is local. Apply one bijection after
+    // sharing, preserving the public model/operation roots and all constraints.
+    if(schema.contains("$defs")) {
+      std::map<std::string,std::string> aliases;std::size_t ordinal=0;
+      for(const auto& item:schema.at("$defs").items())if(item.key()!="model"&&item.key()!="operation") {
+        auto name=alias(ordinal++);while(name=="model"||name=="operation")name+="_";
+        aliases.emplace(item.key(),std::move(name));
+      }
+      std::function<void(Json&)> rewrite=[&](Json& value) {
+        if(value.is_array())for(auto& child:value)rewrite(child);
+        else if(value.is_object()) {
+          if(value.contains("$ref")&&value.at("$ref").is_string()) {
+            const auto& ref=value.at("$ref").get_ref<const std::string&>();
+            if(ref.starts_with("#/$defs/"))if(const auto found=aliases.find(ref.substr(8));found!=aliases.end())value["$ref"]="#/$defs/"+found->second;
+          }
+          for(auto& item:value.items()) {
+            const auto& key=item.key();
+            if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
+              for(auto& child:item.value().items())rewrite(child.value());
+            else if(key!="const"&&key!="enum"&&key!="default")rewrite(item.value());
+          }
+        }
+      };
+      rewrite(schema);Json renamed=Json::object();
+      for(auto& item:schema["$defs"].items())renamed[aliases.contains(item.key())?aliases.at(item.key()):item.key()]=std::move(item.value());
+      schema["$defs"]=std::move(renamed);
+      // Final aliases make the cost of every private definition comparable.
+      // Inline only pure, whole-definition references when their stored body is
+      // cheaper than the entry plus references. Preserve named public roots,
+      // scoped schemas, reference siblings, pointer targets and recursive graphs.
+      bool scoped=false;
+      std::function<void(const Json&,const std::function<void(const Json&)>&)> visit=
+        [&](const Json& value,const std::function<void(const Json&)>& inspect) {
+          if(value.is_array())for(const auto& child:value)visit(child,inspect);
+          else if(value.is_object()) {
+            inspect(value);
+            for(const auto& item:value.items()) {
+              const auto& key=item.key();
+              if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
+                for(const auto& child:item.value().items())visit(child.value(),inspect);
+              else if(key!="const"&&key!="enum"&&key!="default")visit(item.value(),inspect);
+            }
+          }
+        };
+      visit(schema,[&](const Json& value) {
+        for(const auto* key:{"$id","$anchor","$dynamicAnchor","$dynamicRef","$recursiveAnchor","$recursiveRef"})if(value.contains(key))scoped=true;
+      });
+      while(!scoped&&schema.contains("$defs")) {
+        std::map<std::string,std::size_t> references,pure;
+        std::map<std::string,std::set<std::string>> edges;
+        const auto collect=[&](const Json& value,std::map<std::string,std::size_t>& counts,std::map<std::string,std::size_t>* exact) {
+          visit(value,[&](const Json& node) {
+            if(!node.contains("$ref")||!node.at("$ref").is_string())return;
+            const auto& ref=node.at("$ref").get_ref<const std::string&>();
+            if(!ref.starts_with("#/$defs/"))return;
+            const auto name=ref.substr(8,ref.find('/',8)-8);++counts[name];
+            if(exact&&node.size()==1&&ref=="#/$defs/"+name)++(*exact)[name];
+          });
+        };
+        collect(schema,references,&pure);
+        for(const auto& item:schema.at("$defs").items()) {
+          std::map<std::string,std::size_t> children;collect(item.value(),children,nullptr);
+          for(const auto& [name,count]:children)edges[item.key()].insert(name);
+        }
+        std::string remove;std::size_t smallest=std::string::npos;
+        for(const auto& item:schema.at("$defs").items()) {
+          const auto& name=item.key();
+          if(name=="model"||name=="operation"||!references[name]||references[name]!=pure[name])continue;
+          std::set<std::string> seen;std::vector<std::string> pending={name};bool recursive=false;
+          while(!pending.empty()&&!recursive) {
+            auto current=std::move(pending.back());pending.pop_back();
+            for(const auto& next:edges[current]) {
+              if(next==name){recursive=true;break;}
+              if(seen.insert(next).second)pending.push_back(next);
+            }
+          }
+          if(recursive)continue;
+          const auto body_bytes=item.value().dump().size();
+          const auto reference_bytes=Json{{"$ref","#/$defs/"+name}}.dump().size();
+          const bool profitable=body_bytes>reference_bytes&&references[name]>
+            (body_bytes+name.size()+4)/(body_bytes-reference_bytes);
+          if(!profitable&&body_bytes<smallest){remove=name;smallest=body_bytes;}
+        }
+        if(remove.empty())break;
+        const auto body=schema.at("$defs").at(remove);schema["$defs"].erase(remove);
+        const Json reference={{"$ref","#/$defs/"+remove}};
+        std::function<void(Json&)> inline_reference=[&](Json& value) {
+          if(value==reference){value=body;return;}
+          if(value.is_array())for(auto& child:value)inline_reference(child);
+          else if(value.is_object())for(auto& item:value.items()) {
+            const auto& key=item.key();
+            if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
+              for(auto& child:item.value().items())inline_reference(child.value());
+            else if(key!="const"&&key!="enum"&&key!="default")inline_reference(item.value());
+          }
+        };
+        inline_reference(schema);prune_definitions(schema);
+      }
+    }
+  }
   return tools;
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
-  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_robot_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
+  if(tool=="cad_artifact") {
+    if(text_field(args,"action")=="review")validate_artifact_review_arguments(args);
+    else if(text_field(args,"action")=="verify") {
+      fields(args,{"action","review_path","expected_sha256"});
+      const auto path=path_from_utf8(text_field(args,"review_path"));const auto hash=text_field(args,"expected_sha256");
+      if(!path.is_absolute()||path.filename()!="review.json"||hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Verification requires absolute review.json and lowercase SHA-256");
+    }else throw Error("invalid_argument","Artifact action must be review or verify");
+    return;
+  }
+  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
   if(!known.contains(tool)) throw Error("unknown_tool","Unknown tool: "+tool);
   if(tool=="cad_create") fields(args,{"document_id","model"},{"request_id"});
   else if(tool=="cad_read") fields(args,{"document_id"},{"revision"});
   else if(tool=="cad_apply") fields(args,{"document_id","expected_revision","operations"},{"request_id"});
   else if(tool=="cad_restore") fields(args,{"document_id","expected_revision","source_revision"},{"request_id"});
-  else if(tool=="cad_import") fields(args,{"document_id","path"},{"request_id"});
+  else if(tool=="cad_import") {
+    fields(args,{"document_id","path"},{"request_id","expected_sha256","purchase"});
+    if(args.contains("expected_sha256")) {
+      const auto hash=text_field(args,"expected_sha256");
+      if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected STEP SHA-256");
+    }
+    if(args.contains("purchase"))try{validate_purchase(args.at("purchase"));}
+      catch(const Error& error){throw Error("invalid_argument",error.what(),error.details);}
+  }
   else if(tool=="cad_export") fields(args,{"document_id","revision","format"});
+  else if(tool=="cad_manufacture") {fields(args,{"document_id","revision"},{"feature_id","options"});validate_manufacturing_options(args.value("options",Json::object()));}
+  else if(tool=="cad_fabrication_review") {fields(args,{"document_id","revision","options"},{"feature_id"});validate_fabrication_options(args.at("options"));}
+  else if(tool=="cad_gcode_review") {
+    fields(args,{"document_id","revision","path","expected_sha256","options"},{"feature_id"});validate_gcode_options(args.at("options"));
+    const auto hash=text_field(args,"expected_sha256");
+    if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)
+      throw Error("invalid_argument","Expected G-code SHA-256 must be 64 lowercase hexadecimal digits");
+  }
+  else if(tool=="cad_printer_handoff")validate_printer_arguments(args);
+  else if(tool=="cad_slice")validate_slice_arguments(args);
   else if(tool=="cad_robot_export") {fields(args,{"document_id","revision","robot"},{"feature_id"});validate_robot_options(args.at("robot"));}
   else if(tool=="cad_bom") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_drawing") fields(args,{"document_id","revision"},{"drawing"});
   else if(tool=="cad_query") fields(args,{"document_id","revision"},{"kind","feature_id"});
+  else if(tool=="cad_measure") {fields(args,{"document_id","revision","evaluation_id","feature_id","query"});identifier(text_field(args,"evaluation_id"));validate_measurement_query(args.at("query"));}
   else if(tool=="cad_view") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id","kind"});
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
@@ -241,10 +531,14 @@ Json Service::call(const std::string& tool,const Json& args) {
 }
 
 Json Service::execute(const std::string& tool,const Json& args) {
-  if(tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
+  if(tool=="cad_artifact_show"||tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
     return live_call(*this,store_,tool,args);
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
   validate_tool_arguments(tool,args);
+  if(tool=="cad_artifact") {
+    if(args.at("action")=="review")return review_external_artifact(store_.root(),args,AGENTCAD_CACHE_BUILD);
+    return verify_external_artifact(path_from_utf8(text_field(args,"review_path")).parent_path(),text_field(args,"expected_sha256"));
+  }
   const auto id=text_field(args,"document_id");
   if(tool=="cad_read") return store_.read(id,args.contains("revision")?std::optional(revision_number(args.at("revision"))):std::nullopt);
   if(tool=="cad_resolve_selection") {
@@ -292,7 +586,8 @@ Json Service::execute(const std::string& tool,const Json& args) {
     { DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
       if(tool=="cad_create") model=args.at("model");
       else if(tool=="cad_restore") model=store_.read(id,revision_number(args.at("source_revision"))).at("model");
-      else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"));
+      else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"),
+        [&](const std::string& source,std::uint64_t revision){return store_.read(source,revision);});
       else {
         const auto content=read_text(path_from_utf8(text_field(args,"path")));
         if(content.size()>512*1024)throw Error("limit_exceeded","Embedded STEP imports are limited to 512 KiB");
@@ -301,8 +596,18 @@ Json Service::execute(const std::string& tool,const Json& args) {
         if(const auto offset=invalid_utf8_offset(content))
           throw Error("invalid_argument","STEP file is not valid UTF-8 at byte "+std::to_string(*offset)+
             "; cad_import embeds the file unchanged as UTF-8 text (ISO 10303-21 encodes other text with \\X2\\ escapes)",{{"byte_offset",*offset}});
+        const auto digest=sha256(content);
+        if(args.contains("expected_sha256")&&args.at("expected_sha256")!=digest)
+          throw Error("artifact_mismatch","STEP bytes do not match expected_sha256",{{"expected_sha256",args.at("expected_sha256")},{"actual_sha256",digest}});
+        Json feature={{"id","imported"},{"type","import_step"},{"content",content},{"sha256",digest}};
+        if(args.contains("purchase")) {
+          auto purchase=args.at("purchase");
+          if(purchase.contains("artifact_sha256")&&purchase.at("artifact_sha256")!=digest)
+            throw Error("artifact_mismatch","Purchasing artifact SHA-256 differs from the STEP bytes",{{"expected_sha256",purchase.at("artifact_sha256")},{"actual_sha256",digest}});
+          purchase["artifact_sha256"]=digest;feature["purchase"]=std::move(purchase);
+        }
         model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},
-          {"features",Json::array({{{"id","imported"},{"type","import_step"},{"content",content},{"sha256",sha256(content)}}})},{"output","imported"}};
+          {"features",Json::array({std::move(feature)})},{"output","imported"}};
       }
     }
     validate_model(model);
@@ -332,13 +637,99 @@ Json Service::execute(const std::string& tool,const Json& args) {
   if(tool=="cad_preview") {
     const auto expected=revision_number(args.at("expected_revision"));const auto record=store_.read(id);
     if(record.at("revision")!=expected) throw Error("revision_conflict","Preview base revision changed",{{"expected_revision",expected},{"current_revision",record.at("revision")}});
-    const auto candidate=apply_operations(record.at("model"),args.at("operations"));
+    const auto candidate=apply_operations(record.at("model"),args.at("operations"),
+      [&](const std::string& source,std::uint64_t revision){return store_.read(source,revision);});
     const auto kind=args.value("kind",std::string("view"));
     if(kind!="view" && kind!="mesh") throw Error("invalid_argument","Preview kind must be view or mesh");
     Json request={{"kind","view"}};if(args.contains("feature_id"))request["feature_id"]=args.at("feature_id");
     return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,kind=="view");
   }
   const auto revision=revision_number(args.at("revision"));const auto record=store_.read(id,revision);
+  if(tool=="cad_measure") {
+    const auto eid=text_field(args,"evaluation_id"),feature=text_field(args,"feature_id"),hash=sha256(record.at("model").dump());
+    if(store_.read(id).at("revision")!=revision)throw Error("stale_selection","Measurement requires the current committed revision");
+    const auto parent=store_.root()/"evaluations",path=parent/(eid+".json");
+    if(fs::is_symlink(fs::symlink_status(parent))||fs::is_symlink(fs::symlink_status(path)))throw Error("storage_error","Measurement evaluation cannot be a symlink");
+    Json evaluation;
+    try{evaluation=parse_json(read_text(path,64*1024*1024),64*1024*1024);}
+    catch(const Error& error){if(error.code=="not_found")throw Error("stale_selection","Measurement evaluation is missing; request a fresh view");throw;}
+    if(evaluation.at("draft")==true)throw Error("draft_selection","Save or reset the displayed pose before measuring committed geometry");
+    for(const auto* key:{"document_id","revision","evaluation_id","feature_id"})if(evaluation.at(key)!=args.at(key))throw Error("stale_selection","Measurement does not belong to this evaluation");
+    if(evaluation.value("_native_build",std::string{})!=AGENTCAD_CACHE_BUILD||evaluation.value("_model_sha256",std::string{})!=hash)
+      throw Error("stale_selection","Measurement evaluation source/build differs; request a fresh view");
+    auto report=evaluate_model(store_.root(),record.at("model"),{{"kind","measure"},{"feature_id",feature},{"options",args.at("query")},{"topology",evaluation.at("topology")}}).at("measurement");
+    DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
+    if(store_.read(id).at("revision")!=revision)throw Error("stale_selection","Source changed while measuring; request its current evaluation");
+    return {{"document_id",id},{"revision",revision},{"evaluation_id",eid},{"feature_id",feature},{"kernel_version",kernel_version()},
+      {"model_sha256",hash},{"native_build",AGENTCAD_CACHE_BUILD},{"report",report}};
+  }
+  if(tool=="cad_printer_handoff") {
+    return args.at("action")=="plan"?plan_printer_handoff(store_.root(),record,args,AGENTCAD_CACHE_BUILD):
+      verify_printer_handoff(store_.root(),record,args,AGENTCAD_CACHE_BUILD);
+  }
+  if(tool=="cad_slice") {
+    if(args.at("action")=="plan")return plan_slice(store_.root(),record,args.at("options"),args.value("feature_id",text_field(record.at("model"),"output")),AGENTCAD_CACHE_BUILD);
+    return run_slice(store_.root(),record,args,AGENTCAD_CACHE_BUILD);
+  }
+  if(tool=="cad_gcode_review") {
+    const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
+    bool found=false;for(const auto& item:record.at("model").at("features"))if(item.at("id")==feature)found=true;
+    if(!found)throw Error("invalid_argument","G-code association names a missing source feature",{{"feature_id",feature}});
+    const auto input=path_from_utf8(text_field(args,"path"));
+    auto suffix=path_to_utf8(input.extension());for(auto& c:suffix)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if(!input.is_absolute()||suffix!=".gcode"||!fs::is_regular_file(input))
+      throw Error("invalid_argument","G-code review requires an absolute existing plain .gcode file");
+    const auto original=read_text(input,gcode_bytes_limit);const auto digest=sha256(original);
+    if(digest!=text_field(args,"expected_sha256"))throw Error("artifact_mismatch","G-code bytes do not match expected SHA-256");
+    const Json source={{"document_id",id},{"revision",revision},{"kernel_version",kernel_version()},{"feature_id",feature},
+      {"model_sha256",sha256(record.at("model").dump())},{"native_build",AGENTCAD_CACHE_BUILD}};
+    const auto exports=store_.root()/"exports";directory(exports);const auto stage=temporary_directory(exports);
+    const auto destination=exports/(id+"-r"+std::to_string(revision)+"-gcode-"+evaluation_id());
+    try {
+      check_job_cancelled();atomic_text(stage/"original.gcode",original,gcode_bytes_limit);
+      const auto report=evaluate_model(store_.root(),record.at("model"),{{"kind","gcode_review"},{"path",path_to_utf8(stage/"original.gcode")},{"options",args.at("options")}}).at("gcode_report");
+      const auto content=Json{{"schema_version",1},{"source",source},{"source_association","caller_declared_not_geometry_verified"},
+        {"gcode",{{"path","original.gcode"},{"sha256",digest},{"bytes",original.size()}}},{"options",args.at("options")},{"report",report}}.dump(2)+"\n";
+      atomic_text(stage/"review.json",content,gcode_bytes_limit);atomic_text(stage/"source.json",record.dump(2)+"\n");
+      Json ledger=Json::array();for(const auto* name:{"original.gcode","review.json","source.json"}) {
+        const auto raw=read_text(stage/name,gcode_bytes_limit);ledger.push_back({{"path",name},{"sha256",sha256(raw)},{"bytes",raw.size()}});
+      }
+      atomic_text(stage/"manifest.json",Json{{"schema_version",1},{"source",source},{"artifacts",ledger},
+        {"physical_print_started",false},{"process_approval","not_evaluated"}}.dump(2)+"\n");
+      auto result=source;result["gcode_sha256"]=digest;result["gcode_bytes"]=original.size();result["report"]=report;
+      result["path"]=path_to_utf8(destination/"review.json");result["artifact_path"]=path_to_utf8(destination/"original.gcode");
+      result["source_path"]=path_to_utf8(destination/"source.json");result["report_sha256"]=sha256(content);result["report_bytes"]=content.size();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();fs::rename(stage,destination);return result;
+    }catch(...){std::error_code ignored;fs::remove_all(stage,ignored);throw;}
+  }
+  if(tool=="cad_fabrication_review") {
+    const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
+    const Json source={{"document_id",id},{"revision",revision},{"kernel_version",kernel_version()},{"feature_id",feature},
+      {"units","mm"},{"model_sha256",sha256(record.at("model").dump())},{"native_build",AGENTCAD_CACHE_BUILD}};
+    const auto report=evaluate_model(store_.root(),record.at("model"),{{"kind","fabrication"},{"feature_id",feature},{"options",args.at("options")}}).at("fabrication");
+    const auto exports=store_.root()/"exports";directory(exports);const auto stage=temporary_file(exports);
+    const auto destination=exports/(id+"-r"+std::to_string(revision)+"-"+evaluation_id()+".review.json");
+    const auto content=Json{{"schema_version",1},{"source",source},{"options",args.at("options")},{"report",report}}.dump(2)+"\n";
+    try {
+      atomic_text(stage,content,64*1024*1024);auto result=source;result["report"]=report;result["path"]=path_to_utf8(destination);
+      result["sha256"]=sha256(content);result["bytes"]=content.size();
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();publish_file(stage,destination);return result;
+    }catch(...){std::error_code ignored;fs::remove(stage,ignored);throw;}
+  }
+  if(tool=="cad_manufacture") {
+    const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
+    const Json identity={{"document_id",id},{"revision",revision},{"kernel_version",kernel_version()},{"feature_id",feature},{"units","mm"}};
+    const auto exports=store_.root()/"exports";directory(exports);
+    const auto stage=temporary_directory(exports),destination=exports/(id+"-r"+std::to_string(revision)+"-manufacturing-"+evaluation_id());
+    try {
+      auto result=evaluate_model(store_.root(),record.at("model"),{{"kind","manufacturing"},{"feature_id",feature},
+        {"options",args.value("options",Json::object())},{"identity",identity},{"path",path_to_utf8(stage)}}).at("manufacturing");
+      for(const auto& item:identity.items())result[item.key()]=item.value();
+      result["directory"]=path_to_utf8(destination);result["path"]=path_to_utf8(destination/"manifest.json");
+      for(auto& artifact:result["artifacts"])artifact["path"]=path_to_utf8(destination/path_from_utf8(text_field(artifact,"path")));
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();fs::rename(stage,destination);return result;
+    }catch(...) {std::error_code ignored;fs::remove_all(stage,ignored);throw;}
+  }
   if(tool=="cad_robot_export") {
     const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
     const auto exports=store_.root()/"exports";directory(exports);

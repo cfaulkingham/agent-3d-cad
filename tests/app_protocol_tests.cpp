@@ -1,6 +1,7 @@
 #include "agentcad/app.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/mcp.hpp"
+#include "agentcad/model.hpp"
 #include <chrono>
 #include <iostream>
 #include <set>
@@ -115,6 +116,50 @@ void session_contract(Service& service, bool apps) {
   require(!session.handle({{"jsonrpc", "2.0"}, {"id", nullptr}, {"error", {{"code", -32600}, {"message", "x"}}}}), "A client error response is never answered");
   error(session, {{"jsonrpc", "2.0"}, {"id", 42}}, -32600);
 }
+void schema_pruning_contract() {
+  const Json missing = {{"$ref", "#/$defs/missing"}};
+  for (const auto* keyword : {"const", "enum", "default"}) {
+    const Json literal = std::string(keyword) == "enum" ? Json::array({missing}) : missing;
+    Json schema = {{"type", "object"}, {keyword, literal},
+      {"$defs", {{"unused", {{"type", "string"}}}}}};
+    auto expected = schema; expected.erase("$defs");
+    prune_definitions(schema);
+    require(schema == expected, std::string(keyword) + " literal references neither resolve nor add definitions");
+    const Json present = {{"$ref", "#/$defs/literal_only"}};
+    schema = {{"type", "object"}, {keyword, std::string(keyword) == "enum" ? Json::array({present}) : present},
+      {"$defs", {{"literal_only", {{"type", "string"}, {"minLength", 1}}}}}};
+    expected = schema; expected.erase("$defs");
+    prune_definitions(schema);
+    require(schema == expected, std::string(keyword) + " literal-only targets do not retain spurious definitions");
+  }
+  const Json definitions = {
+    {"first", {{"type", "object"}, {"properties", {{"default", {{"$ref", "#/$defs/leaf"}}}}}, {"additionalProperties", false}}},
+    {"second", {{"anyOf", Json::array({{{"$ref", "#/$defs/first"}}, {{"type", "null"}}})}}},
+    {"leaf", {{"type", "integer"}, {"minimum", 0}}}, {"unused", {{"type", "string"}}}};
+  for (const auto* map : {"properties", "patternProperties", "dependentSchemas"}) {
+    Json schema = {{"type", "object"}, {map, {
+      {"const", {{"$ref", "#/$defs/first"}}}, {"enum", {{"$ref", "#/$defs/second"}}},
+      {"default", {{"$ref", "#/$defs/leaf"}}}}}, {"$defs", definitions}, {"default", missing}};
+    auto expected = schema; expected["$defs"].erase("unused");
+    prune_definitions(schema);
+    require(schema == expected, std::string(map) + " keyword-named properties preserve real and transitive references");
+    Json invalid = {{"type", "object"}, {map, {{"enum", missing}}}, {"$defs", definitions}};
+    bool rejected = false;
+    try { prune_definitions(invalid); }
+    catch (const std::logic_error&) { rejected = true; }
+    require(rejected, std::string(map) + " keyword-named properties still reject missing real targets");
+  }
+  Json root = {{"type", "object"}, {"$ref", "#/$defs/first"}, {"$defs", definitions}};
+  auto expected = root; expected["$defs"].erase("unused"); expected["$defs"].erase("second");
+  prune_definitions(root);
+  require(root == expected, "Explicit object roots retain exactly their reference closure and bounds");
+  Json recursive = {{"type", "object"}, {"$ref", "#/$defs/node"}, {"$defs", {
+    {"node", {{"type", "object"}, {"properties", {{"next", {{"$ref", "#/$defs/node"}}}}}, {"default", missing}}},
+    {"unused", {{"type", "integer"}}}}}};
+  expected = recursive; expected["$defs"].erase("unused");
+  prune_definitions(recursive);
+  require(recursive == expected, "Recursive real schemas remain closed while nested literal references stay data");
+}
 // Collects "#/$defs/<name>" targets, ignoring the schema's own $defs map.
 void references(const Json& value, std::set<std::string>& names) {
   if (value.is_array()) for (const auto& item : value) references(item, names);
@@ -136,6 +181,7 @@ void discovery_contract(Service& service) {
   // 1,058,723 compact bytes when every schema carried all model $defs.
   require(bytes < 420 * 1024, "tools/list stays compact (" + std::to_string(bytes) + " bytes)");
   for (const auto& tool : listed.at("tools")) for (const auto* key : {"inputSchema", "outputSchema"}) {
+    require(tool.at(key).value("type",std::string{})=="object","MCP discovery schemas explicitly declare object roots");
     const auto& schema = tool.at(key);
     const auto name = tool.at("name").get<std::string>() + "." + key;
     std::set<std::string> reachable, pending;
@@ -204,6 +250,7 @@ int main() {
     Temporary temporary;
     Service service(temporary.path);
     source_integrity();
+    schema_pruning_contract();
     session_contract(service, true);
     session_contract(service, false);
     discovery_contract(service);

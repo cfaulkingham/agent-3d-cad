@@ -135,6 +135,31 @@ evaluation superseded during transfer. While waiting, the last rendered solid
 remains visible and old picks are disabled. Persistent failures stay explicit.
 Polling recovery never automatically resends a Quick Edit request.
 
+## Clipping and exploded inspection
+
+Visual inspection enables uncapped clipping, axis/offset controls, kept-side
+reversal and exploded leaf separation. Settings persist per view and appear in
+agent context. Picking follows the displayed parts while exact measurements,
+references and saved source retain their original coordinates. See
+[PRESENTATION.md](PRESENTATION.md) for the contract and limits.
+
+## Exact source measurements
+
+Exact measurement chooses two leaf parts or uses current face/edge picks for A
+and B. Pair or assembly checks run in native jobs and show saved-pose distances,
+closest points and material overlap. Clipping, explosion and hiding do not alter
+the source measurements. Reopening restores the qualified result; a revision
+change retires it. See [MEASUREMENTS.md](MEASUREMENTS.md).
+
+The independent Exact section panel calculates a native planar cut for the
+current clipping plane and exploded placement. Filled surfaces retain actual
+bores; native curves, point/curve tangencies, exact area and boundary length
+have explicit feature/all-leaf/subset coverage. Hiding changes the displayed
+caps while preserving the report's scope. Kept-side reversal reuses the same
+section; plane/placement/source changes retire it. Section picks return review
+feedback, never original topology references. Reopening restores its qualified
+job, and Copy request carries that identity. See [SECTIONS.md](SECTIONS.md).
+
 ## Mechanism motion
 
 Articulated assemblies expose a Motion panel with independent joint controls,

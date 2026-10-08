@@ -24,6 +24,7 @@ assert.equal(calls[1].name, 'call_tool');
 assert.equal(calls[1].args.name, 'cad_list');
 await assert.rejects(bridge.desktop.export({ format: 'step' }), /Native export failed/);
 bridge.dispose();
+vm.runInContext(readFileSync(new URL('../web/renderer.js', import.meta.url), 'utf8'), context);
 vm.runInContext(readFileSync(new URL('../web/state.js', import.meta.url), 'utf8'), context);
 const request = context.CadLiveState.promptText({ prompt: 'Round this edge', view_id: 'main', selection: { kind: 'edge', revision: 2 } }, '/CAD projects');
 assert.match(request, /CAD workspace: "\/CAD projects"/);

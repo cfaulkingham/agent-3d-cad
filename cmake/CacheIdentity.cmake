@@ -1,7 +1,10 @@
 # Changes to service sources/headers or build settings invalidate disposable
 # caches automatically, including uncommitted developer builds.
 file(GLOB cache_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/include/agentcad/*.hpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/agentcad/*.hpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinyxml2/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinyxml2/*.h")
 list(APPEND cache_sources "${CMAKE_CURRENT_SOURCE_DIR}/CMakeLists.txt" "${CMAKE_CURRENT_LIST_FILE}")
 # Bind to the selected native SDK binaries as well as the pinned version. Skip
 # aliases so relocated copies have the same identity as their original build.
@@ -13,6 +16,14 @@ foreach(library IN LISTS cache_kernel_libraries)
     list(APPEND cache_sources "${library}")
   endif()
 endforeach()
+foreach(library IN ITEMS "${FREETYPE_LIBRARY_RELEASE}" "${FREETYPE_LIBRARY_DEBUG}")
+  if(EXISTS "${library}")
+    # FindFreetype may select a loader alias; bind the bytes it resolves to.
+    file(REAL_PATH "${library}" selected_freetype_real)
+    list(APPEND cache_sources "${selected_freetype_real}")
+  endif()
+endforeach()
+list(REMOVE_DUPLICATES cache_sources)
 set(cache_identity "${CMAKE_CXX_COMPILER_ID};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_SYSTEM_NAME};${CMAKE_SYSTEM_PROCESSOR};${CMAKE_OSX_ARCHITECTURES};${CMAKE_SIZEOF_VOID_P};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_DEBUG};${CMAKE_CXX_FLAGS_RELEASE};${CMAKE_CXX_FLAGS_RELWITHDEBINFO};${CMAKE_CXX_FLAGS_MINSIZEREL}")
 foreach(source IN LISTS cache_sources)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${source}")

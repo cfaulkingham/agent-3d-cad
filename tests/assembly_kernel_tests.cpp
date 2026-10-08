@@ -77,12 +77,15 @@ int main() {
     verify_ownership(overlap,2);
     const auto overlap_snapshot=overlap.snapshot();
     require(overlap_snapshot.at("features").at("group").at("assembly")==true,"Assembly snapshot has reconstruction marker");
-    require(!overlap_snapshot.at("features").at("group").contains("brep"),"Assembly snapshot reuses exact source B-reps");
+    require(overlap_snapshot.at("features").at("group").contains("brep")&&overlap_snapshot.at("features").at("group").at("parts").size()==2,
+      "Assembly snapshot retains exact independent compound children and occurrence transforms");
     BuiltModel warm_overlap(coincident,overlap_snapshot);
     equivalent(overlap.summary(),warm_overlap.summary()); equivalent(overlap.topology(),warm_overlap.topology());
     verify_ownership(warm_overlap,2);
     auto broken=overlap_snapshot; broken["features"]["group"]["faces"]=6;
     error("cache_miss",[&]{ BuiltModel rejected(coincident,broken); });
+    broken=overlap_snapshot;broken["features"]["group"]["parts"][0]["transform"][3]=1;
+    error("cache_miss",[&]{BuiltModel rejected(coincident,broken);});
 
     auto placed=part("rotated");
     placed["placement"]={{"rotation",{{"origin",{1,0,0}},{"axis",{0,0,1}},{"angle_deg",90}}},{"translation",{10,20,30}}};

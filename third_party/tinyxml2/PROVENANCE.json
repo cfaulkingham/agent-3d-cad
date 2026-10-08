@@ -1,0 +1,23 @@
+{
+  "tinyxml2": {
+    "version": "11.0.0",
+    "url": "https://github.com/leethomason/tinyxml2/archive/refs/tags/11.0.0.tar.gz",
+    "archive_sha256": "5556deb5081fb246ee92afae73efd943c889cef0cafea92b0b82422d6a18f289",
+    "license": "zlib",
+    "notices": "third_party/tinyxml2/LICENSE.txt",
+    "linkage": "statically compiled into cad_core",
+    "files": {
+      "tinyxml2.cpp": "95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554",
+      "tinyxml2.h": "0f3c6e5a91b6d65caca3cc7239926455f21e488cff80ac3d27c74f5262fd2602",
+      "LICENSE.txt": "9332252e9b9e46db8285d4a3f0bf25f139bf1dca6781b956d57f2302efca6432",
+      "readme.md": "ceb7febab1c54720681a55e0cff79f3e87e10e96c44bcd7fecc4a99337eae017"
+    }
+  },
+  "compression": {
+    "backend": "FreeType FT_Gzip_Uncompress",
+    "version": "2.14.3",
+    "new_dependency": false,
+    "api": "https://freetype.org/freetype2/docs/reference/ft2-gzip.html#ft_gzip_uncompress",
+    "platform_tested": "macOS arm64 only"
+  }
+}

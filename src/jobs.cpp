@@ -3,8 +3,12 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/robot.hpp"
+#include "agentcad/manufacturing.hpp"
+#include "agentcad/gcode.hpp"
+#include "agentcad/process.hpp"
 #include "agentcad/drawing.hpp"
 #include "agentcad/cache.hpp"
+#include <set>
 #include "agentcad/model.hpp"
 #include "agentcad/runtime.hpp"
 #include <algorithm>
@@ -175,8 +179,9 @@ Child launch(const std::vector<fs::path>& args, bool bounded, int memory_mb) {
   if (bounded) {
     child.group = CreateJobObjectW(nullptr, nullptr);
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION limit{};
-    limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY;
+    limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_PROCESS_MEMORY | JOB_OBJECT_LIMIT_JOB_MEMORY;
     limit.ProcessMemoryLimit = static_cast<SIZE_T>(memory_mb) * 1024 * 1024;
+    limit.JobMemoryLimit = limit.ProcessMemoryLimit;
     if (!child.group || !SetInformationJobObject(child.group, JobObjectExtendedLimitInformation, &limit, sizeof(limit)))
       throw Error("worker_failed", "Cannot install worker memory budget");
   }
@@ -232,10 +237,16 @@ struct Child {
     }
   }
   bool done(int& status) {
-    const auto result = ::waitpid(pid, &status, WNOHANG);
-    if (result < 0 && errno == EINTR) return false;
-    if (result < 0) throw Error("worker_failed", "Cannot wait for geometry worker");
-    collected = result == pid;
+    siginfo_t info{};
+    const auto result=::waitid(P_PID,static_cast<id_t>(pid),&info,WEXITED|WNOHANG|WNOWAIT);
+    if(result<0&&errno==EINTR)return false;
+    if(result<0)throw Error("worker_failed","Cannot observe native worker");
+    if(!info.si_pid)return false;
+    // Retain the leader as a waitable child until descendants have been killed.
+    // Never send a group signal after reaping and allowing PID reuse.
+    ::kill(-pid,SIGKILL);
+    while(::waitpid(pid,&status,0)<0){if(errno!=EINTR)throw Error("worker_failed","Cannot collect native worker");}
+    collected=true;
     // Keep a signal death distinct from a worker's deliberate watchdog exit.
     if (collected) status = WIFEXITED(status) ? WEXITSTATUS(status) : 256 + WTERMSIG(status);
     return collected;
@@ -579,41 +590,6 @@ std::string request_fingerprint(const std::string& tool, const Json& arguments) 
   auto normalized = arguments; normalized.erase("request_id");
   return sha256(Json{{"tool", tool}, {"arguments", normalized}}.dump());
 }
-std::string sha256(const std::string& text) {
-  static constexpr std::array<std::uint32_t,64> constants = {
-    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-  std::array<std::uint32_t,8> hash = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
-  std::vector<std::uint8_t> bytes(text.begin(), text.end()); const auto bits = static_cast<std::uint64_t>(bytes.size()) * 8;
-  bytes.push_back(0x80); while (bytes.size() % 64 != 56) bytes.push_back(0);
-  for (int i = 7; i >= 0; --i) bytes.push_back(static_cast<std::uint8_t>(bits >> (i * 8)));
-  auto rotate = [](std::uint32_t value, int amount) { return (value >> amount) | (value << (32 - amount)); };
-  for (std::size_t offset = 0; offset < bytes.size(); offset += 64) {
-    std::array<std::uint32_t,64> words{};
-    for (int i = 0; i < 16; ++i) for (int j = 0; j < 4; ++j) words[i] = (words[i] << 8) | bytes[offset + i*4+j];
-    for (int i = 16; i < 64; ++i) {
-      const auto a = words[i-15], b = words[i-2];
-      words[i] = words[i-16] + (rotate(a,7)^rotate(a,18)^(a>>3)) + words[i-7] + (rotate(b,17)^rotate(b,19)^(b>>10));
-    }
-    auto [a,b,c,d,e,f,g,h] = hash;
-    for (int i = 0; i < 64; ++i) {
-      const auto first = h + (rotate(e,6)^rotate(e,11)^rotate(e,25)) + ((e&f)^(~e&g)) + constants[i] + words[i];
-      const auto second = (rotate(a,2)^rotate(a,13)^rotate(a,22)) + ((a&b)^(a&c)^(b&c));
-      h=g; g=f; f=e; e=d+first; d=c; c=b; b=a; a=first+second;
-    }
-    hash[0]+=a; hash[1]+=b; hash[2]+=c; hash[3]+=d; hash[4]+=e; hash[5]+=f; hash[6]+=g; hash[7]+=h;
-  }
-  std::ostringstream result; result << std::hex << std::setfill('0');
-  for (auto value : hash) result << std::setw(8) << value;
-  return result.str();
-}
-
 // A cached per-view projection is trusted only if it carries everything a drawing
 // needs from it, including what it cost against the drawing-wide limits.
 bool valid_projection_entry(const std::optional<Json>& entry) {
@@ -664,6 +640,7 @@ struct ParallelProjection {
   Json summary;                    // the model summary a projecting worker returned
   std::vector<PendingPublication> publications;
   int workers = 1;                 // peak number of workers running at once
+  Json feature_evaluations = Json::array();
 };
 // Hidden-line removal dominates a drawing and is independent per view, so views
 // that are not cached are projected by separate worker processes. Every process is
@@ -684,6 +661,7 @@ ParallelProjection project_in_parallel(const fs::path& workspace, const Json& mo
   std::vector<Active> active;
   bool own_slot_free = true, geometry_publication = false;
   std::size_t peak = 0;
+  std::set<std::string> feature_publications;
   try {
     while (!pending.empty() || !active.empty()) {
       check_job_cancelled();
@@ -715,6 +693,12 @@ ParallelProjection project_in_parallel(const fs::path& workspace, const Json& mo
           {"tolerance_mm",produced.at("tolerance_mm")}});
         if (result.summary.is_null()) result.summary = response.at("result").at("summary");
         const auto& diagnostics = response.at("cache");
+        result.feature_evaluations.push_back({{"view_index",it->view},{"feature_hits",diagnostics.at("feature_hits")}});
+        for(const auto& entry:diagnostics.value("feature_entries",Json::array())) {
+          const auto key=text_field(entry,"key");
+          if(feature_publications.insert(key).second)
+            result.publications.push_back({it->files,text_field(entry,"file"),key});
+        }
         if (!diagnostics.at("projection_hits").at(0).get<bool>())
           result.publications.push_back({it->files, "projection-0.cache", diagnostics.at("projection_keys").at(0).get<std::string>()});
         if (!geometry_publication && !diagnostics.at("geometry_hit").get<bool>()) {
@@ -757,10 +741,10 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
       drawing = &request.at("drawing");
       const auto& views = drawing->at("views");
       if (views.is_array() && views.size() >= 2 && views.size() <= 6 && drawing->at("hidden_lines").is_boolean()) {
-        const auto geometry_key = geometry_cache_key(model);
+        const auto output_key = feature_cache_keys(model).at(text_field(model,"output")).get<std::string>();
         for (std::size_t i = 0; i < views.size(); ++i) {
           if (!views.at(i).is_object()) { missing.clear(); break; }
-          const auto key = projection_cache_key(geometry_key, {{"views",Json::array({projection_definition(views.at(i))})},
+          const auto key = projection_cache_key(output_key, {{"views",Json::array({projection_definition(views.at(i))})},
             {"hidden_lines",drawing->at("hidden_lines")}});
           if (!valid_projection_entry(read_cache(workspace / ".cache", key))) missing.push_back(i);
         }
@@ -789,6 +773,11 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
     // document identity, output path, or evaluation identity.
     check_job_cancelled();
     const auto& produced=response.at("cache");
+    if(produced.contains("feature_entries")&&produced.at("feature_entries").size()<=256)
+      for(const auto& entry:produced.at("feature_entries")) {
+        check_job_cancelled();
+        publish_cache(workspace/".cache",files.path/path_from_utf8(text_field(entry,"file")),text_field(entry,"key"));
+      }
     if(produced.contains("geometry_key")) {
       check_job_cancelled();
       publish_cache(workspace/".cache",files.path/"geometry.cache",produced.at("geometry_key"));
@@ -804,9 +793,65 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
       publish_cache(workspace/".cache",entry.files->path/entry.file,entry.key);
     }
     check_job_cancelled();
-    if(cache_diagnostics) { *cache_diagnostics=response.at("cache"); (*cache_diagnostics)["projection_workers"]=parallel ? parallel->workers : 1; }
+    if(cache_diagnostics) {
+      *cache_diagnostics=response.at("cache");
+      (*cache_diagnostics)["projection_workers"]=parallel ? parallel->workers : 1;
+      (*cache_diagnostics)["projection_features"]=parallel ? parallel->feature_evaluations : Json::array();
+    }
     return response.at("result");
   } catch (...) { child.stop(); throw; }
+}
+
+Json run_native_process(const fs::path& workspace,const Json& request) {
+  const auto started=std::chrono::steady_clock::now();directory(workspace/".workers");
+  std::unique_ptr<WorkspaceLock> slot;
+  while(!slot) {
+    check_job_cancelled();slot=try_worker_slot(workspace);
+    if(!slot) {
+      if(request_context.empty())throw Error("queue_full","All four native workers are occupied");
+      if(remaining_ms(started)<=0)throw Error("job_timeout","Native process exceeded its queued wall budget");
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+  }
+  TemporaryDirectory files(workspace);auto command=request;
+  command["timeout_ms"]=std::max<std::int64_t>(1,remaining_ms(started));command["memory_mb"]=current_budget.at("memory_mb");
+#ifdef _WIN32
+  command["parent_pid"]=GetCurrentProcessId();
+#else
+  command["parent_pid"]=getpid();
+#endif
+  atomic_text(files.path/"input.json",command.dump());
+  auto child=launch({"--internal-process-worker",files.path/"input.json",files.path/"output.json"},true,current_budget.at("memory_mb"));
+  try {
+    atomic_text(files.path/"process.json",Json{{"pid",child.id()}}.dump());int status=0;
+    while(!child.done(status)) {
+      check_job_cancelled();if(remaining_ms(started)<=0)throw Error("job_timeout","Native process exceeded its wall-time budget");
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    check_job_cancelled();return worker_response(files.path,status).at("result");
+  }catch(...){child.stop();throw;}
+}
+int process_worker_main(const fs::path& input,const fs::path& output) {
+  try {
+    const auto request=parse_json(read_text(input));
+#ifdef _WIN32
+    HANDLE parent=OpenProcess(SYNCHRONIZE,FALSE,request.at("parent_pid").get<DWORD>());
+    if(!parent)throw Error("worker_failed","Native process supervisor parent is missing");
+    struct ParentHandle {HANDLE handle;~ParentHandle(){CloseHandle(handle);}} parent_handle{parent};
+    std::jthread guard([parent](std::stop_token stop){while(!stop.stop_requested()){if(WaitForSingleObject(parent,0)!=WAIT_TIMEOUT)std::_Exit(125);std::this_thread::sleep_for(std::chrono::milliseconds(10));}});
+    const auto parent_alive=[&](){if(WaitForSingleObject(parent,0)!=WAIT_TIMEOUT)throw Error("worker_failed","Native supervisor parent exited");};
+#else
+    const auto parent=request.at("parent_pid").get<pid_t>();
+    const auto parent_alive=[parent](){if(::getppid()!=parent){::kill(-::getpgrp(),SIGKILL);std::_Exit(125);}};
+    parent_alive();
+    std::jthread guard([parent_alive](std::stop_token stop){while(!stop.stop_requested()){parent_alive();std::this_thread::sleep_for(std::chrono::milliseconds(10));}});
+#endif
+    atomic_text(output.parent_path()/"building.json",Json{{"phase","external_process"}}.dump());
+    const auto result=supervise_process(request,output.parent_path(),parent_alive);
+    write_result(output,{{"result",result}});return 0;
+  }catch(const Error& e){try{write_result(output,{{"error",e.json()}});}catch(...){}}
+  catch(const std::exception& e){try{write_result(output,{{"error",Error("worker_failed",e.what()).json()}});}catch(...){}}
+  return 1;
 }
 
 int geometry_worker_main(const fs::path& input, const fs::path& output) {
@@ -826,22 +871,47 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
 #endif
     WorkerWatchdog watchdog(limits);
     const auto& request = payload.at("request");
-    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot"});
+    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot", "options", "topology"});
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
+    if(kind=="gcode_review") {
+      const auto report=inspect_gcode(read_text(path_from_utf8(text_field(request,"path")),gcode_bytes_limit),request.at("options"));
+      write_result(output,{{"result",{{"gcode_report",report}}},{"cache",Json::object()}});
+      return 0;
+    }
     const auto cache_root=payload.contains("cache_root") ? path_from_utf8(text_field(payload,"cache_root")) : output.parent_path()/"unused-cache";
     const auto geometry_key=geometry_cache_key(payload.at("model"));
     auto cached=read_cache(cache_root,geometry_key);
     if(cached && (!cached->contains("snapshot") || !cached->contains("summary"))) cached.reset();
-    Json diagnostics={{"geometry_key",geometry_key},{"geometry_hit",cached.has_value()},{"projection_hit",false}};
+    const auto feature_keys=feature_cache_keys(payload.at("model"));
+    const auto output_key=feature_keys.at(text_field(payload.at("model"),"output")).get<std::string>();
+    Json diagnostics={{"geometry_key",geometry_key},{"geometry_hit",cached.has_value()},{"projection_hit",false},
+      {"feature_keys",feature_keys},{"feature_hits",Json::object()},{"feature_entries",Json::array()}};
+    std::size_t feature_stage_remaining=32*1024*1024;
+    FeatureCache feature_cache;
+    feature_cache.keys=feature_keys;feature_cache.diagnostics=&diagnostics;
+    feature_cache.load=[&](const std::string& key){return read_cache(cache_root,key);};
+    feature_cache.stage=[&](const std::string& key,const Json& snapshot) {
+      // Account for both JSON serializations in the checksummed envelope, so
+      // a request cannot stage unbounded feature entries beside its model entry.
+      const auto bytes=snapshot.dump().size()*2+256;
+      if(bytes>feature_stage_remaining)return;
+      feature_stage_remaining-=bytes;
+      const auto file="feature-"+std::to_string(diagnostics.at("feature_entries").size())+".cache";
+      stage_cache(output.parent_path()/file,key,snapshot);
+      diagnostics["feature_entries"].push_back({{"key",key},{"file",file}});
+    };
     std::unique_ptr<BuiltModel> built;
     auto geometry=[&]() -> BuiltModel& {
       if(!built && cached) {
-        try { built=std::make_unique<BuiltModel>(payload.at("model"),cached->at("snapshot")); }
+        try {
+          built=std::make_unique<BuiltModel>(payload.at("model"),cached->at("snapshot"));
+          for(const auto& item:feature_keys.items())diagnostics["feature_hits"][item.key()]=true;
+        }
         catch(const std::exception&) { cached.reset(); diagnostics["geometry_hit"]=false; }
       }
-      if(!built) built=std::make_unique<BuiltModel>(payload.at("model"));
+      if(!built) built=std::make_unique<BuiltModel>(payload.at("model"),feature_cache);
       return *built;
     };
     const auto feature = request.value("feature_id", std::string{});
@@ -865,7 +935,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       Json keys=Json::array(), hits=Json::array(), missing=Json::array();
       std::vector<std::size_t> missing_index;
       for (std::size_t i=0;i<requested.size();++i) {
-        keys.push_back(projection_cache_key(geometry_key,{{"views",Json::array({projection_definition(requested.at(i))})},{"hidden_lines",hidden_lines}}));
+        keys.push_back(projection_cache_key(output_key,{{"views",Json::array({projection_definition(requested.at(i))})},{"hidden_lines",hidden_lines}}));
         if (const auto given=supplied.find(i); given!=supplied.end()) {
           out.views[i]=given->second.at("view"); out.budgets[i]=given->second.at("budget"); out.tolerance=given->second.at("tolerance_mm");
           hits.push_back(false); continue;
@@ -909,7 +979,12 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       check_drawing_totals(requested,Json(projection.budgets),text_field(payload.at("model"),"output"));
       result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
-    if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
+    if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"),feature);
+    else if(kind=="manufacturing") {
+      result["manufacturing"]=manufacture(payload.at("model"),geometry(),request.at("options"),request.at("identity"),path_from_utf8(text_field(request,"path")));
+    }
+    else if(kind=="fabrication")result["fabrication"]=geometry().fabrication_review(request.at("options"),feature);
+    else if(kind=="measure")result["measurement"]=geometry().measure(request.at("options"),request.at("topology"),feature);
     else if(kind=="robot") {
       auto description=robot_description(payload.at("model"),geometry().robot_frames(payload.at("model"),feature),request.at("robot"));
       const auto path=path_from_utf8(text_field(request,"path"));directory(path/"meshes");
@@ -919,8 +994,9 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing" && kind != "projection") throw Error("invalid_argument", "Unknown geometry worker request");
     // A coordinator that projected views ahead of this worker also supplies the model
     // summary and publishes the geometry entry, so this worker need not rebuild it.
-    result["summary"] = cached && feature.empty() ? cached->at("summary") :
-      precomputed && feature.empty() ? precomputed->at("summary") : geometry().summary(feature);
+    // Current source provenance, BOM and named poses are document metadata.
+    // A shape hit must never return the prior document's cached summary.
+    result["summary"] = precomputed && feature.empty() ? precomputed->at("summary") : geometry().summary(feature);
     if(!cached && !precomputed) {
       try { stage_cache(output.parent_path()/"geometry.cache",geometry_key,
         {{"snapshot",geometry().snapshot()},{"summary",geometry().summary()}}); }
@@ -982,7 +1058,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_query" && tool != "cad_export" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

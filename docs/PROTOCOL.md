@@ -3,9 +3,11 @@
 Implemented contracts for the native preview. Runtime discovery (`tools` or MCP
 `tools/list`) publishes input and output JSON Schemas. Model definitions live in
 `model_definitions()`; service contracts live in `tool_definitions()`. Each
-published schema is standalone: its `$defs` contains exactly the model
-definitions its `#/$defs/<name>` references reach, transitively, and is omitted
-when it has none. The MCP server builds this catalog once per process.
+published schema is standalone: its `$defs` contains exactly the definitions its
+`#/$defs/<name>` references reach, transitively, and is omitted when it has none.
+Lossless sharing, private alias names and inlining keep discovery compact while
+retaining every constraint. Resolve the published references rather than assuming
+private definition names. The MCP server builds this catalog once per process.
 
 Plugin startup: `agent-3d-cad serve --default-workspace` uses a persistent
 Documents/Agent CAD folder outside the plugin installation. Adding
@@ -42,6 +44,12 @@ A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
 is validated, including branches outside `output`. The output must be solid.
 An intermediate numeric sketch is validated as a planar face, not as a solid.
+
+Optional `components` records up to 64 captured source revisions, embedded model
+snapshots and SHA-256 checksums, scalar bindings, and feature/parameter identity
+maps. Their materialized dependencies are ordinary local editable features.
+Snapshots have at most four provenance levels and count toward the 1 MiB document
+limit. Rebuilding a consumer needs no source document. See [COMPONENTS.md](COMPONENTS.md).
 
 A scalar is a finite number within ±1,000,000, a parameter reference, or a bounded
 arithmetic tree. Dimensions use mm; directions are dimensionless; rotation uses
@@ -80,7 +88,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | 2–64 rotated copies; signed angular step, including original |
 | `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
 | `import_step` | `content`, `sha256` | Embedded STEP text ≤512 KiB with matching SHA-256 |
-| `assembly` | `parts` | 1–64 named instances of earlier solid features; optional acyclic rigid/articulated `mates`, `couplings`, `poses`, and source-keyed `bom` metadata |
+| `assembly` | `parts` | 1–64 named instances of earlier solids or assemblies; optional acyclic rigid/articulated `mates`, `couplings`, `poses`, and source-keyed `bom` metadata |
 
 `workplane` requires `origin`, `normal`, `x_direction`; directions must be nonzero
 and perpendicular. A profile is `{"type":"rectangle","width":20,"height":10}`,
@@ -108,7 +116,15 @@ third nested 64-copy level is not. Exceeding it returns `limit_exceeded` with
 no revision. The budget does not bound Boolean work; job deadlines and memory
 budgets still apply to every build.
 
-An assembly part is `{id,input,placement?}`. Placement has optional `translation`
+An assembly part is `{id,input,placement?}`, with an earlier solid or assembly
+input. Direct limits remain 64 parts per assembly and 256 declared parts per
+document; nesting adds a maximum depth of eight, 1,024 leaf occurrences per
+assembly and 4,096 expanded leaves summed across every assembly definition.
+Query `assembly.parts` flattens leaves to occurrence paths such as `left/pin`;
+`assembly.tree` preserves their preorder hierarchy and immediate owning
+definition. Each path segment is a normal model identifier. Mates refer to
+immediate children of their definition. See [ASSEMBLIES.md](ASSEMBLIES.md).
+Placement has optional `translation`
 and `rotation` with the transform convention above. A rigid mate is
 `{id,type:"rigid",parent,child,parent_frame,child_frame,offset?,angle_deg?}`;
 frames use the workplane fields in each source part's coordinates. Offset is in
@@ -117,7 +133,7 @@ placement (identity when absent); a mated child must omit placement. Each child
 has one parent at most, cycles fail, and parts/mates need not be ordered.
 Assemblies permit 63 mates and the document permits 256 total assembly parts;
 the replication budget above also bounds an assembly's total solids and faces.
-Nested assembly inputs and solid operations consuming assemblies are rejected;
+Solid operations consuming assemblies are rejected;
 edit source parts before assembling them. Full semantics and examples are in
 [ASSEMBLIES.md](ASSEMBLIES.md).
 
@@ -263,8 +279,9 @@ faces return measurements but have no face-based editing operation yet.
 
 ## Tools
 
-All document operations require `document_id`. Revisions are positive JSON-safe
-integers. See runtime schemas for exact closed field definitions.
+Document operations require `document_id`. External artifact review/show and
+job/view management have separate document-free inputs. Revisions are positive
+JSON-safe integers. See runtime schemas for exact closed field definitions.
 
 | Tool | Arguments beyond document_id | Result |
 |---|---|---|
@@ -272,9 +289,17 @@ integers. See runtime schemas for exact closed field definitions.
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
 | `cad_apply` | `expected_revision`, `operations`, optional `request_id` | New committed record + summary |
 | `cad_restore` | `expected_revision`, `source_revision`, optional `request_id` | Historical intent rebuilt as a new revision |
-| `cad_import` | `path`, optional `request_id` | New document with immutable embedded STEP feature |
+| `cad_import` | `path`, optional `request_id`, `expected_sha256`, `purchase` | New document with exact embedded STEP bytes; optional verified supplier/artifact identity; see [sourced-part contract](PURCHASED_PARTS.md) |
+| `cad_artifact` | No `document_id`; `action: review` with absolute `path`, raw `expected_sha256`, explicit `format`, `units`, optional `references`, `native_source`; or `action: verify` with `review_path`, review `expected_sha256` | Portable captured read-only review, source/review hashes, parsed summary and explicit representation limits; see [artifact contract](ARTIFACT_REVIEW.md) |
+| `cad_artifact_show` | No `document_id`; `review_path`, review `expected_sha256`, optional `view_id` | Verify/reparse and display a frozen artifact in the MCP App; `{view_id,document_id:null,read_only:true,artifact,resource_uri}` |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
+| `cad_measure` | `revision`, `evaluation_id`, `feature_id`, `query` | Exact source-pose pair distances/angles, clearance/interference, or native planar section curves/material caps; see [measurement](MEASUREMENTS.md) and [section](SECTIONS.md) contracts |
 | `cad_export` | `revision`, `format` (`step`/`stl`) | Artifact path, bytes, units and identity |
+| `cad_manufacture` | `revision`, optional `feature_id`, `options` | Complete native manufacturing package: editable source, unique leaf STEP/STL/drawings, saved assembly pose, BOM/purchasing data, explicit process assumptions and portable hash manifest; see [manufacturing contract](MANUFACTURING.md) |
+| `cad_fabrication_review` | `revision`, `options`, optional `feature_id` | Hashed native JSON review with explicit process inputs, exact or sampled measurements, unknown unsupported checks and saved-pose clearance/interference; see [review contract](FABRICATION_REVIEW.md) |
+| `cad_gcode_review` | `revision`, absolute plain `.gcode` `path`, `expected_sha256`, `options`, optional `feature_id` | Native stateful static review, unchanged G-code and portable hash ledger; explicit machine/material/initial assumptions and caller CAD association; see [G-code contract](GCODE_REVIEW.md) |
+| `cad_printer_handoff` | `revision`, `action: plan` with absolute plain `.gcode` `path`, `expected_sha256`, explicit printer/profile/review `options`, optional `feature_id`; or `action: verify` with `plan_path`, `expected_sha256` | Portable offline handoff package and native re-verification; caller-declared CAD association, static findings and visible setup prerequisites; native upload/start unsupported; see [printer contract](PRINTER_HANDOFF.md) |
+| `cad_slice` | `revision`, `action: plan` with explicit executable/profile hashes, `options`, optional `feature_id`; or `action: run` with `plan_path`, `expected_sha256` | Native bounded installed OrcaSlicer 2.4.2 workflow for one solid; reviewed plan, actual G-code/effective settings, static findings and portable manifest; no printer contact; see [slicing contract](SLICING.md) |
 | `cad_robot_export` | `revision`, `robot: {format, joint_properties, inertials?}`, optional `feature_id` | URDF+SRDF or SDF 1.12 directory with STL meshes, SI joint coordinates, frame ledger and hash manifest; explicit physical inputs required; see [robot contract](ROBOT_EXPORT.md) |
 | `cad_bom` | `revision`, optional assembly `feature_id` (defaults output) | Source-grouped BOM with instance quantities, JSON/CSV artifacts and manifest path |
 | `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned layouts, sections, measured dimensions, tolerances, optional BOM/balloons and saved recipe/manifest paths |
@@ -286,8 +311,25 @@ integers. See runtime schemas for exact closed field definitions.
 | `cad_list` | No arguments | Up to 1,000 document IDs and committed HEAD revisions; `truncated` flag |
 | `cad_open` | Optional `document_id`, `view_id` | Open an MCP App; `{view_id, document_id, resource_uri}` |
 | `cad_show` | `document_id`, optional `view_id` | Retarget a workspace view without opening another app |
-| `cad_context` | Optional `view_id` | Validated selection, camera, prompt and explicit stale state |
+| `cad_context` | Optional `view_id` | Validated selection, camera, visibility, presentation, prompt and explicit stale state |
 | `cad_viewer` | App-only actions below | Asynchronous view state, mesh chunks, context publication |
+
+`cad_viewer` context accepts optional closed `presentation` settings for a unit
+clipping plane and leaf explosion directions. Ready sync and `cad_context`
+return current settings; omitted input retains them. These view transformations
+preserve source geometry, measurements and topology identity. See
+[PRESENTATION.md](PRESENTATION.md) and [SECTIONS.md](SECTIONS.md) for limits,
+persistence and optional native material caps. Closed opaque RGB `appearance`
+settings and saved review presets are defined in [APPEARANCE.md](APPEARANCE.md).
+They affect review only and never source geometry or material properties.
+
+`cad_viewer action:"sequence"` lists/saves/deletes native source-qualified
+keyframes, persists speed/loop options and seeks a bounded joint/presentation
+sample. Ready sync/context expose `sequences` and nullable `playback`, with
+explicit unapplied/pending/displayed time state. The viewer provides a local
+play/pause clock with one native evaluation in flight. No model code or physical
+dynamics execute; source HEAD remains immutable. See [PLAYBACK.md](PLAYBACK.md)
+for closed schemas, bounds, interpolation and stale-source retirement.
 
 `cad_apply`/`cad_preview` accept 1–256 operations: `set_parameter(name,value)`,
 `add_feature(feature)`, `replace_feature(id,feature)` (preserves ID),
@@ -298,7 +340,9 @@ integers. See runtime schemas for exact closed field definitions.
 `set_joint_value(assembly_id,mate_id,coordinate,value)`,
 `set_coupling(assembly_id,coupling)`, `remove_coupling(assembly_id,coupling_id)`,
 `set_pose(assembly_id,pose)`, `remove_pose(assembly_id,pose_id)`, and
-`apply_pose(assembly_id,pose_id)`.
+`apply_pose(assembly_id,pose_id)`,
+`set_component(id,source_document_id,source_revision,source_feature_id?,bindings?,discard_local_changes?)`,
+`detach_component(id)`, and `remove_component(id)`.
 `set_mate` upserts a complete mate by its ID; removal requires an existing mate.
 Placement replaces the complete root placement. Detaching a child and choosing
 its placement can be combined in either order. Validate the final batch graph.
@@ -314,21 +358,50 @@ coordinate, not a slider's fixed alignment. To make an authored coordinate
 coupled, use `set_mate` to omit its own value and `set_coupling` in one batch.
 The final document, including all stored poses, must remain valid.
 
+`set_component` captures or updates an explicit source revision from this workspace.
+Its dependency closure becomes local features rooted at `id`; the source feature
+defaults to the captured revision's output. `bindings` maps used source parameters
+to consumer scalars and validates against the final batch. Omitted bindings retain
+existing mappings on update. Source changes never propagate automatically.
+Updating a locally edited component fails with `component_modified` unless
+`discard_local_changes: true` is explicit; use preview to inspect that replacement.
+Detach keeps the local features/parameters; remove deletes them. Repair remaining
+references in the same batch. Full ownership, portability and limits are in
+[COMPONENTS.md](COMPONENTS.md).
+
 `cad_import` embeds the file's bytes unchanged in a JSON string, so the file must
 be valid UTF-8 (ISO 10303-21 files are normally ASCII and encode other text with
 `\X2\` escapes). Otherwise it fails with `invalid_argument` and
 `details.byte_offset` of the first invalid byte; bytes are never transcoded,
 because the saved SHA-256 identifies the exact content.
 
+Optional `expected_sha256` verifies the raw file against a caller/catalog hash;
+optional `purchase` binds supplier, part number and HTTP(S) source URL to those
+bytes. Native import fills `purchase.artifact_sha256`; a supplied hash must match
+or fail with `artifact_mismatch` before publication. Raw `import_step` features
+with purchase require that same verified hash. Unchanged sources and rigid copies
+derive purchasing identity into BOMs and packages; conflicting BOM purchase fails
+validation. Source STEP bytes join manufacturing manifests as `source_artifact`.
+See [sourced-part contract](PURCHASED_PARTS.md). Import performs no URL fetch.
+
 `set_bom_item` replaces or adds the complete metadata entry keyed by `item.input`;
 `remove_bom_item` requires an existing entry. Assembly `bom` accepts at most 64
 unique used inputs with optional unique `item_number` (1–999), `part_number`
-(printable ASCII, 0–64), `description` (0–120) and `material` (0–64). Quantities
+(printable ASCII, 0–64), `description` (0–120), `material` (0–64), and `purchase`.
+Purchasing records require nonempty printable ASCII `supplier` (1–120), supplier
+`part_number` (1–64) and HTTP(S) `source_url` (1–512), with optional lowercase
+`artifact_sha256`. They record caller provenance without fetching or certifying
+the source. CSV appends supplier, supplier part number, URL and artifact hash to
+the previous seven columns, leaving absent values blank. Quantities
 are derived from instances. Automatic numbers follow lexical input order while
 skipping reserved explicit numbers; results sort by item number. `cad_bom` returns
 revision identity, `bom: {assembly_id,items,total_quantity}`, `artifacts` and a
 manifest `path`. Items contain `item_number`, `input`, `quantity`, `part_ids` and
-supplied metadata. JSON/CSV exports preserve these rows and do not change HEAD;
+supplied metadata. Nested BOMs roll up leaves and add `structure`; its optional
+per-node `bom` retains the owner's local metadata and item number, including
+metadata for subassemblies. Rolled-up numbers retain explicit root leaf numbers
+and otherwise allocate fresh numbers. Conflicting descriptive metadata for a
+shared leaf source fails explicitly. JSON/CSV exports preserve these rows and do not change HEAD;
 CSV text cells that a spreadsheet would read as formulas get a leading `'`.
 See [ASSEMBLIES.md](ASSEMBLIES.md).
 
@@ -349,6 +422,39 @@ hint that is verified against the named revision and rebuilt from the revisions
 when absent (workspaces from older builds) or untrustworthy. IDs are scoped to a document for synchronous mutations and workspace-wide
 for jobs. Without request_id, reread HEAD after an uncertain outcome.
 
+### External artifact review
+
+`cad_artifact` reviews original STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF bytes without
+creating an editable document. Review admission requires an absolute regular
+file path with no symlink parents, the actual raw lowercase SHA-256, a matching
+explicit format and declared units. STEP/3MF use `units: "file"`; GLB and robot
+descriptions use `"m"`; STL/DXF require `mm`, `cm`, `m`, `in`, `ft` or `um`.
+All display geometry is normalized to millimeters. Explicit robot mesh references
+supply contained relative URIs, matching absolute paths, raw hashes and units;
+unlisted references and external/network fetching are unsupported.
+
+The result's `sha256` identifies captured `review.json`; `source.sha256`
+identifies the original file. The portable package retains original/reference
+bytes and a relative size/hash manifest. `action: "verify"` uses the absolute
+`review.json` path and its expected review hash, checks the complete ledger and
+persisted representation, then reparses captured bytes. Verification does not
+prove authenticity, geometry equivalence to a native source, physical readiness
+or recovered editable history. STEP exact operations stay in bounded serial
+kernel workers; meshes/curves/robot semantics retain their stated limitations.
+
+Optional `native_source: {document_id,revision,feature_id}` is a caller-declared
+association to a real historical record and feature. The source lock protects
+resolution and publication; `source_record_sha256` is checked again before
+showing the review. This association does not convert the artifact into an
+editable native document or grant its display native face/edge selectors.
+`cad_import` remains the explicit path for creating a new opaque STEP feature.
+
+`cad_artifact_show` verifies/reparses the package and publishes a frozen live
+view. Its MCP App resource is the same viewer used by `cad_open`; `view_id`
+defaults to `main`. Showing a real native document with `cad_show` restores the
+ordinary native workflow. See [ARTIFACT_REVIEW.md](ARTIFACT_REVIEW.md) for exact
+format support, unsupported features, bounds, package lifetime and errors.
+
 ### Geometry, views and previews
 
 Summary reports `valid`, `units`, volume, area, center of mass, bounds, and unique
@@ -356,6 +462,12 @@ solid/face/edge counts. `cad_query.kind` defaults `summary`; `topology` returns
 face/edge geometric descriptors; `mesh` includes topology and tessellation from
 the **same** evaluated shape. `feature_id` scopes the shape (defaults to output)
 and is always included in query results, including summaries.
+
+Documents with component metadata also report `components`, with each tracked
+`id`, pinned `source`, snapshot `sha256`, `modified`, and `changes` listing local
+feature and parameter IDs. Changes to bound consumer parameter values retain the
+binding and are not local source edits. This inventory describes the document
+even when a geometry query is scoped to a feature.
 
 Assembly summaries additionally include `assembly.parts` with `id`, source
 `input`, a 16-number row-major world `transform`, `bounds_mm`, and `volume_mm3`,
@@ -418,12 +530,57 @@ view. Show can initialize a view, but does not cause a host to mount an app;
 call open once when a UI is needed. Show on the same failed document explicitly
 retries its evaluation. Ordinary committed edits need no additional show call.
 
+An artifact view admits only `sync`, `mesh` and `context`. Sync/context carry
+`read_only: true`, null `document_id`, `revision` and `feature_id`, plus
+`artifact: {review_sha256,source,summary}`. Context also has `head_revision: null`.
+They expose no editable model; `hidden_part_ids`, `presets`, `annotations` and `sequences` are empty, and
+`playback` is null. Measurement, section, preset, annotation, sequence and motion
+actions fail as `read_only_artifact` before native document dispatch.
+
+Artifact mesh transfer uses the same byte/chunk bounds below, but validates the
+frozen displayed review instead of a document HEAD. Payload `kind: "artifact"`
+contains `artifact_geometry`, format metadata and parser limitations, without
+native topology. Artifact context selections are exactly
+`{review_sha256,kind:"mesh_group"|"curve",entity_id}` or null. Labels such as
+`artifact-1` and `curve-1` expire with that complete review hash; server
+publication checks their membership and the current display under the view lock.
+They cannot be passed to `cad_resolve_selection` as original face/edge picks.
+Camera, prompt, visual clipping and default color remain available. Clipping
+leaves cut surfaces open; no native caps or exact mesh measurements are implied.
+Sync does not continuously reread original external files or portable packages.
+
 The app uses `cad_viewer` with these closed actions:
 
+- `annotation`: `view_id`, `evaluation_id`, `operation` (`list`, `add`, `update`,
+  `delete`, `clear`), and operation-specific bounded plain text/native anchor
+  inputs. Saves at most 32 notes of 512 UTF-8 bytes. Ready sync and context include
+  independent `annotations` with their own document/revision/evaluation/feature,
+  current/retired status and explicit evaluation lifetime. Native resolved
+  inspection centers are review evidence, not stable design references. Source
+  changes retire pins without rebinding historical text. See ANNOTATIONS.md.
+
+- `section`: `view_id`, `evaluation_id`, optional section `query`. An object
+  starts a native durable section job; omission polls; null clears/cancels it.
+  The query must match current clipping and explosion. Ready sync/context expose
+  its independent `section` metadata. Plane/placement or source changes retire
+  caps; kept-side reversal, camera and visibility do not. The live panel renders
+  native filled surfaces with holes and reports exact dimensions. Cap IDs are
+  read-only result identifiers. See SECTIONS.md.
+- `preset`: `view_id`, `evaluation_id`, `operation` (`list`, `save`, `apply`,
+  `delete`), with `name` required except for list. Stores up to 16 current review
+  views containing camera, presentation, visibility and appearance. Save/apply
+  require committed geometry; stale evaluations and unknown owners fail. Apply
+  clears picks and retires sections only when their plane/explosion changes.
+  See APPEARANCE.md.
+- `measure`: `view_id`, `evaluation_id`, optional `query`. A query object starts
+  a native durable `cad_measure` job; omission polls its source-qualified result,
+  and null clears/cancels it. Ready sync and context include the job ID and query.
+  A new evaluation retires this metadata. See MEASUREMENTS.md for target and
+  coverage limits. Draft or stale view references fail explicitly.
 - `sync`: `view_id`, optional `known_evaluation_id`. Returns `state` (`empty`,
   `loading`, `ready`, `error`), document/revision, and `changed`. Ready state also
-  includes evaluation/feature identity, summary and `hidden_part_ids` (default
-  `[]`), including when `changed` is false; the complete editable model
+  includes evaluation/feature identity, summary, `presentation`, `appearance`,
+  saved `presets`, qualified camera when available and `hidden_part_ids` (default `[]`), including when `changed` is false; the complete editable model
   is included when the caller's known evaluation differs. Sync starts or observes
   a durable mesh job and does not wait for kernel completion. Publication checks
   both the view generation and current HEAD under locks. An obsolete result never
@@ -435,26 +592,32 @@ The app uses `cad_viewer` with these closed actions:
   chunks before parsing; `next_offset: null` means complete. Every chunk checks
   displayed evaluation and HEAD. A changed view/revision fails explicitly.
 - `context`: `view_id`, `evaluation_id`, `selection` (a complete evaluated pick
-  or null), optional `camera`, `prompt`, and `hidden_part_ids`. Camera has finite `yaw`, `pitch`,
+  or null), optional `camera`, `prompt`, `hidden_part_ids` and `presentation`. Camera has finite `yaw`, `pitch`,
   `zoom`, and two-element `pan`; angles are radians, pan is in viewport fractions.
   Prompt is bounded to 8,192 UTF-8 bytes. Selection resolution and a final locked
   HEAD/evaluation recheck precede publication. Null clears selection. Omitted
   camera/prompt fields retain prior values only within the same evaluation.
-- `motion_preview`: `view_id`, `evaluation_id`, and either `pose_id` or
+- `motion_preview`: `view_id`, `evaluation_id`, optional `assembly_id`, and either `pose_id` or
   `values: [{mate_id,coordinate,value},...]`. Numeric values must specify every
-  independent coordinate exactly once. The displayed feature must be an
-  articulated assembly. Validates the candidate, then schedules a bounded native
-  draft mesh job; never commits HEAD. A new pose invalidates transfers and picks
-  from the previous pose even when the base revision is unchanged.
+  independent coordinate of the chosen definition exactly once. The target must
+  be a moving assembly definition reachable from the displayed assembly; omitted
+  `assembly_id` selects the displayed definition. Repeated occurrences share its
+  values. A preview replaces that definition's draft values and retains drafts
+  of other definitions (at most 256 combined edit operations). Validates the
+  complete candidate, then schedules a bounded native mesh job for the whole
+  displayed assembly; never commits HEAD. A new pose invalidates transfers and
+  picks from the previous pose even when the base revision is unchanged.
 - `motion_reset`: `view_id`, `evaluation_id`. Discards the preview and returns
   to saved geometry. Also accepts the evaluation that started the current preview
   so reset remains usable while its mesh is being built or transferred. An older
   view/document or changed HEAD still fails. Reset does not cancel an in-flight
   save; wait for its outcome. Obsolete preview jobs cannot publish into the view.
-- `motion_save`: `view_id`, `evaluation_id`, optional `pose_id`. Requires a
+- `motion_save`: `view_id`, `evaluation_id`, optional `pose_id` and `assembly_id`. Requires a
   displayed draft. Schedules the existing `cad_apply` path with its base revision
-  and preview operations; optional pose ID also upserts the named independent
-  values. Successful publication creates a normal revision. Failed saves preserve
+  and all preview operations. Optional pose ID also upserts independent values
+  for the selected definition; omitted `assembly_id` selects the most recently
+  previewed definition. Other definitions' named presets remain unchanged.
+  Successful publication creates one normal revision. Failed saves preserve
   HEAD. Mutations are never retried automatically after an uncertain response.
 
 All motion actions return sync status; subsequent `sync` polls finish the job.
@@ -466,8 +629,22 @@ visibility persist across poses. A new committed HEAD retires any preview of the
 previous revision. The embedded UI disables geometry selection and export during
 a draft, and offers reset, explicit save and optional named-pose creation.
 
-`hidden_part_ids` is a view-level array of at most 64 unique IDs from the
-currently displayed assembly. `[]` shows all parts; omitting the field retains
+Assembly summaries include `mechanisms: [{assembly_id,occurrences,motion}]` for
+every reachable moving definition. `occurrences` lists its paths in the displayed
+assembly, using `""` for the displayed definition itself; `motion` uses local mate
+IDs and lists degrees of freedom and named poses. The existing `assembly.motion`
+still describes only the displayed definition. The UI offers a definition picker
+and names every occurrence affected by its controls.
+
+Frozen view data and pending read jobs are qualified by the native build.
+Synchronizing after an upgrade regenerates summaries and mesh data even when
+HEAD is unchanged. Saved draft intent, camera and visibility survive;
+old evaluations are stale. An admitted save retains its request identity and
+reconciles its outcome before the new build refreshes the view.
+
+`hidden_part_ids` is a view-level array of at most 1,024 unique leaf occurrence
+paths from the currently displayed assembly. UI subassembly actions expand to
+those leaf paths. `[]` shows all parts; omitting the field retains
 the current view state. Unknown IDs, duplicates, non-arrays, and a pick whose
 resolved `geometry.part_id` is hidden fail with `invalid_argument`. Send null
 selection when hiding the selected part. Visibility and selection are checked
@@ -483,8 +660,8 @@ document `cad_show` retry retains the array. The array is stored separately from
 the evaluation-qualified selection context.
 
 `cad_context` returns view/document identity, displayed or selected revision and
-evaluation, current `head_revision`, `stale`, `selection`, and `hidden_part_ids`.
-The hidden IDs describe current displayed presentation even if a saved pick is
+evaluation, current `head_revision`, `stale`, `selection`, `hidden_part_ids` and
+`presentation`. Hidden IDs and presentation settings describe the current display even if a saved pick is
 stale. Validated geometry
 and a selector, when available, appear in `resolved_selection`. Saved camera,
 prompt and timestamp are optional. Old context is retained with `stale: true`
@@ -495,8 +672,8 @@ it. Same-document changes preserve the camera and clear old picks; switching
 documents clears the old mesh while loading. A sync `error` state is a successful
 tool result (only `isError` marks a failed call): for a different document it
 clears the old mesh, model, camera and hidden parts; for the same document it
-keeps the last solid with picks disabled. Reopening restores a saved camera
-and selection only when context still matches the current evaluation. Assembly
+keeps the last solid with picks disabled. Reopening restores the document's saved
+camera and presentation; selection requires context matching the current evaluation. Assembly
 part controls hide individual instances, isolate one instance, or show all.
 Isolating uses the same hidden-ID array for the other displayed parts.
 
@@ -541,8 +718,22 @@ hosts and native platforms retain their own acceptance gates.
 ```
 
 Use `{"action":"get","job_id":"plate_edit_2"}`, `cancel` with the same job_id,
-or `{"action":"list"}`. Submit supports create/apply/restore/import/query/export/
-preview/view/drawing/bom. Drawing contracts, first-/third-angle and grid arrangements,
+or `{"action":"list"}`. Submit supports
+artifact/create/apply/restore/import/query/measure/export/
+manufacture/fabrication_review/gcode_review/printer_handoff/slice/robot_export/
+preview/view/drawing/bom. `cad_artifact` review/verify jobs require no native
+`document_id` at the top level or inside `arguments`; their typed success result
+is the same portable read-only review returned by a direct call. An optional
+`native_source` remains an explicitly qualified association. `cad_artifact_show`
+is a viewer action, not a supported durable job tool. Cancellation checkpoints,
+deadline/memory budgets, terminal errors and identical-request replay apply to
+artifact jobs. They never create or advance a native HEAD. Review package
+publication precedes durable job-result persistence, so an interruption can
+leave a captured package without a successful job result. Re-verify its actual
+path/hash when reconciling; job failure alone does not prove no package exists.
+Manufacturing packages use the
+same bounded workers, cancellation and committed-revision contract; see
+[MANUFACTURING.md](MANUFACTURING.md). Drawing contracts, first-/third-angle and grid arrangements,
 section hatching, angular references and degree results, explicit manufacturing
 tolerances, view placement coordinates, references,
 regeneration and export limits are specified in [DRAWINGS.md](DRAWINGS.md).
@@ -593,17 +784,29 @@ published only after the whole drawing succeeds. Cache diagnostics add
 `projection_workers`, the peak number of workers that ran at once.
 
 Repeated operations automatically reuse a disposable `.cache` inside the
-workspace. Exact geometry is keyed by complete model contents, native build/SDK
-fingerprints, kernel and cache-format versions. Drawing projections are cached per
-view and additionally key that view's definition (orientation, section plane, hatch
-extraction, explode offsets, balloon anchors) and the hidden-line choice. Changing
-labels, dimensions, tolerances, layout or export formats rerenders from those
-projections. Changing model contents invalidates both. Evaluation identities and
-revision checks are always fresh; cached data never serves as an editable source.
+workspace. Exact feature keys include each feature's geometry intent, referenced
+parameter values, upstream feature keys, native build/SDK fingerprints, kernel
+and cache-format versions. An edit rebuilds affected dependencies; unchanged
+features restore individually. Complete model snapshots remain a fast path.
+Every declared feature is validated, including branches outside the output.
+Unused parameters, assembly BOM/preset metadata and component source provenance
+do not invalidate shapes; responses derive their metadata from current intent.
+Drawing projections key the output feature's dependency closure and each view's
+definition (orientation, section plane, hatch extraction, explode offsets, balloon
+anchors) and hidden-line choice. Changing labels, dimensions, tolerances, layout
+or export formats rerenders from those projections. Editing an unrelated branch
+still validates that branch without reprojecting unchanged output. Evaluation
+identities and revision checks are always fresh; caches never serve as editable
+sources. See `DEPENDENCY_CACHE.md` for rebuild examples and developer diagnostics.
 
 Entries carry SHA-256 checksums. Geometry snapshots contain every feature's exact
-B-rep and provenance, with shapes validated when restored. Snapshot B-rep data
-is capped at 32 MiB and encoded cache entries at 64 MiB. The shared cache keeps at
+B-rep and provenance, with shapes validated when restored. Assembly snapshots
+include independent compound children; placements and topology ownership are
+rederived from saved intent and actual restored shapes. Private snapshot format
+2 does not trust saved face/edge ownership indices. Snapshot B-rep data is capped
+at 32 MiB and encoded cache entries at 64 MiB. Each worker stages at most 32 MiB
+of encoded feature entries in addition to its existing model/view limits.
+The shared cache keeps at
 most 128 entries / 256 MiB, evicting oldest publications under a native lock.
 Busy, missing, unwritable, symlinked, corrupt and oversize cache entries are
 skipped and geometry is rebuilt as needed. The cache may be removed while the
@@ -629,6 +832,14 @@ The coordinator publishes `result.json` before the state that reports success.
 If any later step fails, it logs the failure to stderr and persists a `failed`
 state with the error, unless a durable result already exists for recovery.
 Failed/cancelled jobs remain terminal; use a new request_id for a deliberate retry.
+Receipt recovery applies to committed source mutations, not offline artifact
+packages. A printer package can publish before its job result is persisted; a
+coordinator interruption or result-storage failure can therefore leave a package
+without a successful job result. An interrupted retry (same ID) or deliberate
+failed-job retry (new ID) can create another package. Inspect and re-verify the
+actual package bytes before retrying; job failure alone does not establish that
+no artifact exists. Printer planning has no hardware effects. See
+[PRINTER_HANDOFF.md](PRINTER_HANDOFF.md).
 This application job API does not advertise the MCP Tasks extension.
 
 ## Persistence and errors
@@ -642,6 +853,10 @@ workspace/
   documents/<document_id>/receipts/<sha256(request_id)>.json  # receipt index hint
   documents/<document_id>/receipts/coverage.json  # revision through which receipts are indexed
   evaluations/<evaluation_id>.json
+  artifact_reviews/<review_sha256>/review.json
+  artifact_reviews/<review_sha256>/manifest.json
+  artifact_reviews/<review_sha256>/original.<extension>
+  artifact_reviews/<review_sha256>/references/  # explicitly captured robot meshes
   exports/<document>-r<revision>.step
   exports/<document>-<evaluation>.html
   exports/<document>-<evaluation>.view.json
@@ -696,8 +911,10 @@ codes include invalid_json, invalid_argument, invalid_model, limit_exceeded,
 unsupported_schema, unsupported_feature, invalid_shape, kernel_failure,
 selection_missing, selection_ambiguous, selection_count_mismatch, stale_selection,
 draft_selection, already_exists, not_found, revision_conflict, request_conflict,
-kernel_mismatch, workspace_busy, queue_full, job_timeout, job_cancelled,
+kernel_mismatch, artifact_invalid, artifact_mismatch, artifact_source_missing,
+artifact_source_mismatch, read_only_artifact, workspace_busy, queue_full, job_timeout, job_cancelled,
 job_interrupted, job_record_corrupt, worker_failed, memory_limit, export_failed,
+slicer_failed, slicer_version_mismatch,
 storage_error, internal_error.
 Modeling errors identify their failed feature. Missing/ambiguous selectors include
 candidate descriptors for repair. A failure never silently changes modeling intent.

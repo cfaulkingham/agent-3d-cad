@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
-for (const file of ['bridge.js', 'state.js']) vm.runInThisContext(readFileSync(`${root}/web/${file}`, 'utf8'), { filename: file });
+for (const file of ['bridge.js', 'renderer.js', 'state.js']) vm.runInThisContext(readFileSync(`${root}/web/${file}`, 'utf8'), { filename: file });
 let checks = 0;
 const check = (condition, label) => { assert.ok(condition, label); checks++; };
 const payload = (revision = 1) => ({ schema_version: 1, document_id: 'part', revision, evaluation_id: `eval_${revision}`, feature_id: 'base', draft: false, mesh: {}, topology: {}, summary: {} });
@@ -77,6 +77,27 @@ function mock() {
   await m.state.pollOnce(); await m.state.deliveryQueue;
   assert.deepEqual(m.state.value.camera, camera); checks++;
   assert.deepEqual(m.calls.find(c => c.args.action === 'context').args.camera, camera); checks++;
+}
+for (const headRevision of [1, 2]) {
+  const m = mock(), tool = m.bridge.tool;
+  if (headRevision === 2) m.advance();
+  const camera = { yaw: .2, pitch: .4, zoom: 7, pan: [.3, -.2] };
+  m.bridge.tool = (name, args) => name === 'cad_context' ? Promise.resolve({ stale: true, document_id: 'part', head_revision: headRevision,
+    revision: 1, evaluation_id: 'eval_previous_build', camera,
+    selection: { document_id: 'part', revision: 1, evaluation_id: 'eval_previous_build', feature_id: 'base', kind: 'face', entity_id: 'face-1' } }) : tool(name, args);
+  await m.state.pollOnce(); await m.state.deliveryQueue;
+  assert.deepEqual(m.state.value.camera, camera); checks++;
+  check(m.state.value.selection === null, 'Reopening after build or revision change restores camera without reviving a stale pick');
+  assert.deepEqual(m.calls.find(c => c.args.action === 'context').args.camera, camera); checks++;
+  m.state.dispose();
+}
+{
+  const m = mock(), tool = m.bridge.tool;
+  m.bridge.tool = (name, args) => name === 'cad_context' ? Promise.resolve({ stale: true, document_id: 'different', head_revision: 1,
+    camera: { yaw: 2, pitch: .4, zoom: 7, pan: [.3, -.2] } }) : tool(name, args);
+  await m.state.pollOnce();
+  check(m.state.value.camera === null && m.state.value.payload === null, 'A context retargeted during opening never supplies another document camera');
+  m.state.dispose();
 }
 {
   const m = mock(); await m.state.pollOnce();
@@ -271,8 +292,8 @@ function nativeBridge(respond) {
   check(calls.every(call => call.name === 'cad_viewer' || call.name === 'cad_context'), 'recovery only issues read-only view calls');
   state.dispose(); bridge.dispose();
 }
-function visibilityMock(initial = []) {
-  const m = mock(), tool = m.bridge.tool; let hidden = initial, ids = ['base', 'cover'];
+function visibilityMock(initial = [], partIds = ['base', 'cover']) {
+  const m = mock(), tool = m.bridge.tool; let hidden = initial, ids = partIds;
   m.bridge.tool = async (name, args) => {
     const result = await tool(name, args);
     if (args.action === 'context') hidden = [...args.hidden_part_ids];
@@ -286,6 +307,25 @@ function visibilityMock(initial = []) {
     return result;
   };
   return { ...m, saved: () => hidden, external(ids) { hidden = ids; }, removeCover() { ids = ['base']; m.advance(); } };
+}
+{
+  const m = visibilityMock([], ['left/base', 'left/link', 'right/base', 'right/link', 'leftover']);
+  await m.state.pollOnce(); await m.state.deliveryQueue;
+  m.state.value.selection = { reference: { kind: 'face', entity_id: 'face-2' }, geometry: { part_id: 'left/link' } };
+  await m.state.setPartVisible('left', false);
+  assert.deepEqual(m.saved(), ['left/base', 'left/link']); checks++;
+  check(m.state.value.selection === null, 'hiding a subassembly clears its descendant pick');
+  await m.state.isolatePart('right');
+  assert.deepEqual(m.saved(), ['left/base', 'left/link', 'leftover']); checks++;
+  await m.state.setPartVisible('left/link', true);
+  assert.deepEqual(m.saved(), ['left/base', 'leftover']); checks++;
+  await m.state.setPartVisible('left', true);
+  assert.deepEqual(m.saved(), ['leftover']); checks++;
+  assert.throws(() => m.state.isolatePart('lef'), /current assembly/); checks++;
+  await m.state.setPartVisible('right', false); await m.state.sendPrompt('Inspect the left module');
+  const sent = m.messages.find(item => item.method === 'ui/message');
+  check(sent.params.content[0].text.includes('right/base') && sent.params.content[0].text.includes('right/link'), 'group visibility publishes exact leaf occurrence paths');
+  m.state.dispose();
 }
 {
   const m = visibilityMock(['cover']); await m.state.pollOnce(); await m.state.deliveryQueue;
@@ -397,5 +437,633 @@ for (const stale of [false, true]) {
   check(notifications.some(value => value.unsaved && !value.hidden.length), 'UI receives pending visibility status even when no parts are hidden');
   check(!notifications.at(-1).unsaved && !m.state.value.visibility_unsaved, 'successful persistence immediately notifies UI to disable the completed Show all retry');
   m.state.dispose();
+}
+function presentationMock() {
+  const m=visibilityMock(),tool=m.bridge.tool;let saved=CadRenderer.math.defaultPresentation();
+  m.bridge.tool=async(name,args)=>{
+    const result=await tool(name,args);
+    if(args.action==='context')saved=structuredClone(args.presentation);
+    if(args.action==='sync'||name==='cad_context')result.presentation=structuredClone(saved);
+    return result;
+  };
+  return {...m,savedPresentation:()=>saved,externalPresentation(value){saved=structuredClone(value);}};
+}
+const inspectionPresentation=()=>({clip:{normal:[1,0,0],offset_mm:3,keep:'negative'},explode:{distance_mm:5,directions:[{part_id:'cover',direction:[0,0,1]}]}});
+{
+  const m=presentationMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  const snapshot=m.state.snapshot('old view');m.state.value.selection={reference:{kind:'face',entity_id:'face-1'},geometry:{part_id:'base'}};
+  await m.state.setPresentation(inspectionPresentation());
+  assert.deepEqual(m.savedPresentation(),inspectionPresentation());checks++;
+  check(!m.state.value.selection&&!m.state.value.presentation_unsaved,'Clipping/explosion clear old picks and acknowledge native view persistence');
+  await assert.rejects(m.state.saveContext(snapshot),/changed/);checks++;
+  await m.state.sendPrompt('Inspect this clipped assembly');
+  const text=m.messages.find(message=>message.method==='ui/message').params.content[0].text;
+  check(text.includes('"offset_mm": 3')&&text.includes('"distance_mm": 5'),'Agent requests retain exact presentation settings beside source identity');
+  m.removeCover();await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.presentation.explode.directions.length===0&&m.state.value.presentation.clip.offset_mm===3,'Revision change prunes only removed directions and preserves document plane');
+  m.state.attach('other');check(m.state.value.presentation.clip===null&&m.state.value.presentation.explode.distance_mm===0,'View retarget resets presentation');m.state.dispose();
+}
+{
+  const m=presentationMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  const tool=m.bridge.tool;let fail=true,attempts=0;
+  m.bridge.tool=(name,args)=>{if(args.action==='context'){attempts++;if(fail)return Promise.reject(Error('Presentation save failed'));}return tool(name,args);};
+  await assert.rejects(m.state.setPresentation(inspectionPresentation()),/Presentation save failed/);checks++;
+  check(m.state.value.presentation_unsaved&&m.state.value.presentation.clip.offset_mm===3,'Failed persistence retains the local view and retry state');
+  await m.state.pollOnce();check(m.state.value.presentation.clip.offset_mm===3,'Old sync cannot overwrite an unacknowledged presentation');
+  fail=false;await m.state.setPresentation(inspectionPresentation());check(attempts===2&&!m.state.value.presentation_unsaved,'Explicit repeat persists the unchanged local presentation');
+  const old=m.state.snapshot();const changed=inspectionPresentation();changed.clip.offset_mm=4;m.externalPresentation(changed);
+  await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.presentation.clip.offset_mm===4,'External presentation change reaches an unchanged evaluation');
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  m.state.dispose();
+}
+{
+  const m=presentationMock();m.externalPresentation(inspectionPresentation());await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.presentation.clip.offset_mm===3,'Reopening restores native presentation before sending context');
+  const tool=m.bridge.tool;let release;
+  m.bridge.tool=(name,args)=>args.action==='sync'?new Promise(resolve=>{release=()=>tool(name,args).then(resolve);}):tool(name,args);
+  const polling=m.state.pollOnce();const changed=inspectionPresentation();changed.clip.offset_mm=8;await m.state.setPresentation(changed);
+  release();await polling;check(m.state.value.presentation.clip.offset_mm===8,'An older in-flight sync cannot undo an acknowledged local plane change');m.state.dispose();
+}
+function measurementMock(){
+  let revision=1,meta=null,status=null,sequence=0;
+  const p=()=>({...payload(revision),feature_id:'assembly',topology:{faces:[{id:'face-1'},{id:'face-2'}],edges:[{id:'edge-1'}]},summary:{assembly:{parts:[{id:'left'},{id:'right'}]}}});
+  const report=query=>({method:'exact_BRep_minimum_distance',coordinate_space:'committed_source_pose',units:'mm',action:query.action,coverage:'explicit_pair',minimum_distance_mm:5,status:'measured',interference_count:0,
+    pairs:[{targets:query.targets||[{kind:'part',part_id:'left'},{kind:'part',part_id:'right'}],distance_mm:5,witnesses:[{a_mm:[0,0,0],b_mm:[5,0,0]}],interference:false,intersection_volume_mm3:0}]});
+  const bridge={capabilities:{updateModelContext:{}},async request(){return{};},async tool(name,args){
+    if(name==='cad_context')return{stale:false,document_id:'part',revision,head_revision:revision,evaluation_id:`eval_${revision}`,selection:null,...(meta?{measurement:meta}:{})};
+    if(args.action==='sync')return{...ready(revision),feature_id:'assembly',...(meta?{measurement:structuredClone(meta)}:{})};
+    if(args.action==='mesh'){const data=JSON.stringify(p());return{data,offset:0,next_offset:null,total_bytes:data.length};}
+    if(args.action==='context')return{};
+    if(args.action==='measure'){
+      if(Object.hasOwn(args,'query')){
+        if(args.query===null){meta=null;status=null;}
+        else{meta={evaluation_id:`eval_${revision}`,job_id:`measure_${++sequence}`,query:structuredClone(args.query)};status={state:'queued'};}
+      }
+      return{view_id:'main',evaluation_id:`eval_${revision}`,state:'empty',...(meta?{...structuredClone(meta),...structuredClone(status)}:{})};
+    }
+    throw Error('Unexpected measurement fixture tool');
+  }};
+  const state=new CadLiveState(bridge);state.attach('main');
+  return{state,bridge,finish(){status={state:'succeeded',result:{document_id:'part',revision,evaluation_id:`eval_${revision}`,feature_id:'assembly',report:report(meta.query)}};},advance(){revision++;meta=null;status=null;},fail(){status={state:'failed',error:{message:'Ambiguous geometric recovery'}};},corrupt(){status.result.revision=99;}};
+}
+const measurePair=()=>({action:'pair',targets:[{kind:'part',part_id:'left'},{kind:'part',part_id:'right'}]});
+{
+  const m=measurementMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  m.state.setMeasurementTarget('a',{kind:'face',entity_id:'face-1'});m.state.setMeasurementTarget('b',{kind:'part',part_id:'right'});
+  check(m.state.value.measurement_targets.a.entity_id==='face-1','A current face can be retained as one measurement endpoint');
+  const old=m.state.snapshot();await m.state.measure(measurePair());check(m.state.value.measurement_status.state==='queued','Native measurement request remains asynchronous');
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  m.finish();await m.state.pollOnce();check(m.state.value.measurement_status.result.report.minimum_distance_mm===5,'Controller displays native exact result after polling');
+  const request=m.state.snapshot('Inspect this clearance');check(request.measurement.job_id==='measure_1'&&CadLiveState.promptText(request).includes('"measurement"'),'Agent request contains the native measurement job and qualified query');
+  m.state.setMeasurementTarget('a',{kind:'face',entity_id:'face-1'});await m.state.pollOnce();
+  check(m.state.value.measurement_targets.a.kind==='face','Polling an existing result preserves newly chosen measurement targets');
+  await m.state.setPresentation({clip:{normal:[0,0,1],offset_mm:3,keep:'negative'},explode:{distance_mm:20,directions:[]}});
+  check(m.state.value.measurement_status.result.report.minimum_distance_mm===5,'Clipping and explosion retain the source measurement');
+  await m.state.measure(null);check(!m.state.value.measurement&&m.state.value.measurement_status.state==='empty','Clear result resets native measurement metadata');
+  m.state.dispose();
+}
+{
+  const m=measurementMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='sync'){const result=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(result);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await Promise.resolve();await m.state.measure(measurePair());release();await polling;
+  check(m.state.value.measurement.job_id==='measure_1','An older in-flight sync cannot clear an acknowledged measurement');m.state.dispose();
+}
+{
+  const m=measurementMock();await m.state.pollOnce();await m.state.measure(measurePair());m.finish();m.corrupt();await m.state.pollOnce();
+  check(m.state.value.measurement_error.includes('identity')&&!m.state.value.measurement_status.result,'Wrong source result is rejected before display');
+  m.fail();await m.state.pollOnce();check(m.state.value.measurement_status.error.message.includes('Ambiguous'),'Failed native matching remains explicit');
+  m.advance();await m.state.pollOnce();check(!m.state.value.measurement&&m.state.value.measurement_targets.a===null,'New revision retires measurement and endpoint references');m.state.dispose();
+}
+{
+  const m=measurementMock();await m.state.pollOnce();await m.state.measure(measurePair());m.finish();const tool=m.bridge.tool;
+  m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='measure'&&response.result)response.result.report.pairs[0].witnesses[0].b_mm=[0,0,0];return response;};
+  await m.state.pollOnce();check(m.state.value.measurement_error.includes('witness')&&!m.state.value.measurement_status.result,'Inconsistent closest-point witnesses never reach display');m.state.dispose();
+}
+{
+  const m=measurementMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='measure'&&args.query){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const measuring=m.state.measure(measurePair());await Promise.resolve();m.advance();await m.state.pollOnce();release();await measuring;
+  check(!m.state.value.measurement&&m.state.value.payload.revision===2,'Late measurement completion cannot repopulate an obsolete evaluation');m.state.dispose();
+}
+const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+const sectionPresentation=()=>({clip:{normal:[0,0,1],offset_mm:1,keep:'negative'},explode:{distance_mm:0,directions:[]}});
+function sectionPayload(revision=1,document_id='part',draft=false){
+  return {schema_version:1,document_id,revision,evaluation_id:`eval_${document_id}_${revision}${draft?'_preview':''}`,feature_id:'assembly',draft,
+    summary:{bounds_mm:{min:[-1,-1,0],max:[5,1,2]},assembly:{parts:[
+      {id:'left',bounds_mm:{min:[-1,-1,0],max:[1,1,2]}},{id:'right',bounds_mm:{min:[3,-1,0],max:[5,1,2]}}]}},
+    mesh:{schema_version:1,feature_id:'assembly',selection_lifetime:'evaluation',positions:[[-1,-1,0],[1,-1,0],[1,1,0],[-1,1,0],[3,-1,0],[5,-1,0],[5,1,0],[3,1,0]],
+      triangles:[[0,1,2],[0,2,3],[4,5,6],[4,6,7]],triangle_faces:['face-1','face-1','face-2','face-2'],edges:[]},
+    topology:{schema_version:1,feature_id:'assembly',selection_lifetime:'evaluation',faces:[{id:'face-1',part_id:'left'},{id:'face-2',part_id:'right'}],edges:[]}};
+}
+function sectionResult(query,p){
+  const source=CadRenderer.math.prepare(p),explode=query.explode||{distance_mm:0,directions:[]};
+  const parts=query.part_ids||['left','right'],regions=[],curves=[],positions=[],triangles=[],triangle_regions=[];
+  const sections=parts.map(part_id=>{
+    const entry=explode.directions.find(item=>item.part_id===part_id),direction=entry?.direction||(part_id==='left'?[-1,0,0]:[1,0,0]);
+    const displacement_mm=direction.map(v=>v/Math.hypot(...direction)*explode.distance_mm);
+    const source_plane_offset_mm=query.plane.offset_mm-query.plane.normal.reduce((sum,v,i)=>sum+v*displacement_mm[i],0);
+    const area=explode.distance_mm===0&&query.plane.normal.join(',')==='0,0,1'&&query.plane.offset_mm===1;
+    if(area){
+      const x=part_id==='left'?0:4,cap=`cap-${regions.length+1}`,points=[[x-1,-1,1],[x+1,-1,1],[x+1,1,1],[x-1,1,1]],start=positions.length;
+      regions.push({id:cap,part_id,solid_index:1,area_mm2:4,perimeter_mm:8,center_mm:[x,0,1],wire_count:1});
+      positions.push(...points);triangles.push([start,start+1,start+2],[start,start+2,start+3]);triangle_regions.push(cap,cap);
+      points.forEach((a,i)=>{const b=points[(i+1)%4];curves.push({id:`section-${curves.length+1}`,part_id,solid_index:1,curve_kind:'line',length_mm:2,
+        center_mm:a.map((v,k)=>(v+b[k])/2),bounds_mm:{min:a.map((v,k)=>Math.min(v,b[k])),max:a.map((v,k)=>Math.max(v,b[k]))},degenerate:false,points:[a,b],direction:a.map((v,k)=>(b[k]-v)/2)});});
+    }
+    return{part_id,source_plane_offset_mm,displacement_mm,area_mm2:area?4:0,boundary_length_mm:area?8:0,region_count:area?1:0,curve_count:area?4:0,contact_points:[],status:area?'area':'empty'};
+  });
+  const report={schema_version:1,units:'mm',action:'section',method:'native_BRep_planar_section',coordinate_space:'committed_source_pose',plane_coordinate_space:'displayed_world_mm',
+    coverage:query.part_ids?'explicit_leaf_subset':'all_assembly_leaves',area_semantics:'sum_of_solid_sections',plane:structuredClone(query.plane),explode:structuredClone(explode),sections,regions,curves,
+    mesh:{positions,triangles,triangle_regions,linear_deflection_mm:.1},area_mm2:regions.length*4,boundary_length_mm:curves.length*2,status:regions.length?'area':'empty',selection_lifetime:'section_result',tolerance_mm:1e-7,point_tolerance_mm:1e-6};
+  const result={...source.identity,kernel_version:'8.0.1',model_sha256:'a'.repeat(64),native_build:'section-controller-fixture',report};
+  CadRenderer.math.validateSection(result,source,{clip:{...query.plane,keep:'negative'},explode});return result;
+}
+function sectionMock(){
+  let revision=1,document_id='part',draft=false,presentation=sectionPresentation(),hidden=[],meta=null,status=null,sequence=0,measurement=null,measureStatus=null;
+  const calls=[],messages=[],p=()=>sectionPayload(revision,document_id,draft),evaluation=()=>p().evaluation_id;
+  const sectionResponse=()=>({view_id:'main',evaluation_id:evaluation(),state:'empty',...(meta?{...structuredClone(meta),...structuredClone(status)}:{})});
+  const bridge={capabilities:{updateModelContext:{},message:{}},async request(method,params){messages.push({method,params});return{};},async tool(name,args){
+    calls.push({name,args:structuredClone(args)});
+    const identity={document_id,revision,evaluation_id:evaluation(),feature_id:'assembly'};
+    if(name==='cad_context')return{...identity,view_id:'main',head_revision:revision,stale:false,selection:null,presentation:structuredClone(presentation),hidden_part_ids:[...hidden],...(meta?{section:structuredClone(meta)}:{}),...(measurement?{measurement:structuredClone(measurement)}:{})};
+    if(args.action==='sync')return{...identity,state:'ready',draft,model:{features:[],parameters:{}},presentation:structuredClone(presentation),hidden_part_ids:[...hidden],...(meta?{section:structuredClone(meta)}:{}),...(measurement?{measurement:structuredClone(measurement)}:{})};
+    if(args.action==='mesh'){const data=JSON.stringify(p());return{data,offset:0,next_offset:null,total_bytes:data.length};}
+    if(args.action==='context'){
+      if(args.evaluation_id!==evaluation())throw Object.assign(Error('Evaluation changed'),{code:'stale_selection'});
+      if(JSON.stringify(CadRenderer.math.sectionGeometry(args.presentation))!==JSON.stringify(CadRenderer.math.sectionGeometry(presentation))){meta=null;status=null;}
+      presentation=structuredClone(args.presentation);hidden=[...args.hidden_part_ids];return{};
+    }
+    if(args.action==='section'){
+      if(args.evaluation_id!==evaluation())throw Object.assign(Error('Evaluation changed'),{code:'stale_selection'});
+      if(Object.hasOwn(args,'query')){
+        if(args.query===null){meta=null;status=null;}
+        else{
+          const wanted=CadRenderer.math.sectionGeometry(presentation),given=CadRenderer.math.sectionGeometry({clip:{...args.query.plane,keep:'negative'},explode:args.query.explode||{distance_mm:0,directions:[]}});
+          if(JSON.stringify(wanted)!==JSON.stringify(given))throw Object.assign(Error('Presentation changed'),{code:'stale_selection'});
+          meta={evaluation_id:evaluation(),job_id:`section_${++sequence}`,query:structuredClone(args.query)};status={state:'queued'};
+        }
+      }
+      return sectionResponse();
+    }
+    if(args.action==='measure'){
+      if(Object.hasOwn(args,'query')){measurement=args.query?{evaluation_id:evaluation(),job_id:'measure_1',query:structuredClone(args.query)}:null;measureStatus={state:'queued'};}
+      return{view_id:'main',evaluation_id:evaluation(),state:'empty',...(measurement?{...structuredClone(measurement),...structuredClone(measureStatus)}:{})};
+    }
+    if(args.action.startsWith('motion_')){draft=args.action==='motion_preview';meta=null;status=null;return{};}
+    throw Error('Unexpected section fixture call');
+  }};
+  const state=new CadLiveState(bridge);state.attach('main');
+  return{state,bridge,calls,messages,query(part_ids){return{action:'section',plane:structuredClone(presentation.clip&&{normal:presentation.clip.normal,offset_mm:presentation.clip.offset_mm}),explode:structuredClone(presentation.explode),...(part_ids?{part_ids}:{})};},
+    finish(){status={state:'succeeded',result:sectionResult(meta.query,p())};},response:sectionResponse,metadata:()=>structuredClone(meta),
+    fail(){status={state:'failed',error:{code:'kernel_failure',message:'Native section failed at its source solid'}};},
+    advance(){revision++;meta=null;status=null;measurement=null;measureStatus=null;},retarget(){document_id='other';revision=1;meta=null;status=null;},
+    externalPresentation(value){if(JSON.stringify(CadRenderer.math.sectionGeometry(value))!==JSON.stringify(CadRenderer.math.sectionGeometry(presentation))){meta=null;status=null;}presentation=structuredClone(value);},
+    seed(){meta={evaluation_id:evaluation(),job_id:`section_${++sequence}`,query:this.query()};this.finish();},
+    finishMeasurement(){measureStatus={state:'succeeded',result:{...p(),report:{method:'exact_BRep_minimum_distance',coordinate_space:'committed_source_pose',units:'mm',action:'pair',minimum_distance_mm:2,
+      pairs:[{targets:measurement.query.targets,distance_mm:2,witnesses:[{a_mm:[1,0,0],b_mm:[3,0,0]}]}]}}};}
+  };
+}
+{
+  const m=sectionMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  await m.state.measure(measurePair());m.finishMeasurement();await m.state.pollOnce();
+  const old=m.state.snapshot(),first=m.calls.length;await m.state.section(m.query());
+  check(m.state.value.section_status.state==='queued','Native section admission remains asynchronous');
+  const admission=m.calls.slice(first);check(admission[0].args.action==='context'&&admission[1].args.action==='section','Section starts only after its presentation is persisted');
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  const snapshot=m.state.snapshot('Review the section');check(snapshot.section.job_id==='section_1'&&snapshot.measurement.job_id==='measure_1','Independent native section and distance jobs travel in the same context');
+  check(CadLiveState.promptText(snapshot).includes('derived review geometry'),'Agent context identifies section surfaces as derived review geometry');
+  m.finish();await m.state.pollOnce();const result=m.state.value.section_status.result;
+  check(result.report.area_mm2===8&&result.report.regions.length===2,'Validated native cap regions and exact summed area reach state');
+  const reads=m.calls.filter(c=>c.args.action==='section'&&!Object.hasOwn(c.args,'query')).length;
+  await m.state.pollOnce();await m.state.pollOnce();
+  check(m.calls.filter(c=>c.args.action==='section'&&!Object.hasOwn(c.args,'query')).length===reads&&m.state.value.section_status.result===result,'Completed section reports remain cached while sync qualifies their metadata');
+  const flipped=sectionPresentation();flipped.clip.keep='positive';await m.state.setPresentation(flipped);await m.state.setHiddenParts(['left']);await m.state.pollOnce();
+  check(m.state.value.section_status.result===result,'Kept-side reversal and visibility reuse the same immutable native section');
+  const zeroOverride=structuredClone(flipped);zeroOverride.explode.directions=[{part_id:'left',direction:[0,0,1]}];await m.state.setPresentation(zeroOverride);
+  check(m.state.value.section_status.result===result,'Zero-distance direction overrides do not retire an unchanged section');
+  await m.state.section(null);check(m.state.value.section===null&&m.state.value.section_status.state==='empty','Clear section removes its metadata and reports an empty native slot');
+  check(m.state.value.measurement_status.result.report.minimum_distance_mm===2,'Clearing a section leaves the independent source measurement intact');
+  await m.state.deliveryQueue;check(m.messages.some(item=>item.params.structuredContent?.section?.job_id==='section_1'),'New section metadata is delivered through optional host context');m.state.dispose();
+}
+{
+  const m=sectionMock();m.seed();await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.section_status.result.report.area_mm2===8,'Opening a view restores and validates its existing native section');
+  const old=m.state.snapshot();m.externalPresentation({...sectionPresentation(),clip:{normal:[0,0,1],offset_mm:2,keep:'negative'}});await m.state.pollOnce();
+  check(!m.state.value.section&&!m.state.value.section_status,'External plane change retires the previous caps');
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();await m.state.section(m.query(['right']));m.finish();await m.state.pollOnce();
+  check(m.state.value.section_status.result.report.area_mm2===4&&m.state.value.section_status.result.report.coverage==='explicit_leaf_subset','Deliberate subset coverage stays explicit beside native section area');
+  const result=m.state.value.section_status.result,tool=m.bridge.tool;let fail=true;
+  m.bridge.tool=(name,args)=>args.action==='context'&&fail?Promise.reject(Error('Plane persistence failed')):tool(name,args);
+  const moved=sectionPresentation();moved.clip.offset_mm=3;
+  await assert.rejects(m.state.setPresentation(moved),/Plane persistence failed/);checks++;
+  check(!m.state.value.section&&!m.state.value.section_status&&m.state.value.presentation_unsaved,'A local plane change removes old caps immediately even when persistence fails');
+  await m.state.pollOnce();check(!m.state.value.section_status?.result,'Old native metadata cannot restore caps while the new plane is unsaved');
+  const before=m.calls.filter(c=>c.args.action==='section'&&c.args.query).length;
+  await assert.rejects(m.state.section(m.query()),/match/);checks++;
+  check(m.calls.filter(c=>c.args.action==='section'&&c.args.query).length===before&&result.report.area_mm2===4,'Wrong-plane starts are rejected before a native mutation');
+  fail=false;await m.state.setPresentation(moved);m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='sync'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await tick();await m.state.section(m.query());release();await polling;
+  check(m.state.value.section.job_id==='section_1','An older in-flight sync cannot clear an acknowledged section admission');m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='section'&&args.query){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const starting=m.state.section(m.query());await tick();const moved=sectionPresentation();moved.clip.offset_mm=3;await m.state.setPresentation(moved);release();await starting;
+  check(!m.state.value.section&&!m.state.value.section_status&&!m.state.value.sectioning,'Late section admission cannot repopulate a changed plane');m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();await m.state.section(m.query());m.finish();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='section'&&!Object.hasOwn(args,'query')){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await tick();const moved=sectionPresentation();moved.clip.offset_mm=4;await m.state.setPresentation(moved);release();await polling;
+  check(!m.state.value.section_status?.result&&!m.state.value.section,'Late completed caps cannot restore a section after its plane changes');m.state.dispose();
+}
+for(const change of ['revision','retarget','invalidate','motion']){
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='section'&&args.query){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const starting=m.state.section(m.query());await tick();
+  if(change==='revision'){m.advance();await m.state.pollOnce();}
+  else if(change==='retarget'){m.retarget();await m.state.pollOnce();}
+  else if(change==='invalidate'){m.state.invalidate();}
+  else await m.state.previewValues({});
+  release();await starting;check(!m.state.value.section&&!m.state.value.section_status,`Late section admission cannot restore caps after ${change}`);
+  if(change==='motion')await assert.rejects(m.state.section(m.query()),/committed/),checks++;
+  m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=(name,args)=>args.action==='context'?new Promise(resolve=>{release=()=>tool(name,args).then(resolve);}):tool(name,args);
+  const starting=m.state.section(m.query());await tick();
+  check(!m.calls.some(c=>c.args.action==='section')&&m.state.value.sectioning,'Pending presentation persistence delays native admission');
+  m.state.invalidate();release();await assert.rejects(starting,/changed/);checks++;
+  check(!m.calls.some(c=>c.args.action==='section')&&!m.state.value.section,'A revision invalidation during persistence prevents a section start');m.state.dispose();
+}
+{
+  const m=sectionMock();let release;
+  m.bridge.request=()=>new Promise(resolve=>{release=resolve;});await m.state.pollOnce();await tick();
+  await m.state.section(m.query());check(m.state.value.section_status.state==='queued','Optional host acknowledgment does not block section admission');
+  m.advance();await m.state.pollOnce();check(m.state.value.payload.revision===2&&!m.state.value.section,'HEAD polling continues while section context delivery awaits the host');
+  m.state.dispose();release?.({});
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;let lost=true;
+  m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='section'&&args.query&&lost){lost=false;throw Error('Section acknowledgment lost');}return response;};
+  await assert.rejects(m.state.section(m.query()),/acknowledgment/);checks++;
+  check(m.calls.filter(c=>c.args.action==='section'&&c.args.query).length===1&&!m.state.value.section&&m.state.value.section_error.includes('lost'),'An uncertain section admission is never automatically retried');
+  await m.state.pollOnce();check(m.state.value.section.job_id==='section_1'&&m.state.value.section_status.state==='queued','Read-only sync reconciles an admission whose acknowledgment was lost');m.state.dispose();
+}
+
+// An empty native slot is not evidence that a failed admission was dismissed.
+// Keep its feedback across read-only sync until a new action or source retires it.
+
+{
+  const p=sectionPayload(),data=JSON.stringify(p);let attempts=0;
+  const {bridge}=nativeBridge((name,args)=>{
+    if(name==='cad_context')return toolResult({view_id:'main',document_id:p.document_id,revision:p.revision,head_revision:p.revision,evaluation_id:p.evaluation_id,stale:false,selection:null,presentation:sectionPresentation()});
+    if(args.action==='sync')return toolResult({...p,state:'ready',model:{features:[],parameters:{}},presentation:sectionPresentation()});
+    if(args.action==='mesh')return toolResult({data,offset:0,next_offset:null,total_bytes:data.length});
+    if(args.action==='context')return toolResult({});
+    if(args.action==='section'){attempts++;return toolResult({error:{code:'workspace_busy',message:'Native section admission lock held',details:{}}},true);}
+    throw Error('Unexpected native admission fixture request');
+  });
+  const state=new CadLiveState(bridge);state.attach('main');await state.pollOnce();
+  await assert.rejects(state.section({action:'section',plane:{normal:[0,0,1],offset_mm:1},explode:{distance_mm:0,directions:[]}}),error=>error.code==='workspace_busy');checks++;
+  await state.pollOnce();await state.pollOnce();
+  check(state.value.section_error==='Native section admission lock held'&&!state.value.section,'Actual bridge tool errors remain visible after empty native sync');
+  check(attempts===1,'Actual bridge reconciliation never retries a rejected section start');state.dispose();bridge.dispose();
+}
+
+for(const code of ['workspace_busy','transport_error']){
+  const m=sectionMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  const tool=m.bridge.tool;let fail=true,attempts=0;
+  m.bridge.tool=(name,args)=>{
+    if(args.action==='section'&&args.query){attempts++;if(fail)return Promise.reject(Object.assign(Error(`Section admission failed: ${code}`),{code}));}
+    return tool(name,args);
+  };
+  await assert.rejects(m.state.section(m.query()),/admission failed/);checks++;
+  const error=m.state.value.section_error;await m.state.pollOnce();await m.state.pollOnce();
+  check(!m.state.value.section&&!m.state.value.section_status&&m.state.value.section_error===error,`${code} admission feedback survives an empty native slot`);
+  check(attempts===1,'Empty-slot reconciliation does not repeat a failed section mutation');
+  fail=false;await m.state.section(m.query());
+  check(!m.state.value.section_error&&m.state.value.section_status.state==='queued','Explicit successful admission replaces the previous error');m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();await m.state.section(null);
+  const tool=m.bridge.tool;let fail=true;
+  m.bridge.tool=(name,args)=>args.action==='context'&&fail?Promise.reject(Object.assign(Error('Section presentation lock held'),{code:'workspace_busy'})):tool(name,args);
+  await assert.rejects(m.state.section(m.query()),/lock held/);checks++;
+  const error=m.state.value.section_error;await m.state.pollOnce();
+  check(m.state.value.section_status.state==='empty'&&m.state.value.section_error===error,'A failed admission keeps feedback even when a prior clear left empty status');
+  fail=false;await m.state.section(null);
+  check(!m.state.value.section_error,'An explicit clear dismisses admission feedback');m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const tool=m.bridge.tool;
+  m.bridge.tool=(name,args)=>args.action==='section'&&args.query?Promise.reject(Error('Section start was not admitted')):tool(name,args);
+  await assert.rejects(m.state.section(m.query()),/not admitted/);checks++;
+  m.advance();await m.state.pollOnce();
+  check(!m.state.value.section_error&&m.state.value.payload.revision===2,'A new source evaluation retires feedback from its old failed admission');m.state.dispose();
+}
+
+for(const corrupt of ['source','plane','coverage','ownership']){
+  const m=sectionMock();await m.state.pollOnce();await m.state.section(m.query(['right']));m.finish();const tool=m.bridge.tool;
+  m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='section'&&response.result){
+    if(corrupt==='source')response.result.revision=99;
+    if(corrupt==='plane')response.result.report.plane.offset_mm=99;
+    if(corrupt==='coverage')response.query.part_ids=['left'];
+    if(corrupt==='ownership')response.result.report.mesh.triangle_regions[0]='face-1';
+  }return response;};
+  await m.state.pollOnce();check(m.state.value.section_error&&!m.state.value.section_status?.result,`A section with mismatched ${corrupt} never reaches rendered state`);m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();await m.state.section(m.query());m.fail();await m.state.pollOnce();
+  check(m.state.value.section_status.state==='failed'&&m.state.value.section_status.error.message.includes('source solid'),'Native section failures stay explicit in the independent result slot');
+  const tool=m.bridge.tool;let cancelAttempts=0;m.bridge.tool=(name,args)=>{if(args.action==='section'&&args.query===null){cancelAttempts++;return Promise.reject(Error('Native cancellation failed'));}return tool(name,args);};
+  await assert.rejects(m.state.section(null),/cancellation/);checks++;
+  check(!m.state.value.section_status?.result&&m.state.value.section_error.includes('cancellation'),'A cancellation failure cannot leave a cleared result falsely displayed');
+  await m.state.pollOnce();check(cancelAttempts===1,'A failed cancellation is not repeated during read-only reconciliation');m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const outside=sectionPresentation();outside.clip.offset_mm=1e12;await m.state.setPresentation(outside);
+  await m.state.section(m.query());m.finish();await m.state.pollOnce();
+  check(m.state.value.section_status.state==='succeeded'&&m.state.value.section_status.result.report.status==='empty'&&!m.state.value.section_status.result.report.mesh.triangles.length,'An outside plane yields a qualified complete empty section without invented caps');
+  const disabled=structuredClone(outside);disabled.clip=null;await m.state.setPresentation(disabled);
+  check(!m.state.value.section&&!m.state.value.section_status,'Disabling clipping retires the section result');
+  await assert.rejects(m.state.section({action:'section',plane:{normal:[0,0,1],offset_mm:1}}),/match/);checks++;
+  m.state.dispose();
+}
+{
+  const m=sectionMock();await m.state.pollOnce();const exploded=sectionPresentation();exploded.explode={distance_mm:5,directions:[{part_id:'right',direction:[0,0,-1]},{part_id:'left',direction:[0,0,1]}]};
+  await m.state.setPresentation(exploded);await m.state.section(m.query());m.finish();await m.state.pollOnce();const result=m.state.value.section_status.result;
+  const reordered=structuredClone(exploded);reordered.explode.directions.reverse();await m.state.setPresentation(reordered);await m.state.pollOnce();
+  check(m.state.value.section_status.result===result,'Equivalent direction order retains the qualified native section');
+  const moved=structuredClone(reordered);moved.explode.distance_mm=6;await m.state.setPresentation(moved);
+  check(!m.state.value.section&&!m.state.value.section_status,'Changing exploded placement retires its caps immediately');m.state.dispose();
+}
+const reviewColor=()=>({default_color:[.2,.4,.6],parts:[{part_id:'left',color:[1,.2,0]}]});
+const reviewCamera=()=>({yaw:1,pitch:.25,zoom:2,pan:[.1,-.2]});
+function reviewMock(){
+  const m=sectionMock(),tool=m.bridge.tool;let appearance=CadRenderer.math.defaultAppearance(),camera=reviewCamera(),presets=[],rightRemoved=false;
+  const response=async()=>({...await tool('cad_context',{view_id:'main'}),appearance:structuredClone(appearance),camera:structuredClone(camera),presets:structuredClone(presets)});
+  m.bridge.tool=async(name,args)=>{
+    if(args.action==='preset'){
+      m.calls.push({name,args:structuredClone(args)});
+      if(args.operation==='save'){
+        const native=await response(),saved={name:args.name,camera:structuredClone(camera),appearance:structuredClone(appearance),presentation:native.presentation,hidden_part_ids:native.hidden_part_ids};
+        if(!presets.some(p=>p.name===args.name)&&presets.length===16)throw Error('Preset capacity reached');
+        presets=presets.filter(p=>p.name!==args.name);presets.push(saved);presets.sort((a,b)=>a.name.localeCompare(b.name));
+      }else if(args.operation==='apply'){
+        const saved=presets.find(p=>p.name===args.name);if(!saved)throw Error('Preset missing');
+        await tool(name,{action:'context',view_id:args.view_id,evaluation_id:args.evaluation_id,selection:null,presentation:structuredClone(saved.presentation),hidden_part_ids:[...saved.hidden_part_ids]});
+        appearance=structuredClone(saved.appearance);camera=structuredClone(saved.camera);
+      }else if(args.operation==='delete')presets=presets.filter(p=>p.name!==args.name);
+      return response();
+    }
+    const native=await tool(name,args);
+    if(args.action==='mesh'&&rightRemoved){const current=JSON.parse(native.data);current.summary.bounds_mm.max=[1,1,2];current.summary.assembly.parts=current.summary.assembly.parts.filter(part=>part.id==='left');current.mesh.positions=current.mesh.positions.slice(0,4);current.mesh.triangles=current.mesh.triangles.slice(0,2);current.mesh.triangle_faces=current.mesh.triangle_faces.slice(0,2);current.topology.faces=current.topology.faces.filter(face=>face.part_id==='left');native.data=JSON.stringify(current);native.total_bytes=native.data.length;}
+    if(args.action==='context'){if(args.appearance)appearance=structuredClone(args.appearance);if(args.camera)camera=structuredClone(args.camera);}
+    if(args.action==='sync'||name==='cad_context')Object.assign(native,{appearance:structuredClone(appearance),camera:structuredClone(camera),presets:structuredClone(presets)});
+    return native;
+  };
+  return {...m,nativeAppearance:()=>structuredClone(appearance),nativeCamera:()=>structuredClone(camera),nativePresets:()=>structuredClone(presets),
+    externalReview(settings){if(settings.appearance)appearance=structuredClone(settings.appearance);if(settings.camera)camera=structuredClone(settings.camera);if(settings.presets)presets=structuredClone(settings.presets);},
+    removeRight(){rightRemoved=true;m.advance();},
+    retarget(){m.retarget();appearance=CadRenderer.math.defaultAppearance();camera=reviewCamera();presets=[];},
+    seedReview(name='Overview'){m.seed();presets=[{name,camera:reviewCamera(),appearance:reviewColor(),presentation:sectionPresentation(),hidden_part_ids:['right']}];appearance=reviewColor();}
+  };
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  const old=m.state.snapshot(),selection={reference:{document_id:'part',revision:1,evaluation_id:m.state.value.payload.evaluation_id,feature_id:'assembly',kind:'face',entity_id:'face-1'},geometry:{part_id:'left'}};
+  m.state.value.selection=selection;await m.state.setAppearance(reviewColor());
+  assert.deepEqual(m.nativeAppearance(),reviewColor());checks++;
+  check(m.state.value.selection===selection&&!m.state.value.appearance_unsaved,'Color persistence retains the current qualified source pick');
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  check(m.state.snapshot().appearance.parts[0].part_id==='left','Agent and copied context include exact leaf appearance');
+  const before=m.state.snapshot();m.state.setCamera({...reviewCamera(),zoom:3});await assert.rejects(m.state.saveContext(before),/changed/);checks++;
+  await m.state.publishContext();check(m.nativeCamera().zoom===3,'Camera version changes are persisted with current view settings');
+  for(const bad of [{default_color:[1.1,0,0],parts:[]},{default_color:[0,0,0],parts:[{part_id:'missing',color:[1,0,0]}]},{default_color:[0,0,0],parts:[{part_id:'left',color:[1,0,0]},{part_id:'left',color:[0,1,0]}]},{default_color:[0,0,0],parts:[],alpha:.5}]){
+    assert.throws(()=>m.state.setAppearance(bad));checks++;
+  }
+  await m.state.setAppearance(CadRenderer.math.defaultAppearance());check(!m.state.value.appearance.parts.length&&m.state.value.appearance.default_color[0]===.66,'Reset colors restores the exact default appearance');m.state.dispose();
+}
+{
+  const m=reviewMock();m.seedReview();await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.presets[0].name==='Overview'&&m.state.value.appearance.parts[0].part_id==='left','Opening restores native review presets and current appearance');
+  const result=m.state.value.section_status.result;await m.state.setAppearance({...reviewColor(),default_color:[.1,.2,.3]});
+  check(m.state.value.section_status.result===result,'Appearance changes retain the exact geometric section');
+  await m.state.preset('apply','Overview');check(m.state.value.section_status.result===result,'Applying a preset with the same plane and placement reuses the qualified section');
+  check(m.state.value.hidden_part_ids[0]==='right'&&m.state.value.camera.zoom===2,'Applying a preset restores camera and hidden leaf parts');
+  const flipped=sectionPresentation();flipped.clip.keep='positive';await m.state.setPresentation(flipped);await m.state.preset('save','Opposite side');
+  await m.state.preset('apply','Overview');check(m.state.value.section_status.result===result,'Applying a kept-side-only preset retains its native cap report');
+  const moved=sectionPresentation();moved.clip.offset_mm=2;await m.state.setPresentation(moved);await m.state.preset('save','Outside');await m.state.preset('apply','Overview');
+  check(!m.state.value.section_status?.result,'Applying different section geometry cannot revive retired cap reports');
+  await m.state.preset('delete','Opposite side');check(!m.state.value.presets.some(p=>p.name==='Opposite side'),'Deleting a preset removes its saved review configuration');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.setAppearance(reviewColor());m.state.setCamera(reviewCamera());await m.state.setHiddenParts(['left']);
+  const first=m.calls.length;await m.state.preset('save','Assembly overview');const calls=m.calls.slice(first);
+  check(calls[0].args.action==='context'&&calls[1].args.action==='preset','Saving a preset persists the current snapshot before its native mutation');
+  const saved=m.nativePresets()[0];assert.deepEqual(saved.appearance,reviewColor());checks++;assert.deepEqual(saved.camera,reviewCamera());checks++;
+  check(saved.hidden_part_ids[0]==='left'&&saved.presentation.clip.offset_mm===1,'Saved presets capture appearance, camera, clipping and visibility together');
+  await m.state.setAppearance({default_color:[0,1,0],parts:[]});await m.state.preset('save','Assembly overview');
+  check(m.nativePresets().length===1&&m.nativePresets()[0].appearance.default_color[1]===1,'Saving the same plain name replaces the existing preset');
+  for(const name of ['', '   ', 'bad\nname', 'é'.repeat(33)]){await assert.rejects(m.state.preset('save',name),/UTF-8/);checks++;}
+  await m.state.previewValues({});await assert.rejects(m.state.preset('apply','Assembly overview'),/pose/);checks++;
+  await assert.rejects(m.state.preset('save','Draft'),/pose/);checks++;await m.state.preset('list');check(m.state.value.presets.length===1,'Draft review permits read-only preset listing');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();const tool=m.bridge.tool;let fail=true;
+  m.bridge.tool=(name,args)=>args.action==='context'&&fail?Promise.reject(Error('Appearance write failed')):tool(name,args);
+  await assert.rejects(m.state.setAppearance(reviewColor()),/write/);checks++;
+  check(m.state.value.appearance_unsaved&&m.state.value.appearance.parts[0].part_id==='left','Failed color persistence keeps a visible retryable local choice');
+  await m.state.pollOnce();check(m.state.value.appearance.parts[0].part_id==='left','Native sync cannot overwrite an unsaved local appearance');
+  fail=false;await m.state.setAppearance(reviewColor());check(!m.state.value.appearance_unsaved,'Explicit repeat persists unchanged unsaved colors');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.preset('save','Old camera');const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='preset'&&args.operation==='apply'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const applying=m.state.preset('apply','Old camera');await tick();
+  m.state.setCamera({...reviewCamera(),zoom:7});const newer=m.state.setAppearance({default_color:[.9,.1,.5],parts:[]});
+  release();await applying;await newer;
+  check(m.state.value.camera.zoom===7&&m.state.value.appearance.default_color[0]===.9,'A delayed apply acknowledgment cannot overwrite later camera or color edits');
+  check(m.nativeCamera().zoom===7&&m.nativeAppearance().default_color[0]===.9,'Queued context persistence restores the later local choices after the native apply');m.state.dispose();
+}
+for(const change of ['revision','retarget','attach']){
+  const m=reviewMock();m.seedReview();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='preset'&&args.operation==='apply'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const applying=m.state.preset('apply','Overview');await tick();
+  if(change==='revision'){m.advance();await m.state.pollOnce();}
+  else if(change==='retarget'){m.retarget();await m.state.pollOnce();}
+  else m.state.attach('different');
+  release();await applying;
+  check(!m.state.value.preset_busy&&m.state.value.payload?.evaluation_id!=='eval_part_1',`A delayed preset apply cannot restore an obsolete source after ${change}`);
+  if(change!=='revision')check(!m.state.value.presets.length&&!m.state.value.appearance.parts.length,`${change} clears presets and part color overrides`);
+  m.state.dispose();
+}
+{
+  const m=reviewMock();m.seedReview();await m.state.pollOnce();await m.state.setAppearance(CadRenderer.math.defaultAppearance());const tool=m.bridge.tool;let lost=true;
+  m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='preset'&&args.operation==='apply'&&lost){lost=false;throw Error('Preset acknowledgment lost');}return response;};
+  await assert.rejects(m.state.preset('apply','Overview'),/acknowledgment/);checks++;
+  const attempts=m.calls.filter(call=>call.args.action==='preset'&&call.args.operation==='apply').length;
+  await m.state.pollOnce();check(m.state.value.appearance.parts[0].part_id==='left'&&m.state.value.hidden_part_ids[0]==='right','Read-only sync reconciles a successfully applied preset after its acknowledgment is lost');
+  check(m.calls.filter(call=>call.args.action==='preset'&&call.args.operation==='apply').length===attempts,'An uncertain preset apply is never automatically repeated');m.state.dispose();
+}
+{
+  const m=reviewMock();let release;m.bridge.request=()=>new Promise(resolve=>{release=resolve;});await m.state.pollOnce();await tick();
+  await m.state.preset('save','Without host delay');check(m.state.value.presets[0].name==='Without host delay','Optional host acknowledgment does not block native preset saving');
+  await m.state.preset('apply','Without host delay');m.advance();await m.state.pollOnce();check(m.state.value.payload.revision===2,'Source polling remains available while optional preset context delivery is pending');
+  m.state.dispose();release?.({});
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.deliveryQueue;const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='sync'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await tick();await m.state.setAppearance(reviewColor());m.state.setCamera({...reviewCamera(),zoom:5});await m.state.publishContext();release();await polling;
+  check(m.state.value.appearance.parts[0].part_id==='left'&&m.state.value.camera.zoom===5,'An older in-flight sync cannot overwrite acknowledged local colors or camera');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.preset('save','Keep');const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='sync'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await tick();await m.state.preset('delete','Keep');release();await polling;
+  check(!m.state.value.presets.length,'An older sync cannot restore a deleted saved view');m.state.dispose();
+}
+for(const corrupt of ['evaluation','feature']){
+  const m=reviewMock();await m.state.pollOnce();await m.state.preset('save','Good');const tool=m.bridge.tool;
+  m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='preset'&&args.operation==='apply')response[corrupt==='evaluation'?'evaluation_id':'feature_id']='old-source';return response;};
+  await assert.rejects(m.state.preset('apply','Good'),/evaluation/);checks++;
+  check(m.state.value.preset_error.includes('evaluation'),'Mismatched native preset identity remains explicit');m.state.dispose();
+}
+{
+  const m=reviewMock();m.seedReview();await m.state.pollOnce();const tool=m.bridge.tool;let reject;
+  m.bridge.tool=async(name,args)=>{if(args.action==='preset'&&args.operation==='apply'){await tool(name,args);return new Promise((resolve,no)=>{reject=no;});}return tool(name,args);};
+  const applying=m.state.preset('apply','Overview');await tick();m.retarget();await m.state.pollOnce();reject(Error('Old preset request failed'));
+  await assert.rejects(applying,/Old preset/);checks++;
+  check(!m.state.value.preset_error&&m.state.value.payload.document_id==='other','Late failure from another source cannot overwrite the new document preset feedback');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();m.externalReview({appearance:reviewColor(),camera:{...reviewCamera(),zoom:4}});const snapshot=m.state.snapshot();await m.state.pollOnce();
+  check(m.state.value.appearance.parts[0].part_id==='left'&&m.state.value.camera.zoom===4,'Native external review changes reach an unchanged source evaluation');
+  await assert.rejects(m.state.saveContext(snapshot),/changed/);checks++;
+  m.state.value.selection={reference:{entity_id:'face-1'},geometry:{part_id:'left'}};await m.state.setAppearance({default_color:[.1,.2,.3],parts:[]});
+  check(m.state.value.selection.reference.entity_id==='face-1','Appearance changes preserve source selection identity after external view updates');m.state.dispose();
+}
+{
+  const m=reviewMock();m.seedReview();const outside=sectionPresentation();outside.clip.offset_mm=3;
+  m.externalReview({presets:[{name:'Outside',camera:reviewCamera(),appearance:reviewColor(),presentation:outside,hidden_part_ids:[]}]});
+  await m.state.pollOnce();const result=m.state.value.section_status.result;check(result.report.area_mm2===8,'Current caps exist before applying a preset for a different plane');
+  await m.state.preset('apply','Outside');check(!m.state.value.section&&!m.state.value.section_status?.result&&m.state.value.presentation.clip.offset_mm===3,'Applying different plane geometry retires its section atomically');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();const appearance={default_color:[.3,.4,.5],parts:[{part_id:'left',color:[1,0,0]},{part_id:'right',color:[0,1,0]}]},presentation=sectionPresentation();
+  presentation.explode.directions=[{part_id:'right',direction:[1,0,0]}];await m.state.setAppearance(appearance);await m.state.setPresentation(presentation);await m.state.setHiddenParts(['right']);await m.state.preset('save','Both leaves');
+  m.removeRight();await m.state.pollOnce();await m.state.deliveryQueue;
+  check(m.state.value.appearance.parts.length===1&&m.state.value.appearance.parts[0].part_id==='left'&&m.state.value.appearance.default_color[0]===.3,'Revision refresh prunes removed leaf colors while retaining the default and surviving leaf');
+  const preset=m.state.value.presets[0];check(!preset.hidden_part_ids.length&&!preset.presentation.explode.directions.length&&preset.appearance.parts.length===1,'Preset restoration prunes removed visibility, explosion and color owners against the new source');
+  m.state.dispose();
+}
+function annotationMock(){
+  const m=reviewMock(),tool=m.bridge.tool;let notes=[],next=0;
+  const current=async()=>{const context=await tool('cad_context',{view_id:'main'});return{...context,annotations:notes.map(note=>({...structuredClone(note),status:note.evaluation_id===context.evaluation_id&&!context.draft?'current':'retired'}))};};
+  m.bridge.tool=async(name,args)=>{
+    if(args.action==='annotation'){
+      m.calls.push({name,args:structuredClone(args)});const c=await current();
+      if(args.evaluation_id!==c.evaluation_id)throw Error('Source changed');
+      if(args.operation==='add'){
+        const a=args.anchor,part_id=a.kind==='part'?a.part_id:null,point_mm=part_id==='right'?[4,0,1]:part_id==='left'?[0,0,1]:[2,0,1];
+        notes.push({id:`ann_${++next}`,text:args.text,document_id:c.document_id,revision:c.revision,evaluation_id:c.evaluation_id,feature_id:c.feature_id,anchor_lifetime:'evaluation',coordinate_space:'committed_source_pose',anchor:{kind:a.kind,part_id,point_mm,position_semantics:'bounds_center'}});
+      }else if(args.operation==='update'){const n=notes.find(note=>note.id===args.annotation_id);if(!n)throw Error('Missing note');n.text=args.text;}
+      else if(args.operation==='delete')notes=notes.filter(note=>note.id!==args.annotation_id);
+      else if(args.operation==='clear')notes=[];
+      return current();
+    }
+    const result=await tool(name,args);if(name==='cad_context'||args.action==='sync')result.annotations=(await current()).annotations;return result;
+  };
+  return{...m,notes:()=>structuredClone(notes),retarget(){notes=[];m.retarget();}};
+}
+{
+ const m=annotationMock();await m.state.pollOnce();await m.state.deliveryQueue;
+ const old=m.state.snapshot();await m.state.annotation('add',{anchor:{kind:'part',part_id:'right'},text:'Inspect this leaf <b>plain text</b>'});
+ check(m.state.value.annotations.length===1&&m.state.value.annotations[0].anchor.part_id==='right','Native review note returns its qualified leaf inspection center');
+ check(!m.state.matches(old),'Review notes invalidate older request snapshots');
+ const note=structuredClone(m.state.value.annotations[0]),snapshot=m.state.snapshot('Inspect note 1');
+ check(snapshot.annotations[0].evaluation_id===snapshot.evaluation_id&&CadLiveState.promptText(snapshot).includes('must never be rebound'),'Request context carries qualified note text and explicit anchor lifetime');
+ snapshot.annotations[0].text='outside mutation';check(m.state.value.annotations[0].text!==snapshot.annotations[0].text,'Request annotations are immutable snapshots');
+ await m.state.annotation('update',{annotation_id:note.id,text:'Edited review'});assert.deepEqual(m.state.value.annotations[0].anchor,note.anchor);checks++;
+ m.seed();await m.state.pollOnce();const section=m.state.value.section;
+ await m.state.setAppearance(reviewColor());const keep=structuredClone(m.state.value.presentation);keep.clip.keep='positive';await m.state.setPresentation(keep);
+ check(m.state.value.annotations[0].evaluation_id===note.evaluation_id&&m.state.value.section.job_id===section.job_id,'Colors and kept side retain original inspection identity and exact section');
+ await m.state.preset('save','Notes');await m.state.preset('apply','Notes');check(m.state.value.annotations.length===1,'Preset apply preserves native review notes');
+ const reopened=new CadLiveState(m.bridge);reopened.attach('main');await reopened.pollOnce();check(reopened.value.annotations[0].text==='Edited review','Opening restores saved current review notes');reopened.dispose();
+ m.advance();await m.state.pollOnce();const retired=m.state.value.annotations[0];check(retired.status==='retired'&&retired.evaluation_id===note.evaluation_id&&retired.anchor.part_id==='right','New revision keeps historical text and retires its original anchor');
+ await m.state.annotation('update',{annotation_id:note.id,text:'Historical review'});check(m.state.value.annotations[0].status==='retired','Editing historical text cannot reactivate its anchor');
+ await m.state.annotation('add',{anchor:{kind:'model'},text:'New revision note'});check(m.state.value.annotations[1].status==='current'&&m.state.value.annotations[1].revision===2,'New notes use current native source evaluation');
+ await m.state.annotation('delete',{annotation_id:note.id});check(m.state.value.annotations.length===1,'Native delete frees an annotation slot');await m.state.annotation('clear');check(m.state.value.annotations.length===0,'Clear removes bounded review metadata');
+ for(const args of [{anchor:{kind:'model'},text:''},{anchor:{kind:'model'},text:'é'.repeat(257)},{anchor:{kind:'model'},text:'bad\u0001'},{anchor:{kind:'model'},text:'x',script:'unsafe'}]){await assert.rejects(m.state.annotation('add',args));checks++;}
+ m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='annotation')return new Promise(resolve=>{release=()=>resolve(response);});return response;};
+ const adding=m.state.annotation('add',{anchor:{kind:'model'},text:'Late note'});await tick();m.advance();await m.state.pollOnce();release();await adding;
+ check(m.state.value.payload.revision===2&&m.state.value.annotations[0].status==='retired','Delayed accepted note cannot reintroduce a current pin after revision refresh');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='sync')return new Promise(resolve=>{release=()=>resolve(response);});return response;};
+ const polling=m.state.pollOnce();await tick();await m.state.annotation('add',{anchor:{kind:'model'},text:'Concurrent note'});release();await polling;
+ check(m.state.value.annotations.length===1,'Earlier empty sync cannot erase a newly accepted note');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;let calls=0;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='annotation'){calls++;throw Error('Acknowledgment lost');}return response;};
+ await assert.rejects(m.state.annotation('add',{anchor:{kind:'model'},text:'Accepted but ACK lost'}),/lost/);checks++;
+ check(m.state.value.annotation_error.includes('lost')&&!m.state.value.annotations.length,'Uncertain admission stays explicit before read reconciliation');
+ await m.state.pollOnce();check(m.state.value.annotations.length===1&&!m.state.value.annotation_error&&calls===1,'Read sync reconciles accepted lost acknowledgment without retrying mutation');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;
+ m.bridge.tool=(name,args)=>args.action==='annotation'?Promise.reject(Error('No admission')):tool(name,args);
+ await assert.rejects(m.state.annotation('add',{anchor:{kind:'model'},text:'Not saved'}));checks++;await m.state.pollOnce();await m.state.pollOnce();check(m.state.value.annotation_error==='No admission','Empty sync retains a failed note admission until explicit retry');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='annotation')return new Promise(resolve=>{release=()=>resolve(response);});return response;};
+ const adding=m.state.annotation('add',{anchor:{kind:'model'},text:'Old document'});await tick();m.retarget();await m.state.pollOnce();release();await adding;
+ check(m.state.value.payload.document_id==='other'&&!m.state.value.annotations.length,'Retarget rejects delayed note response and removes unrelated history');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();await m.state.deliveryQueue;let release;m.bridge.request=()=>new Promise(resolve=>{release=resolve;});
+ await m.state.annotation('add',{anchor:{kind:'model'},text:'Host ACK is optional'});await tick();check(!m.state.value.annotating&&m.state.value.annotations.length===1,'Optional host context acknowledgment cannot block native note admission');release({});await m.state.deliveryQueue;m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='annotation')response.feature_id='wrong';return response;};
+ await assert.rejects(m.state.annotation('add',{anchor:{kind:'model'},text:'Wrong response'}),/another source/);checks++;check(!m.state.value.annotations.length,'Mismatched action source headers cannot expose review pins');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const tool=m.bridge.tool;let release;
+ m.bridge.tool=async(name,args)=>{const response=await tool(name,args);if(args.action==='annotation')return new Promise(resolve=>{release=()=>resolve(response);});return response;};
+ const adding=m.state.annotation('add',{anchor:{kind:'model'},text:'View changed while admitted'});await tick();m.state.setCamera({...reviewCamera(),yaw:.8});release();await adding;
+ check(!m.state.value.annotations.length,'Late response cannot qualify a request snapshot after camera settings changed');await m.state.pollOnce();check(m.state.value.annotations.length===1,'Read reconciliation retains the independently saved note after a view-only change');m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();await m.state.annotation('add',{anchor:{kind:'model'},text:'Preview source lifetime'});const original=structuredClone(m.state.value.annotations[0]);await m.state.previewPose('extended');
+ check(m.state.value.payload.draft&&m.state.value.annotations[0].status==='retired'&&m.state.value.annotations[0].evaluation_id===original.evaluation_id,'Motion preview retires committed inspection pins without deleting review text');
+ await assert.rejects(m.state.annotation('add',{anchor:{kind:'model'},text:'Draft pin'}),/Save or reset/);checks++;m.state.dispose();
+}
+{
+ const m=annotationMock();await m.state.pollOnce();const count=()=>m.calls.filter(call=>call.args.action==='annotation').length,before=count();
+ m.state.value.payload.read_only=true;
+ for(const operation of ['list','add','update','delete','clear']){await assert.rejects(m.state.annotation(operation),/External artifact sessions/);checks++;}
+ check(count()===before,'Read-only external payload cannot reach native review-note mutation or read actions');delete m.state.value.payload.read_only;m.state.value.read_only=true;
+ await assert.rejects(m.state.annotation('list'),/External artifact sessions/);checks++;check(count()===before,'Read-only sync discriminator blocks notes without inventing a native source identity');m.state.dispose();
 }
 console.log(`${checks} live UI bridge/state checks passed`);

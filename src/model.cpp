@@ -3,13 +3,57 @@
 #include <set>
 #include <map>
 #include <cmath>
+#include <functional>
 #include <numbers>
 #include <stdexcept>
 #include <vector>
 
 namespace agentcad {
+void validate_purchase(const Json& purchase,bool require_artifact) {
+  fields(purchase,{"supplier","part_number","source_url"},{"artifact_sha256"});
+  for(const auto* key:{"supplier","part_number","source_url"}) {
+    const auto value=text_field(purchase,key);const auto maximum=std::string(key)=="source_url"?512:std::string(key)=="supplier"?120:64;
+    if(value.empty()||value.size()>static_cast<std::size_t>(maximum))throw Error("invalid_model","Invalid purchasing text length",{{"field",key}});
+    for(const unsigned char c:value)if(c<32||c>126)throw Error("invalid_model","Purchasing metadata must be printable ASCII",{{"field",key}});
+    if(std::string(key)=="source_url"&&((!value.starts_with("https://")&&!value.starts_with("http://"))||value.find(' ')!=std::string::npos||value.size()<=value.find("://")+3))
+      throw Error("invalid_model","Purchasing source_url must be a nonempty HTTP(S) URL",{{"field",key}});
+  }
+  if(require_artifact&&!purchase.contains("artifact_sha256"))throw Error("invalid_model","Imported purchasing identity requires the exact artifact SHA-256");
+  if(purchase.contains("artifact_sha256")) {
+    const auto hash=text_field(purchase,"artifact_sha256");
+    if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_model","Invalid purchased artifact SHA-256");
+  }
+}
+const Json* imported_step_source(const Json& model,const std::string& feature_id) {
+  auto current=feature_id;
+  for(std::size_t depth=0;depth<model.at("features").size();++depth) {
+    const Json* found=nullptr;
+    for(const auto& feature:model.at("features"))if(feature.at("id")==current){found=&feature;break;}
+    if(!found)return nullptr;
+    const auto type=text_field(*found,"type");
+    if(type=="import_step")return found;
+    if(type!="transform"&&type!="instance")return nullptr;
+    current=text_field(*found,"input");
+  }
+  throw Error("invalid_model","Cyclic imported part source chain",{{"feature_id",feature_id}});
+}
+Json occurrence_schema() {
+  return {{"type","string"},{"maxLength",519},
+    {"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}(/[A-Za-z][A-Za-z0-9_-]{0,63}){0,7}$"}};
+}
+void validate_occurrence_path(const std::string& path) {
+  if (path.empty() || path.size()>519) throw Error("invalid_argument","Invalid assembly occurrence path");
+  std::size_t start=0,depth=0;
+  while (true) {
+    const auto end=path.find('/',start);
+    model_identifier(path.substr(start,end==std::string::npos?end:end-start));
+    if (++depth>assembly_depth_limit) throw Error("invalid_argument","Assembly occurrence exceeds eight levels");
+    if (end==std::string::npos) break;
+    start=end+1;
+  }
+}
 Json model_definitions() {
-  const Json id = {{"type", "string"}, {"pattern", "^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
+  const Json id = {{"$ref", "#/$defs/model_id"}};
   const Json numeric = {{"type", "number"}, {"minimum", -1e6}, {"maximum", 1e6}};
   auto object = [](Json properties, Json required) {
     return Json{{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}};
@@ -58,12 +102,16 @@ Json model_definitions() {
   const Json rotation_schema = object({{"origin",vector_ref},{"axis",vector_ref},{"angle_deg",scalar_ref}}, {"origin","axis","angle_deg"});
   const Json placement_schema = object({{"translation",vector_ref},{"rotation",rotation_schema}}, Json::array());
   const auto bom_text=[](int maximum) {return Json{{"type","string"},{"maxLength",maximum},{"not",{{"pattern","[^ -~]"}}}};};
+  const auto purchase_text=[&](int limit){auto result=bom_text(limit);result["minLength"]=1;return result;};
+  const Json purchase=object({{"supplier",purchase_text(120)},{"part_number",purchase_text(64)},
+    {"source_url",{{"type","string"},{"maxLength",512},{"pattern","^https?://[^ \\t\\r\\n]+$"}}},
+    {"artifact_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"supplier","part_number","source_url"});
   const Json bom_item_schema=object({{"input",id},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
-    {"part_number",bom_text(64)},{"description",bom_text(120)},{"material",bom_text(64)}},{"input"});
+    {"part_number",bom_text(64)},{"description",bom_text(120)},{"material",bom_text(64)},{"purchase",{{"$ref","#/$defs/purchase"}}}},{"input"});
   Json mate_variants=Json::array();
   for (const auto* type:{"rigid","revolute","slider","cylindrical"}) {
     Json properties={{"id",id},{"type",{{"const",type}}},{"parent",id},{"child",id},
-      {"parent_frame",workplane_schema},{"child_frame",workplane_schema},{"offset",vector_ref},{"angle_deg",scalar_ref}};
+      {"parent_frame",{{"$ref","#/$defs/workplane"}}},{"child_frame",{{"$ref","#/$defs/workplane"}}},{"offset",vector_ref},{"angle_deg",scalar_ref}};
     Json required={"id","type","parent","child","parent_frame","child_frame"};
     const Json limits={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}};
     if (std::string(type)=="revolute" || std::string(type)=="cylindrical") {properties["angle_limits_deg"]=limits;required.push_back("angle_limits_deg");}
@@ -77,8 +125,8 @@ Json model_definitions() {
     {"id","source","target","ratio"});
   const Json pose_value=object({{"mate_id",id},{"coordinate",coordinate},{"value",scalar_ref}},{"mate_id","coordinate","value"});
   const Json pose_schema=object({{"id",id},{"values",{{"type","array"},{"items",pose_value},{"maxItems",126}}}},{"id","values"});
-  const Json part_schema = object({{"id",id},{"input",id},{"placement",placement_schema}}, {"id","input"});
-  features.push_back(object({{"id",id},{"type",{{"const","sketch"}}},{"workplane",workplane_schema},{"profile",profile_schema}}, {"id","type","workplane","profile"}));
+  const Json part_schema = object({{"id",id},{"input",id},{"placement",{{"$ref","#/$defs/placement"}}}}, {"id","input"});
+  features.push_back(object({{"id",id},{"type",{{"const","sketch"}}},{"workplane",{{"$ref","#/$defs/workplane"}}},{"profile",profile_schema}}, {"id","type","workplane","profile"}));
   features.push_back(object({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar_ref}}, {"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"}));
@@ -92,13 +140,14 @@ Json model_definitions() {
     {"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"axis",axis_schema},{"angle_deg",scalar_ref}},
     {"id","type","input","count","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","hole"}}},{"input",id},{"origin",vector_ref},{"axis",vector_ref},{"radius",scalar_ref},{"depth",scalar_ref}}, {"id","type","input","origin","axis","radius","depth"}));
-  features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1},{"maxLength",524288}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"id","type","content","sha256"}));
+  features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1},{"maxLength",524288}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
+    {"purchase",{{"allOf",Json::array({Json{{"$ref","#/$defs/purchase"}},Json{{"required",{"artifact_sha256"}}}})}}}}, {"id","type","content","sha256"}));
   features.push_back(object({{"id",id},{"type",{{"const","assembly"}}},
-    {"parts",{{"type","array"},{"items",part_schema},{"minItems",1},{"maxItems",64}}},
-    {"mates",{{"type","array"},{"items",mate_schema},{"maxItems",63}}},
-    {"couplings",{{"type","array"},{"items",coupling_schema},{"maxItems",126}}},
-    {"poses",{{"type","array"},{"items",pose_schema},{"maxItems",64}}},
-    {"bom",{{"type","array"},{"items",bom_item_schema},{"maxItems",64}}}}, {"id","type","parts"}));
+    {"parts",{{"type","array"},{"items",{{"$ref","#/$defs/assembly_part"}}},{"minItems",1},{"maxItems",64}}},
+    {"mates",{{"type","array"},{"items",{{"$ref","#/$defs/mate"}}},{"maxItems",63}}},
+    {"couplings",{{"type","array"},{"items",{{"$ref","#/$defs/coupling"}}},{"maxItems",126}}},
+    {"poses",{{"type","array"},{"items",{{"$ref","#/$defs/pose"}}},{"maxItems",64}}},
+    {"bom",{{"type","array"},{"items",{{"$ref","#/$defs/bom_item"}}},{"maxItems",64}}}}, {"id","type","parts"}));
   const Json expression = object({{"expression", object({
     {"op",{{"enum",{"add","subtract","multiply","divide"}}}},
     {"args",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}},
@@ -110,21 +159,22 @@ Json model_definitions() {
     object({{"op", {{"const", "replace_feature"}}}, {"id", id}, {"feature", feature_ref}}, {"op", "id", "feature"}),
     object({{"op", {{"const", "remove_feature"}}}, {"id", id}}, {"op", "id"}),
     object({{"op", {{"const", "set_output"}}}, {"feature_id", id}}, {"op", "feature_id"}),
-    object({{"op",{{"const","set_part_placement"}}},{"assembly_id",id},{"part_id",id},{"placement",placement_schema}}, {"op","assembly_id","part_id","placement"}),
-    object({{"op",{{"const","set_mate"}}},{"assembly_id",id},{"mate",mate_schema}}, {"op","assembly_id","mate"}),
+    object({{"op",{{"const","set_part_placement"}}},{"assembly_id",id},{"part_id",id},{"placement",{{"$ref","#/$defs/placement"}}}}, {"op","assembly_id","part_id","placement"}),
+    object({{"op",{{"const","set_mate"}}},{"assembly_id",id},{"mate",{{"$ref","#/$defs/mate"}}}}, {"op","assembly_id","mate"}),
     object({{"op",{{"const","remove_mate"}}},{"assembly_id",id},{"mate_id",id}}, {"op","assembly_id","mate_id"}),
     object({{"op",{{"const","set_joint_value"}}},{"assembly_id",id},{"mate_id",id},{"coordinate",coordinate},{"value",scalar_ref}}, {"op","assembly_id","mate_id","coordinate","value"}),
-    object({{"op",{{"const","set_coupling"}}},{"assembly_id",id},{"coupling",coupling_schema}}, {"op","assembly_id","coupling"}),
+    object({{"op",{{"const","set_coupling"}}},{"assembly_id",id},{"coupling",{{"$ref","#/$defs/coupling"}}}}, {"op","assembly_id","coupling"}),
     object({{"op",{{"const","remove_coupling"}}},{"assembly_id",id},{"coupling_id",id}}, {"op","assembly_id","coupling_id"}),
-    object({{"op",{{"const","set_pose"}}},{"assembly_id",id},{"pose",pose_schema}}, {"op","assembly_id","pose"}),
+    object({{"op",{{"const","set_pose"}}},{"assembly_id",id},{"pose",{{"$ref","#/$defs/pose"}}}}, {"op","assembly_id","pose"}),
     object({{"op",{{"const","remove_pose"}}},{"assembly_id",id},{"pose_id",id}}, {"op","assembly_id","pose_id"}),
     object({{"op",{{"const","apply_pose"}}},{"assembly_id",id},{"pose_id",id}}, {"op","assembly_id","pose_id"}),
-    object({{"op",{{"const","set_bom_item"}}},{"assembly_id",id},{"item",bom_item_schema}}, {"op","assembly_id","item"}),
+    object({{"op",{{"const","set_bom_item"}}},{"assembly_id",id},{"item",{{"$ref","#/$defs/bom_item"}}}}, {"op","assembly_id","item"}),
     object({{"op",{{"const","remove_bom_item"}}},{"assembly_id",id},{"input",id}}, {"op","assembly_id","input"})
   });
   Json definitions = {
+    {"model_id", {{"type", "string"}, {"pattern", "^[A-Za-z][A-Za-z0-9_-]{0,63}$"}}},
     {"selector", selector},
-    {"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},
+    {"workplane",workplane_schema},{"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},{"purchase",purchase},
     {"coupling",coupling_schema},{"pose",pose_schema},
     {"scalar", {{"oneOf", Json::array({numeric, object({{"parameter", id}}, {"parameter"}), expression})}}},
     {"vector3", {{"type", "array"}, {"items", scalar_ref}, {"minItems", 3}, {"maxItems", 3}}},
@@ -135,13 +185,25 @@ Json model_definitions() {
       {"features", {{"type", "array"}, {"items", feature_ref}, {"minItems", 1}, {"maxItems", 256}}},
       {"output", id}}, {"schema_version", "units", "parameters", "features", "output"})}
   };
+  definitions.update(component_definitions());
+  definitions["model"]["properties"]["components"]={{"type","array"},{"maxItems",64},{"items",{{"$ref","#/$defs/component"}}}};
+  for(const auto* name:{"set_component_operation","detach_component_operation","remove_component_operation"})
+    definitions["operation"]["oneOf"].push_back({{"$ref",std::string("#/$defs/")+name}});
   auto bom_output_item=bom_item_schema;
-  bom_output_item["properties"]["quantity"]={{"type","integer"},{"minimum",1},{"maximum",64}};
-  bom_output_item["properties"]["part_ids"]={{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}};
+  const auto occurrence=occurrence_schema();
+  definitions["assembly_node"]=object({{"id",occurrence},{"input",id},{"assembly_id",id},
+    {"kind",{{"enum",{"part","assembly"}}}},{"parent_id",{{"anyOf",Json::array({occurrence,Json{{"const",""}}})}}}},
+    {"id","input","assembly_id","kind","parent_id"});
+  const Json structure={{"type","array"},{"items",{{"$ref","#/$defs/assembly_node"}}},{"maxItems",8192}};
+  auto bom_node=definitions.at("assembly_node");
+  bom_node["properties"]["bom"]={{"$ref","#/$defs/bom_item"}};
+  const Json bom_structure={{"type","array"},{"items",bom_node},{"maxItems",8192}};
+  bom_output_item["properties"]["quantity"]={{"type","integer"},{"minimum",1},{"maximum",assembly_leaf_limit}};
+  bom_output_item["properties"]["part_ids"]={{"type","array"},{"items",occurrence},{"minItems",1},{"maxItems",assembly_leaf_limit},{"uniqueItems",true}};
   bom_output_item["required"]={"item_number","input","quantity","part_ids"};
   definitions["bom"]=object({{"assembly_id",id},
-    {"items",{{"type","array"},{"items",bom_output_item},{"minItems",1},{"maxItems",64}}},
-    {"total_quantity",{{"type","integer"},{"minimum",1},{"maximum",64}}}},{"assembly_id","items","total_quantity"});
+    {"items",{{"type","array"},{"items",bom_output_item},{"minItems",1},{"maxItems",256}}},{"structure",bom_structure},
+    {"total_quantity",{{"type","integer"},{"minimum",1},{"maximum",assembly_leaf_limit}}}},{"assembly_id","items","total_quantity"});
   const Json real = {{"type","number"}};
   const Json nonnegative = {{"type","number"},{"minimum",0}};
   const Json point_output = {{"type","array"},{"items",real},{"minItems",3},{"maxItems",3}};
@@ -152,11 +214,14 @@ Json model_definitions() {
       {"mate_id","coordinate","unit","value","minimum","maximum","driven"})}}},
     {"poses",{{"type","array"},{"items",id},{"maxItems",64}}}},{"dofs","poses"});
   definitions["assembly_summary"] = object({
-    {"parts",{{"type","array"},{"minItems",1},{"maxItems",64},{"items",object({
-      {"id",id},{"input",id},{"transform",{{"type","array"},{"items",real},{"minItems",16},{"maxItems",16}}},
+    {"parts",{{"type","array"},{"minItems",1},{"maxItems",assembly_leaf_limit},{"items",object({
+      {"id",occurrence},{"input",id},{"transform",{{"type","array"},{"items",real},{"minItems",16},{"maxItems",16}}},
       {"bounds_mm",bounds_output},{"volume_mm3",nonnegative}}, {"id","input","transform","bounds_mm","volume_mm3"})}}},
     {"mates",{{"type","array"},{"maxItems",63},{"items",object({{"id",id},{"type",{{"enum",{"rigid","revolute","slider","cylindrical"}}}},{"parent",id},{"child",id}}, {"id","type","parent","child"})}}},
-    {"motion",{{"$ref","#/$defs/motion"}}}
+    {"motion",{{"$ref","#/$defs/motion"}}},{"tree",structure},
+    {"mechanisms",{{"type","array"},{"maxItems",256},{"items",object({{"assembly_id",id},
+      {"occurrences",{{"type","array"},{"minItems",1},{"maxItems",8192},{"items",{{"anyOf",Json::array({occurrence,Json{{"const",""}}})}}}}},
+      {"motion",{{"$ref","#/$defs/motion"}}}},{"assembly_id","occurrences","motion"})}}}
   }, {"parts","mates"});
   const Json face_id = {{"type","string"},{"pattern","^face-[1-9][0-9]*$"}};
   const Json edge_id = {{"type","string"},{"pattern","^edge-[1-9][0-9]*$"}};
@@ -165,7 +230,7 @@ Json model_definitions() {
     {"source_feature_id",id},{"source_kind",{{"enum",{"face","edge"}}}},{"source_id",local_id},
     {"relation",{{"enum",{"unchanged","modified","generated","deleted"}}}},
     {"result_kind",{{"enum",{"face","edge"}}}},{"result_id",local_id},
-    {"instance_index",{{"type","integer"},{"minimum",0},{"maximum",63}}},{"part_id",id}
+    {"instance_index",{{"type","integer"},{"minimum",0},{"maximum",63}}},{"part_id",occurrence}
   }, {"source_feature_id","source_kind","source_id","relation"});
   const Json provenance = object({
     {"feature_id",id},{"feature_type",{{"type","string"}}},{"content_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
@@ -175,12 +240,12 @@ Json model_definitions() {
   }, {"feature_id","feature_type","dependencies","reference_policy","history_lifetime","history","history_truncated"});
   const Json face_output = object({
     {"id",face_id},{"surface_kind",{{"enum",{"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"}}}},
-    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",id}
+    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",occurrence}
   }, {"id","surface_kind","area_mm2","center_mm","bounds_mm"});
   const Json edge_output = object({
     {"id",edge_id},{"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},
     {"length_mm",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"direction",point_output},
-    {"degenerate",{{"type","boolean"}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",id}
+    {"degenerate",{{"type","boolean"}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",occurrence}
   }, {"id","curve_kind","length_mm","center_mm","bounds_mm","degenerate"});
   definitions["face"]=face_output; definitions["edge"]=edge_output;
   definitions["topology"]=object({
@@ -194,7 +259,7 @@ Json model_definitions() {
     {"positions",{{"type","array"},{"items",point_output},{"maxItems",200000}}},
     {"triangles",{{"type","array"},{"items",{{"type","array"},{"items",{{"type","integer"},{"minimum",0},{"maximum",199999}}},{"minItems",3},{"maxItems",3}}},{"maxItems",200000}}},
     {"triangle_faces",{{"type","array"},{"items",face_id},{"maxItems",200000}}},
-    {"edges",{{"type","array"},{"items",object({{"id",edge_id},{"part_id",id},{"points",{{"type","array"},{"items",point_output},{"maxItems",200000}}}}, {"id","points"})},{"maxItems",10000}}}
+    {"edges",{{"type","array"},{"items",object({{"id",edge_id},{"part_id",occurrence},{"points",{{"type","array"},{"items",point_output},{"maxItems",200000}}}}, {"id","points"})},{"maxItems",10000}}}
   }, {"schema_version","units","feature_id","selection_lifetime","linear_deflection_mm","angular_deflection_rad","positions","triangles","triangle_faces","edges"});
   return definitions;
 }
@@ -210,7 +275,12 @@ void collect_references(const Json& value, std::set<std::string>& names, std::ve
       if (target.rfind(prefix, 0) != 0) throw std::logic_error("Schema reference leaves its document: " + target);
       const auto name = target.substr(prefix.size(), target.find('/', prefix.size()) - prefix.size());
       if (names.insert(name).second) pending.push_back(name);
-    } else if (key != "$defs") collect_references(item, names, pending);
+    } else if ((key == "properties" || key == "patternProperties" || key == "dependentSchemas") && item.is_object()) {
+      // These maps contain property names, not schema keywords. A property
+      // named const/enum/default can itself contain a real schema reference.
+      for (const auto& property : item.items()) collect_references(property.value(), names, pending);
+    } else if (key != "$defs" && key != "const" && key != "enum" && key != "default")
+      collect_references(item, names, pending);
   }
 }
 }
@@ -393,8 +463,8 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
       model_identifier(part_id);
       if (!part_ids.insert(part_id).second) throw Error("invalid_model", "Duplicate assembly part: " + part_id);
       const auto input = text_field(part,"input");
-      if (!types.contains(input) || types.at(input) == "sketch" || types.at(input) == "assembly")
-        throw Error("invalid_model", "Assembly part input must name an earlier solid feature, not a sketch or assembly", {{"source_feature_id",input}});
+      if (!types.contains(input) || types.at(input) == "sketch")
+        throw Error("invalid_model", "Assembly part input must name an earlier solid or assembly feature", {{"source_feature_id",input}});
       source_inputs.insert(input);
       if (part.contains("placement")) { placement(part.at("placement"),parameters); placed.insert(part_id); }
     } catch (const Error& e) {
@@ -407,7 +477,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
     if (!bom.is_array() || bom.size()>64) throw Error("invalid_model","Assembly BOM metadata permits at most 64 items");
     std::set<std::string> inputs;std::set<int> numbers;
     for (const auto& item:bom) {
-      fields(item,{"input"},{"item_number","part_number","description","material"});
+      fields(item,{"input"},{"item_number","part_number","description","material","purchase"});
       const auto input=text_field(item,"input");
       if (!source_inputs.contains(input)) throw Error("invalid_model","BOM metadata input must be used by an assembly part",{{"source_feature_id",input}});
       if (!inputs.insert(input).second) throw Error("invalid_model","Duplicate BOM metadata source input",{{"source_feature_id",input}});
@@ -421,6 +491,10 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
         if (value.size()>maximum) throw Error("invalid_model",std::string("BOM ")+key+" exceeds its text limit",{{"source_feature_id",input}});
         for (const unsigned char c:value) if (c<32 || c>126)
           throw Error("invalid_model","BOM metadata must contain only printable ASCII",{{"source_feature_id",input}});
+      }
+      if(item.contains("purchase")) {
+        try{validate_purchase(item.at("purchase"));}
+        catch(const Error& error){auto details=error.details;details["source_feature_id"]=input;throw Error(error.code,error.what(),details);}
       }
     }
   }
@@ -467,7 +541,8 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
 }
 
 void validate_model(const Json& model) {
-  fields(model, {"schema_version", "units", "parameters", "features", "output"});
+  fields(model, {"schema_version", "units", "parameters", "features", "output"}, {"components"});
+  if(model.contains("components") && model.dump().size()>max_json_bytes)throw Error("limit_exceeded","Component document exceeds the 1 MiB JSON budget");
   if (!model.at("schema_version").is_number_integer() || model.at("schema_version") != 1)
     throw Error("unsupported_schema", "Only model schema_version 1 is supported");
   if (text_field(model, "units") != "mm") throw Error("invalid_model", "Only millimeters are supported");
@@ -480,7 +555,9 @@ void validate_model(const Json& model) {
     throw Error("invalid_model", "A model needs 1–256 features");
   std::set<std::string> prior;
   std::map<std::string,std::string> types;
+  std::map<std::string,std::size_t> leaf_counts, depths;
   std::size_t assembly_parts = 0;
+  std::size_t expanded_parts = 0;
   for (const auto& feature : features) {
     const auto id = text_field(feature, "id");
     try {
@@ -624,13 +701,29 @@ void validate_model(const Json& model) {
       assembly(feature,parameters,types);
       assembly_parts += feature.at("parts").size();
       if (assembly_parts > 256) throw Error("limit_exceeded", "A model permits at most 256 assembly parts across all assembly features");
+      std::size_t leaves=0,depth=1;
+      for (const auto& part:feature.at("parts")) {
+        const auto input=text_field(part,"input");
+        leaves+=leaf_counts.contains(input)?leaf_counts.at(input):1;
+        depth=std::max(depth,depths.contains(input)?depths.at(input)+1:std::size_t(1));
+      }
+      if (leaves>assembly_leaf_limit || depth>assembly_depth_limit)
+        throw Error("limit_exceeded","An assembly permits at most 1024 leaf occurrences and eight levels",{{"leaf_count",leaves},{"depth",depth}});
+      expanded_parts+=leaves;
+      if (expanded_parts>4096) throw Error("limit_exceeded","A document permits at most 4096 expanded assembly leaf occurrences");
+      leaf_counts[id]=leaves;depths[id]=depth;
     } else if (type == "import_step") {
-      fields(feature, {"id", "type", "content", "sha256"});
+      fields(feature, {"id", "type", "content", "sha256"},{"purchase"});
       const auto content = text_field(feature,"content");
       const auto digest = text_field(feature,"sha256");
       if (content.empty() || content.size() > 512*1024) throw Error("limit_exceeded", "Embedded STEP content must contain 1 to 524288 bytes");
       if (digest.size() != 64 || digest.find_first_not_of("0123456789abcdef") != std::string::npos || sha256(content) != digest)
         throw Error("invalid_model", "Embedded STEP content does not match its SHA-256 identity");
+      if(feature.contains("purchase")) {
+        validate_purchase(feature.at("purchase"),true);
+        if(feature.at("purchase").at("artifact_sha256")!=digest)
+          throw Error("invalid_model","Purchased artifact identity differs from the embedded STEP bytes");
+      }
     } else throw Error("unsupported_feature", "Unsupported feature type: " + type, {{"feature_id", id}});
     if (feature.contains("origin")) vector3(feature.at("origin"), parameters);
     prior.insert(id);
@@ -642,6 +735,32 @@ void validate_model(const Json& model) {
   }
   if (!prior.contains(text_field(model, "output"))) throw Error("invalid_model", "output must name a feature");
   if (types.at(text_field(model,"output")) == "sketch") throw Error("invalid_model", "The model output must be solid geometry, not an intermediate sketch");
+  for(const auto& feature:model.at("features"))if(feature.at("type")=="assembly"&&feature.contains("bom"))
+    for(const auto& item:feature.at("bom"))if(item.contains("purchase")) {
+      const auto* source=imported_step_source(model,text_field(item,"input"));
+      if(source&&source->contains("purchase")&&item.at("purchase")!=source->at("purchase"))
+        throw Error("invalid_model","BOM purchasing metadata conflicts with the verified imported source",{{"feature_id",feature.at("id")},{"source_feature_id",item.at("input")}});
+    }
+  validate_components(model);
+}
+
+Json assembly_structure(const Json& model,const std::string& assembly_id) {
+  validate_model(model);
+  const auto selected=assembly_id.empty()?text_field(model,"output"):assembly_id;
+  std::map<std::string,const Json*> features;
+  for (const auto& feature:model.at("features")) features.emplace(text_field(feature,"id"),&feature);
+  if (!features.contains(selected) || features.at(selected)->at("type")!="assembly")
+    throw Error("invalid_argument","Feature must name an assembly",{{"feature_id",selected}});
+  Json result=Json::array();
+  std::function<void(const std::string&,const std::string&)> visit=[&](const std::string& source,const std::string& parent) {
+    for (const auto& part:features.at(source)->at("parts")) {
+      const auto local=text_field(part,"id"),id=parent.empty()?local:parent+"/"+local,input=text_field(part,"input");
+      const bool nested=features.at(input)->at("type")=="assembly";
+      result.push_back({{"id",id},{"input",input},{"assembly_id",source},{"parent_id",parent},{"kind",nested?"assembly":"part"}});
+      if (nested) visit(input,id);
+    }
+  };
+  visit(selected,"");return result;
 }
 
 namespace {
@@ -682,7 +801,7 @@ void set_joint_coordinate(Json& feature,const Json& edit) {
 }
 }
 
-Json apply_operations(const Json& model, const Json& operations) {
+Json apply_operations(const Json& model, const Json& operations, const ComponentResolver& resolve) {
   if (!operations.is_array() || operations.empty() || operations.size() > 256)
     throw Error("invalid_argument", "operations must contain 1–256 edits");
   auto candidate = model;
@@ -691,7 +810,9 @@ Json apply_operations(const Json& model, const Json& operations) {
    try {
     const auto op = text_field(operation, "op");
     auto& features = candidate.at("features");
-    if (op == "set_parameter") {
+    if (apply_component_operation(candidate,operation,resolve)) {
+      // Captured dependencies remain ordinary editable local features.
+    } else if (op == "set_parameter") {
       fields(operation, {"op", "name", "value"});
       const auto name = text_field(operation, "name");
       model_identifier(name); number(operation.at("value"));

@@ -7,6 +7,9 @@ paired `model.urdf` and `model.srdf`; `path` selects the requested one. SDF crea
 `model.sdf`, targeting SDFormat 1.12. No Python or model-supplied program executes.
 This is a description and mesh handoff, not a dynamics or planning service.
 
+Nested assemblies retain every child joint and complete occurrence paths.
+`feature_id` can still select a child definition for a standalone export.
+
 The returned directory contains relative mesh references, source STL meshes,
 `robot.json` (the design/planning ledger), and a manifest with file sizes and
 SHA-256 hashes. Move the whole directory together. The complete directory is
@@ -36,6 +39,44 @@ removes staging and preserves HEAD, history and earlier export directories.
   native coupling, including its authored offset. No coupling is dropped.
 - SDF link poses explicitly reference `__model__`; each joint frame explicitly
   references its child. Joint axes are the local positive Z direction.
+
+## Composed mechanisms
+
+Each physical leaf retains one link. A nested assembly's frame attaches to the
+ultimate physical leaf of its lexically first unmated part; other grounded
+roots attach rigidly to that anchor. This preserves the native grounding
+contract without inventing empty assembly bodies or inertials. An outer mate
+to a whole subassembly acts through that anchor. The anchor's exported frame
+may therefore be the outer mate datum rather than its leaf source frame;
+`mesh_origin` preserves the exact source-to-link transform. The ledger's
+`frames.assemblies` records every assembly path, definition, frame and anchor.
+
+Robot `mate_id` values are scoped paths such as `setup/left/pivot`. Supply effort
+and velocity for every occurrence, including coordinates driven by a coupling.
+Repeated occurrences of one assembly definition share native pose values. The
+lexically first occurrence is the canonical one; each repeat uses a unit-ratio
+mimic relationship to its corresponding canonical coordinate. The ledger marks
+these as `shared_definition`, distinct from authored physical couplings. Use
+separate assembly definitions when instances need independent coordinates.
+
+Flat XML names retain the existing `part_`, `mate_`, `root_` and `carrier_`
+conventions. Nested names use `nested_<kind>` followed by each path segment's
+length and value: `left/link` becomes `nested_part_4_left_4_link`. This avoids
+collisions with underscores already present in IDs and uses no path separators
+in XML names. Read exact link names from the ledger when supplying inertials.
+
+Every reachable definition's named poses are retained. In a composition, pose
+names encode `assembly_id/pose_id` using the same length convention; flat pose
+names remain unchanged. Each preset changes its definition's shared occurrences
+and leaves other definitions at their exported rest pose. The ledger's
+`frames.pose_sources` maps exported names back to editable source poses. SRDF
+group states contain only independent coordinates, including unchanged ones.
+
+Robot export is bounded to 4,096 expanded moving coordinates, 8,192 links and
+256 named poses. Exceeding a bound fails explicitly; no joint or pose is dropped.
+Existing transport, artifact and worker budgets also apply. These are kinematic
+handoff semantics; consumer support and real physical properties still require
+the validation described below.
 
 These conventions follow the [URDF parser's joint contract](https://github.com/ros/urdfdom/blob/master/urdf_parser/src/joint.cpp)
 and [SDFormat 1.12 joint and mimic semantics](https://sdformat.org/spec/1.12/joint/).

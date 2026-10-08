@@ -31,7 +31,7 @@ features when independent dimensions are needed.
 ## Parts and placement
 
 Each part requires a unique `id` within its assembly and an `input` naming an
-earlier solid feature in the same document. Optional `placement` contains
+earlier solid or assembly feature in the same document. Optional `placement` contains
 `translation` and/or `rotation`. Translation is a three-element mm vector.
 Rotation requires `origin` in mm, nonzero dimensionless `axis`, and `angle_deg`.
 Rotation about the source-coordinate axis happens first, then translation.
@@ -42,15 +42,47 @@ identity. A child controlled by a mate must omit `placement` entirely; even an
 explicit identity placement conflicts. A root may anchor any number of children.
 Part ordering does not control mate evaluation.
 
-Assemblies contain 1–64 parts and up to 63 mates; the entire document permits at
-most 256 assembly parts. Ordinary document, topology, mesh, worker and artifact
+Assemblies contain 1–64 direct parts and up to 63 mates; the entire document permits at
+most 256 declared assembly parts. Nesting permits eight occurrence levels, at most
+1,024 expanded leaf occurrences per assembly, and 4,096 summed across all assembly
+features. These expansion limits are checked before geometry work. Ordinary document, topology, mesh, worker and artifact
 limits still apply, and the per-feature replication budget in
 [PROTOCOL.md](PROTOCOL.md) bounds an assembly to 4,096 solids and 65,536 faces
 summed over its part inputs. An input may contain multiple solids, such as a pattern or
-STEP import, but is treated as one part instance. Nested assemblies and ordinary
+STEP import, but is treated as one part instance. Ordinary
 solid operations consuming an assembly are rejected. Edit or transform source
 features before assembling them. Source features and part IDs are distinct
 namespaces; neither is an evaluated face or edge name.
+
+Nested inputs preserve the source subassembly's solved motion and multiply its
+leaf transforms by the parent placement. Repeated subassemblies share source
+dimensions and joint values; use distinct assembly definitions for independent
+poses. Mates in each definition refer to its immediate parts, including whole
+subassemblies, with datums in their source coordinate systems.
+
+Leaf occurrence IDs use slash-separated paths, such as `left/link` and
+`right/link`. Each segment is a saved part ID. Query parts, topology ownership,
+visibility, BOM rows and drawing balloons use those full paths. `assembly.tree`
+is a preorder hierarchy with `id`, `input`, `assembly_id` (the immediate owning
+definition), `parent_id` (empty at the displayed root), and `kind` (`assembly`
+or `part`). This distinguishes persistent occurrence paths from evaluation-local
+face/edge IDs. `examples/nested-assembly.create.json` demonstrates two rotated
+instances of an articulated module and a spare source part.
+
+The embedded Parts panel searches occurrence names and source IDs, shows the
+hierarchy, and hides or isolates either a leaf or a whole subassembly. Visibility
+persists as leaf paths. Search preserves matching ancestors and descendants.
+The Motion panel lists all reachable moving definitions and identifies the
+occurrences each controls. Preview changes to several definitions together;
+Save commits the complete draft as one revision, and an optional pose name
+belongs to the selected definition. Reset restores the complete saved assembly.
+`assembly.mechanisms` exposes each definition's `assembly_id`, `occurrences`
+(empty path for the displayed root) and evaluated `motion`. Child joints can
+also be edited with `assembly_id` through `cad_apply`/`cad_preview`.
+Nested robot export retains all joints and shared coordinates; see
+[ROBOT_EXPORT.md](ROBOT_EXPORT.md). [Pinned components](COMPONENTS.md) provide
+cross-document reuse. [Dependency caching](DEPENDENCY_CACHE.md) restores
+unchanged source features when a child pose or parent placement changes.
 
 ## Rigid mates
 
@@ -166,9 +198,9 @@ publication rules. Failed placements, invalid graphs and kernel failures preserv
 the previous revision. Restore, historical queries, previews, live-view refresh,
 jobs and exports use the same saved model contract.
 
-An assembly summary includes `assembly.parts` with each part's `id`, `input`,
+An assembly summary includes `assembly.parts` with each leaf occurrence's `id`, `input`,
 world `transform`, `bounds_mm` and `volume_mm3`; `assembly.mates` identifies the
-rigid relations. A transform is a 16-number row-major homogeneous matrix that
+immediate relations. A transform is a 16-number row-major homogeneous matrix that
 maps a source point column vector `[x,y,z,1]` to world coordinates. Translation
 occupies entries 3, 7 and 11. Assembly volume is the sum of part volumes, including
 overlap; it does not describe the boolean union's volume.
@@ -201,6 +233,14 @@ twice produces one row with quantity two. It counts instances rather than solids
 inside an imported or patterned source. Different source features remain separate
 rows even when their geometry or supplied part numbers match. Quantities come
 from assembly membership and cannot be entered as metadata.
+
+Nested BOMs roll up all leaf occurrences and add `structure` with the same
+hierarchy as queries. Each structure node's optional `bom` preserves its owning
+definition's supplied metadata, including subassembly part numbers and local
+item numbers. Rolled-up rows inherit leaf descriptions, materials and part
+numbers; conflicting values for a shared source fail explicitly. Only explicit
+root leaf item numbers reserve numbers in the rolled-up table. Child-local
+numbers remain in `structure`, because different child tables may reuse them.
 
 Optional assembly `bom` entries supply metadata for used source features:
 
@@ -257,9 +297,14 @@ part IDs; removed IDs are pruned and switching documents resets it. The
 Measurements, BOM quantities, STEP/STL and drawings continue to use the complete
 saved assembly. The standalone offline viewer does not have these controls.
 
-The current scope is one-level assemblies, rigid and articulated datum mates,
-linear couplings, named poses, native preview/reset/save controls, source-grouped
-BOMs, live part visibility and exploded drawings with part balloons.
+The current scope is bounded nested assemblies, rigid and articulated datum
+mates, linear couplings, definition-scoped poses, native preview/reset/save
+controls, hierarchical and rolled-up BOMs, group visibility and exploded drawings
+with leaf balloons.
 `cad_robot_export` provides a [URDF/SRDF/SDF handoff](ROBOT_EXPORT.md) with explicit
-physical inputs and preserved native poses. General constraint solving, nested
-assemblies, collision checking and automatic physical fit remain unsupported.
+physical inputs and preserved parent/child motion. General constraint solving,
+collision checking and automatic physical fit remain unsupported.
+[Pinned component snapshots](COMPONENTS.md) now reuse editable solids or modules
+across saved documents, with explicit parameter mappings, updates and local-edit
+conflicts. Bounded native dependency caches rebuild affected features and
+assemblies while preserving current provenance and evaluation-scoped ownership.

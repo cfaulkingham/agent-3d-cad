@@ -1,11 +1,1236 @@
 # Implementation handoff
 
-Updated: 2026-10-07. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-08. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Combined implementation acceptance — 2026-10-08
+
+All seventeen software increments in COMPOSITION_FABRICATION_REVIEW.md are now
+merged locally: nested/shared assembly composition and components, dependency
+caches, manufacturing/process/purchased-part/G-code/slicer/printer workflows,
+and live presentation/measurement/sections/colors/notes/playback/external review.
+Combined software acceptance is complete on macOS arm64, including the final
+rendered browser and compressed-artifact relocated-package checks.
+The entries below are historical checkpoints; their active-goal and next-task
+statements are superseded by this current section.
+
+Final macOS arm64 executable SHA-256:
+`ff9b5c479721dbea18517b76015aea69765846531889dc8211b9ea529c4cf6ef`.
+It uses the selected patched OCCT 8.0.1 SDK and FreeType 2.14.3. Clearing cached
+FreeType locations fixed an initial loader-path conflict with an older SDK;
+the final executable has only the selected SDK on its build loader path.
+The final build emitted no warnings. No dependency version was relaxed.
+
+Executed combined acceptance:
+
+- All **54 CTest suites pass in 113.24 s**, including 115 artifact-native checks,
+  58 real artifact MCP/controller checks, 34 cross-feature retarget checks,
+  68 printer checks and 39 POSIX publication-failure checks.
+- **929 independent general JSON Schema checks across 28 tools**, with the
+  explicit native slicer fixture, and **197 actual artifact schema checks** pass.
+- Official MCP SDK 2.3.0 passes **3,317 general** and **498 artifact** checks,
+  including automatic restart and legacy lifecycle behavior.
+- Relocated package smoke passes with empty PATH and cleared loader overrides;
+  pinned TinyXML2 source/license bytes and dependency provenance are verified.
+  The relocated binary parses an actual deflated 3MF, preserves centimeter and
+  nested-component transforms, reparses a moved package after original deletion,
+  transfers read-only mesh/context, rejects native actions, and restores the
+  unchanged native source. No developer runtime is used by these workflows.
+- Actual compact discovery is **427,829 bytes**, below the unchanged 430,080-byte
+  gate. **27,169 independent compaction checks** compare the actual before/after
+  catalogs, preserve all constraints and literals, and protect recursive graphs,
+  reference siblings, pointer targets and schema scopes. No tool was removed.
+- The bundled native-cad skill passes skill-creator quick validation.
+
+Exact commands/logs are `final-acceptance-*` in build-app-protocol; CTest per-suite
+output is Testing/Temporary/LastTest.log. The durable independent compaction
+check is tests/discovery_compaction_check.py. `final-acceptance-evidence.json`
+records exact argv, binary/catalog/log/image hashes and the uncommitted source
+manifest. Independent package review verifies all 299 listed file hashes,
+29 Mach-O closure files, pinned parser sources/notices and matching FreeType/HLR
+code despite the package loader/signature rewrites. The initial combined run failed
+only the catalog gate (two suites) and stale SDK loader selection; the final
+run above resolves all three failures without weakening acceptance assertions.
+
+The actual final embedded viewer runs from a pinned copy at
+`http://127.0.0.1:61032/`, isolated from earlier demos. A long right-edge label
+leaves numbered pin 5 visible. Reload produces an identical PNG and restores
+the camera, four retired notes and one current evaluation-qualified note.
+Fitted example `build/final-review-demo-20261008/capture-003.png` is
+1,648 × 1,248, 118,563 bytes, SHA-256
+`a1e71fe1f349160d12987244adc1cec5b3938386449fe6425c8739b117683e0d`.
+Labels shorten to 80 characters; complete text remains in structured context.
+A separate actual browser view admits 23 presentation-clock seeks, then artifact
+adoption stops further seeks, clears native notes/sequences/playback/picks and
+uses full-hash review-local picks. Returning through the model library restores
+native controls. Both copied source HEADs stay unchanged at
+`3e6695b526b0e0e47d2fea0313f56108e540fd3eb799d6e3302f25727fdcb7fa`.
+The final browser report is `build/final-review-demo-20261008/ACCEPTANCE.md`.
+Earlier playback evidence separately covers coordinated native joint motion;
+the final transition sequence exercises presentation frames only. Images and
+requests went solely to a local test host, never another recipient.
+
+Preserved review deliverables also include the 9 mm assembly example at
+`http://127.0.0.1:65469/`, exact sections at `http://127.0.0.1:56183/`, appearance
+at `http://127.0.0.1:62122/` and the original annotation phase at
+`http://127.0.0.1:58352/`. Their earlier binaries/workspaces/evidence are unchanged.
+The final fitted example is marked as a browser deliverable. The compiled
+software increment is complete; the next product work is the separate release
+acceptance below, not another planned feature from this implementation scope.
+
+Printer plans remain offline; no hardware was contacted. Package publication can
+precede durable result storage: a storage failure may leave an inspectable package
+and a new request may publish a duplicate. The deterministic POSIX fixture
+re-verifies that package and preserves source/prior outputs; it does not establish
+coordinator-crash or Windows fault-injection recovery. Unsupported process checks,
+external format features and physical readiness remain explicitly unknown or
+unsupported. New Windows/Linux execution, external cross-vendor STEP qualification,
+ChatGPT/Claude installation trials and publisher signing/notarization remain
+release gates in RELEASE_1_0.md. The user subsequently requested committing and
+pushing this validated increment on `main`; no public release is part of that
+publication.
+
+## Printer handoff and combined review integration — active larger goal, 2026-10-08
+
+The fourteenth increment implements `cad_printer_handoff`, the 26th tool, through
+the shared Service/MCP/CLI and durable jobs. Explicit checksummed plain G-code,
+resolved profile snapshots and printer/review assumptions produce a portable
+offline plan. Re-verification checks the contained byte ledger and recomputes
+native findings/readiness. Source association remains caller declared; native
+upload/start are unsupported, physical readiness remains fail or unknown, and
+no hardware is contacted. Planning, failure, running cancellation, timeout and
+historical/relocated verification preserve source and prior outputs.
+
+Executable SHA-256
+`c39917d26946d4442565b9537e2d59f1c31d28e98e2ff984d26b20cc356af4b9`
+passed **68 dedicated printer checks**, **807 independent schema checks across
+26 tools**, **3,552 official MCP SDK 2.3.0 checks**, and the relocated empty-PATH
+bundle including moved-package re-verification. The full 46-suite run passed 45
+suites in 114.98 s; its sole failure was the old live fixture's 25-tool assertion.
+After correcting that assertion to require 26 tools and explicit printer
+presence, live passed in 11.18 s. Logs are `printer-final-*`,
+`printer-native-final.log` and `printer-live-final.log` in build-app-protocol.
+The bundled native-cad skill passes skill-creator's quick validation.
+
+Independent review identified an artifact-only recovery limitation: package
+publication precedes job-result storage, so storage failure or interruption can
+leave a package without a successful job result. Inspect exports and re-verify
+before retrying; source-mutation receipts do not recover these offline packages.
+PRINTER_HANDOFF and PROTOCOL document the possible duplicate retry. A deterministic
+POSIX publication-barrier fixture is now integrated; three isolated repetitions
+passed 40 checks each in 6.59 s against private pinned executable
+`dad0c70e4fe2e4637754715b724457245fc6664cae8cb3449f78812f6c07be5c`.
+That fixture injects result-storage failure, not a coordinator crash; Windows
+fault injection was not executed. The next main regression run includes it.
+
+Annotations and declarative playback are now merged locally. Their combined
+native/controller/renderer/actual-MCP tests pass, including retirement of an
+original note when actual joint playback changes the pose. Combined discovery
+currently measures 436,020 bytes and fails the unchanged 430,080-byte gate;
+lossless schema compaction is in progress. Full combined schema/SDK/package
+acceptance remains pending. External-artifact integration remains isolated.
+
+Actual browser tab 18 at `http://127.0.0.1:58352/` runs pinned executable
+`dad0c70e4fe2e4637754715b724457245fc6664cae8cb3449f78812f6c07be5c`
+against isolated `annotation_review`. Native leaf bounds and an annular-face
+inspection center produce numbered pins; hidden owners omit their pins while
+retaining notes. Reopening restores them. A deliberate radius edit creates r2
+and retires all three original anchors without rebinding. Historical text edits
+preserve the original anchors; a new r2 pin restores after reload. Rendered PNGs
+and all current/retired source context were captured by the local test host.
+The r2 PNG is 1,314 × 1,364, 105,084 bytes, SHA-256
+`46c23bdfff0e5ead481bbcf6f190d9b13bbdc581c9a020034e331a69e86f0f0e`.
+Evidence and exact native contexts are in `build/annotations-demo-20261008`.
+No request went to a real chat or another recipient. This local developer
+preview does not certify desktop-host installation or other platforms.
+
+The larger goal remains active. Finish schema compaction, combined acceptance,
+playback browser evidence and external-artifact integration/review. No printer
+contact, physical start, public release or new commit/push occurred.
+
+## Appearance, saved views and rendered image context — active larger goal, 2026-10-08
+
+The thirteenth increment implements opaque default/per-leaf RGB colors, native
+saved camera/presentation/visibility/appearance presets, a local PNG download
+request and source-qualified image context. Settings remain review metadata;
+they never change source geometry, physical materials, exact measurements or
+manufacturing exports. Current owner checks are strict, removed leaves prune on
+refresh, retarget resets, and delayed responses cannot restore an older local
+choice or source. Preset apply clears picks and retires sections only when their
+plane/explosion changes. A stale historical context remains observable while a
+current preset response uses current revision/evaluation/feature identity.
+See APPEARANCE.md, PROTOCOL.md and the bundled agent guidance.
+
+Main executable SHA-256
+`353e7380eed2eb5140f00f36493a6b2efa8f36b2f65969b9d2fb89ce8458b650`
+passed **all 45 CTest suites in 102.66 s**, **786 independent JSON Schema checks
+across 25 tools**, **2,976 official MCP SDK 2.3.0 checks**, and a relocated
+empty-PATH runtime package. Controller coverage is **285 checks**. The existing
+real-MCP/controller suite now includes 12 additional color/preset/section/draft/
+retarget assertions. All discovery constraints and the 430,080-byte size gate
+remain unchanged. Logs are `appearance-main-*` in build-app-protocol.
+
+Actual browser tab **17**, `http://127.0.0.1:62122/`, runs the compiled embedded
+app with a pinned private executable and isolated `appearance_review` source.
+A blue default and red left housing render with distinct orange native caps.
+After resetting colors, changing camera and hiding the left subassembly, applying
+“Colored exploded section” restores all four choices and retains the same section
+job/area. A cold native-host restart restores the settings, preset and qualified
+section. Saving the same name replaces its fitted camera without adding a second
+preset. Review operations preserve raw source HEAD.
+
+The actual WebGL PNG was captured through Include this view into the **local
+test host**, together with source/evaluation/job/color context: 652 × 1,364 pixels,
+42,097 bytes, SHA-256
+`93ec42e3ff8356796545bc2101110d3b866d5cd78d178a146a2462b9596e0da2`.
+Requests, native contexts, screenshots, PNG and `evidence.json` are under
+`build/appearance-demo-20261008`. No message went to a real chat or another
+recipient. Save PNG image requested a download, but its browser download observer
+timed out; an actual saved download file is not established. One browser
+MutationObserver TypeError had no identified source. This local development
+exercise does not certify desktop-host installation or other platforms.
+
+The larger goal remains active. Printer Service/jobs/package integration is now
+in progress; annotations, declarative playback and external-format review remain
+in isolated sub-agent workspaces. No printer was contacted and no new commit,
+public release or hardware start occurred.
+
+## Exact sections and rendered review — active larger goal, 2026-10-08
+
+The twelfth increment now includes native hole-preserving caps, source-qualified
+section jobs, bounded cap rendering and read-only picking, and the live exact
+section controls. Native plane/explosion changes retire the result; reversing
+the kept side, camera changes and hiding parts retain its measured coverage.
+Distance measurement remains independent. Failed admission feedback now survives
+empty sync until an explicit retry, clear or source change; uncertain mutations
+are never repeated automatically. Existing source geometry and editable history
+remain authoritative. See SECTIONS.md and the section-inspection example.
+
+Executable SHA-256
+`b5ecefc219156f47678f33fe036147b2d0d450c970f9ac17503ddca201806bc3`
+passed **all 45 CTest suites in 110.00 s**, **757 independent schema checks across
+25 tools**, **2,736 official MCP SDK 2.3.0 checks** and the relocated empty-PATH
+bundle. The final admission-feedback fix produces executable
+`52ee8a9fe9e421945e51e9628d3ecd87d718df6b132c84a96713dfe81e29ece9`:
+**224 controller checks**, the four affected app-protocol/live-controller/real-MCP/
+WebGL suites (**9.56 s**) and the relocated empty-PATH bundle pass. Renderer
+verification includes **70 checks**; native section coverage includes **2,099**.
+The bundle's first final poll encountered documented transient `workspace_busy`;
+the fixture now retries only that read-only poll and preserves every assertion.
+It never retries section admission. Logs use `section-delivery-*` and
+`section-feedback-final-*` in build-app-protocol. Bundled skill validation and
+`git diff --check` pass. Temporary Python/schema tooling is developer verification,
+not a dependency of the packaged native runtime.
+
+Actual browser tab **16**, `http://127.0.0.1:56183/`, uses the compiled embedded
+app and a pinned executable in `build/section-demo-20261008`. Two nested annular
+housings show filled orange cuts with open bores. A cap click gives read-only
+feedback; a click through a bore selected the original left/base face. Native
+clearance stays **16 mm** while reviewing sections. Kept-side reversal and hidden
+subassembly restoration retain full area; plane/explosion changes retire it.
+The **6.8 mm** exploded view aligns caps with the displayed plane. A deliberate
+isolated `outer_radius:12→13` source edit commits revision 2, retires both old
+results and changes exact annular area from **216π = 678.5840131753955 mm²** to
+**266π = 835.6636458548853 mm²**. Revision-1 job history remains unchanged. Browser
+reload restores camera, presentation and revision-2 section; copied request text
+contains its source/evaluation/job identity. Raw HEAD stays unchanged by review
+operations. Requests, native results, hashes, screenshots and `evidence.json`
+are in the demo directory. The earlier user clearance example on tab 15 remains
+separate and untouched.
+
+This is local development rendering, not desktop-host installation acceptance.
+No image was delivered to a real chat host in this section demo. A browser
+console MutationObserver TypeError had no identified source; no origin or fix
+is inferred. Windows/Linux execution and distribution/1.0 installation gates
+were not repeated. The larger goal remains active. Appearance/presets and printer
+handoff validation are staged separately; annotations, declarative playback and
+external-format review are being implemented by explicitly authorized sub-agents.
+No hardware action, new commit or release occurred.
+
+## User-facing clearance example and initial section prototype — 2026-10-08
+
+The requested example has its own `build/skills-demo-20261008/workspace`,
+document `skills_demo` and view `skills_demo`. Two occurrences reuse one editable
+30 × 20 × 3 mm plate source, with a separate radius-2 mm pin. Native clearance
+measures **7 mm** at revision 1. A deliberate `upper_z:10→12` edit commits
+revision 2, retires the old measurement and yields **9 mm**. The browser shows
+that source-qualified result with **12 mm** visual explosion, no material
+intersection, and a passing caller-defined 1 mm requirement. Native STEP/STL,
+PDF/SVG/DXF drawings and a BOM (two plates, one pin) were generated at revision 2.
+Raw HEAD remains unchanged by exports and final view operations. Original user
+workspaces are untouched. Requests, results, HEAD snapshots, native provenance
+and screenshots are in that demo directory; `evidence.json` records the actual
+result, and `exploded-gap-9mm.jpg` is the final screenshot.
+
+The retained browser tab is **15**, `http://127.0.0.1:65469/`; preview host session
+**35157** serves actual embedded resources through the development loopback
+harness. A private copy of executable SHA-256
+`fd982a854317d1c9f30d1d7f3951d64e2bb7a954871f6ebe44cc09cbdf4e536b`
+keeps its coordinator and geometry workers consistent during further builds.
+This demonstrates local development behavior, not desktop-host certification.
+
+The larger goal remains active. Native **section geometry is work in progress**:
+`cad_measure` now has a closed `section` query for an explicit displayed-world
+plane, optional exploded leaf offsets and optional leaf coverage. Per-solid
+native intersections retain analytic curves, tangent contacts and material cap
+faces with interior wires. Exact areas/perimeters accompany bounded derived
+meshes; interfering solids retain separate caps and explicitly summed areas.
+Source/evaluation/build qualification and durable jobs use the existing service.
+This is not yet wired into a live section action, cap renderer or controls.
+
+The current focused native run passes `live`, `measurement` and `section`,
+including oblique cylinders, annular holes, point/curve tangency, nested paths,
+exploded planes, unchanged source and historical jobs. Initial failures exposed
+a wrong edit-fixture operation and the general scalar reader's 1e6 limit applied
+to a declared 1e12 plane offset; both were corrected without narrowing the
+contract. Distance-only live schemas/runtime are kept separate from unfinished
+section presentation. Schema interning now handles identical nullable/union
+subtrees and estimates actual reference costs, retaining all constraints.
+**The discovery-size gate still fails: 435,022 compact bytes exceed the unchanged
+430,080-byte limit.** `section-focused-third.log` records three passing suites and
+the `app_protocol` failure. An independent schema-check attempt lacked
+`jsonschema`; no schema conformance or complete 45-suite pass is claimed for this
+prototype. The previous measurement increment's final 44-suite evidence below
+remains historical evidence for its own binary.
+
+Next: finish lossless discovery compaction, qualify section output with independent
+schema/MCP checks, then implement revision-safe live section state, native caps,
+hole-aware rendering/picking and actual browser evidence. Appearance/presets,
+annotations, declarative sequences, external-format review and intentional printer
+handoff remain in the full authorized scope. No printer action, auto-review
+rejection, commit or release occurred in this increment.
+
+## Exact measurements and live clearance review — active larger goal, 2026-10-08
+
+`cad_measure` is implemented locally as the **25th tool**. It uses current native
+source B-reps for face/edge/leaf pairs and up to 253 unordered pairs of 2–23
+assembly leaves. Reports distinguish explicit pair, all-leaf and subset coverage;
+they pin source/revision/evaluation/feature/build, provide closest-point witnesses,
+supported acute analytic angles, common solid material volume and caller-defined
+clearance findings. Contact does not imply positive-volume interference; containment
+does. Clipping, explosion and visibility do not change source measurements.
+MEASUREMENTS.md defines the closed schemas, tolerances and supported coverage.
+
+Private evaluation metadata now qualifies the actual native build and source
+hash. Missing, draft, changed-HEAD and mismatched source/build evaluations fail.
+Face/edge recovery uniquely matches recorded native geometry descriptors within
+the same qualified evaluation; enumeration indices are not stable names.
+Missing or ambiguous matches fail at feature level. Computation stays in bounded
+serial native workers, with cancellation/deadlines and source recheck under the
+document writer lock. Qualified historical job results remain historical.
+
+The embedded Exact measurement panel submits native durable jobs, chooses leaf
+parts or current picks, polls results, and exposes the job/query in agent context
+and Copy request. Reopening restores the current result; clear cancels pending
+work and removes its view reference. New evaluations retire results/endpoints.
+Version guards reconcile delayed sync and late replies. Polling an existing job
+preserves newly chosen endpoints instead of resetting the next query's inputs.
+
+The actual contact demo exposed a finite native candidate whose paired point did
+not agree with the zero distance. Returned witnesses now independently qualify
+finite coordinates, distance agreement and exact point-to-target support within
+1e-7 mm. At most 16 raw candidates are examined; inconsistent candidates are
+omitted with explicit rejected/truncation counts, and no qualified witness fails
+the operation. No geometry is repaired or changed to manufacture evidence.
+Translated plate/cylinder contacts and controller rejection fixtures cover this.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- **All 44 CTest suites passed against the final binary in 101.00 s**, including
+  **260 native measurement checks**, **162 native live checks**, **5,449 app
+  protocol checks**, **158 controller checks**, **40 native MCP live-loop checks**
+  and **56 renderer checks**. Analytic fixtures cover diagonal distances,
+  contact/containment/overlap, planes/lines/cylinders, nested paths, all 253 pairs,
+  subset bounds, ambiguity, cold-cache recovery, cancellation, deadlines, source
+  retirement and replay. Counts include variable polling.
+  `build-app-protocol/measurement-ctest-delivery-final.log` records the full run.
+- Independent **705 schema checks across 25 tools** and **2,458 official MCP SDK
+  2.3.0 checks** passed (`measurement-schema-delivery-final.log`,
+  `measurement-sdk-delivery-final.log`); these counts also include polling.
+  Compact discovery is **426,626 bytes**, under the unchanged **430,080-byte**
+  bound. Skill validation and `git diff --check` passed.
+- The relocated **empty-PATH** native bundle measures the analytic spacer gap
+  while presentation is exploded, preserves raw HEAD, ships MEASUREMENTS.md and
+  embeds the reviewed controls. Existing manufacture/review/slicing and all
+  earlier runtime smoke checks pass (`measurement-bundle-delivery-final.log`).
+  Windows/Linux execution and desktop-plugin host acceptance were not repeated.
+- Actual browser tab **14**, `http://127.0.0.1:61910/`, uses its own three-leaf
+  workspace. Pair clearance is **7 mm** at revision 1, unchanged by a **12 mm**
+  explosion. Two picked planar faces measure **10 mm / 0°**; a picked 3 mm edge
+  against a plane measures **0 mm / 90°**. All three leaf pairs, including a hidden
+  plate while clipping is enabled, yield **0 mm** minimum, **no material
+  interference**, and fail the caller's 1 mm requirement because of contact.
+  Two inconsistent native contact candidates are explicitly rejected; retained
+  witness coordinates agree with the reported distance. Reopen restores the
+  result, Copy request carries its native job/query, and clear removes only view
+  metadata. These operations preserve raw revision-1 HEAD. A deliberate demo-only
+  `upper_z:10→12` edit produces revision 2, retires the old result/endpoints and
+  rejects direct old queries. The new result is **9 mm**; historical revision-1
+  jobs remain qualified at 7 mm. Final view operations preserve raw revision-2
+  HEAD. Existing user demos were untouched.
+  `build/measurement-demo-qualified/evidence.json`, qualified contexts/job reports,
+  copied requests, edit/rejection records and screenshots retain this evidence.
+  `live-measured-gap-r2.jpg` shows the final source result beside exploded parts.
+  Preview host session **44950** serves actual bundled HTML through a loopback
+  protocol harness; it is not desktop-host certification. One accepted start
+  encountered temporary workspace contention before its reply; polling restored
+  the saved job without resubmission. Two MutationObserver TypeErrors had no
+  source URL; neither app nor harness contains a MutationObserver, and their
+  origin was not established. Two obsolete measurement preview hosts were stopped.
+
+Earlier verification failures were corrected rather than weakening bounds: the
+deadline fixture now expects the native `job_timeout` code, symmetry uses a valid
+circular pattern, and build/test symbols use the actual private evaluation and
+worker contracts. A broad run during the controller correction detected stale
+embedded bytes; the final rebuild and final 44-suite run establish exact reviewed
+asset provenance. The endpoint-retention regression failed before its fix and
+passes afterward. `measurement-verification.json` records the final evidence.
+
+Final executable SHA-256:
+`c7ec086b5d13bc79ffbab37486cb898803f3b891d0028f2d453147db34d4e7b4`.
+This is completed local progress within the still-active larger goal. Exact
+section geometry/caps, appearance/presets, annotations, declarative time sequences,
+external-format review and intentional printer handoff remain required by
+COMPOSITION_FABRICATION_REVIEW.md. The optional printer-backend preference remains
+unanswered and does not block viewer work. No hardware action or auto-review
+rejection occurred. Release signing/install/host gates remain independent; these
+increments are uncommitted and unreleased. Next increment: exact source-qualified
+section curves/caps with native jobs and live revision-safe inspection.
+
+## Live clipping and exploded inspection — active larger goal, 2026-10-08
+
+The native live-view contract now accepts closed `presentation` settings through
+`cad_viewer` context and returns current settings through ready sync and
+`cad_context`. The embedded Visual inspection panel controls uncapped clipping,
+axis/offset/kept side, exploded distance and reset. Explicit unit-vector direction
+overrides target current leaf paths. Native state is independent of editable
+geometry/history, preserves surviving settings across revisions, prunes removed
+overrides and resets on retargeting. No additional MCP tool was added.
+
+CPU picks and GPU rendering share displayed coordinates and the clipping half-
+space. Clipped surfaces do not occlude picks; edge segments are clipped before
+testing. Shared source vertices are separated by occurrence only when needed for
+explosion, preserving original measurements and references. Adaptive depth bounds
+support large exploded displacements. Clipping-only changes update uniforms and
+picking without rebuilding vertex buffers. Context loss restores settings.
+Ordered persistence and version guards cover delayed sync, failed-write retries,
+external same-evaluation updates and Quick Edit snapshot invalidation.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- **All 43 CTest suites passed in one final run, 168.29 s**, including **162 native
+  live checks**, **5,381 app protocol checks**, **144 controller checks**, **40
+  native MCP live-loop checks** and **56 renderer checks**. Analytic renderer
+  fixtures cover clipped occlusion/edges, shared vertex ownership, source
+  immutability, extended depth, malformed settings and graphics recovery. Native
+  fixtures cover atomic rejection, revisions, restart and retargeting.
+  `build-app-protocol/presentation-ctest-final.log` records the complete run.
+- Independent **656 schema checks across 24 tools** and **1,684 official MCP SDK
+  2.3.0 checks** passed (`presentation-schema-final.log`,
+  `presentation-sdk-final.log`); SDK counts include variable polling. Compact MCP
+  discovery is **406,442 bytes**, under the unchanged **430,080-byte** bound.
+  Skill validation and `git diff --check` passed.
+- The relocated **empty-PATH** bundle passed native presentation save/read across
+  separate processes with unchanged raw HEAD, shipped presentation guidance,
+  exact embedded-resource provenance, and all existing native fabrication/slicing
+  smoke checks (`presentation-bundle-final.log`). Windows/Linux execution and
+  actual desktop-plugin host acceptance were not repeated for this increment.
+- Actual browser tab **13**, `http://127.0.0.1:56227/`, uses a separate copied
+  six-part curved-linkage workspace. Exercised explosion, clipping, reversal,
+  axis/offset, Fit, native source-qualified face selection, Copy request,
+  reopen/restoration, external revision refresh, visibility and reset. The picked
+  `base` face resolves natively to **528 mm²** within numeric tolerance and source
+  center **[30,-30,4] mm** while exploded. Copy request includes the original
+  reference, camera and presentation. View changes preserve the copied source;
+  an intentional demo-only thickness edit produces revision 2, retains settings
+  and retires the prior pick. Original user demo HEAD remains revision 2 and its
+  earlier draft is untouched. `build/presentation-demo/evidence.json`,
+  `browser-selected-context.json`, `resolved-face.json` and edit records retain
+  the evidence. Screenshots: `assembled.jpg`, `selected-exploded.jpg` and
+  `live-inspection.jpg`. Preview host session **34989** serves the actual bundled
+  app through a loopback protocol harness, not a certified desktop host. One
+  console MutationObserver TypeError had no source URL; neither viewer nor
+  harness contains a MutationObserver, and its origin was not established.
+
+The first focused test run encountered stale compiled assets and an incorrect
+mocked-context-loss buffer count; rebuilding assets and accounting for implicitly
+invalidated buffers corrected those fixtures. An SDK assertion initially compared
+timestamps across a valid context update; its baseline now follows that update.
+The final focused six-suite run and the full run both pass. Runtime bounds and
+source/history invariants were not weakened.
+
+Final native executable SHA-256:
+`fd2dac17d6b19fd867e9940a3c090819e35bfceb2d0d0f13b91b0318bdc159d8`.
+This is verified local implementation progress; the full goal remains active.
+Clipping is tessellated and uncapped, with no exact new section surface/edge.
+Exact sections and topology-pair measurements/clearance, appearance/presets,
+annotations, declarative time sequences and external-format review remain in
+COMPOSITION_FABRICATION_REVIEW.md. Intentional printer handoff is also pending;
+an optional printer-backend preference is awaiting a response and does not block
+independent viewer work. No hardware action or auto-review rejection occurred.
+Existing release signing/install/host gates remain independent. These increments
+have not been committed or released.
+
+## Native installed slicing — active larger goal, 2026-10-08
+
+`cad_slice` is implemented locally as the **24th tool**, with `plan` and `run`
+actions in the shared native service, strict runtime schemas and durable jobs.
+The current driver supports **OrcaSlicer 2.4.2**, explicit **High Temp Plate**,
+self-contained compatible Marlin FFF machine/process/filament JSON profiles and
+one committed source solid. Executable and profile inputs require absolute
+regular non-symlink paths and actual raw SHA-256. Missing tools, unresolved or
+incompatible profiles, scripts, host post-processing, changed hashes and wrong
+CLI versions fail explicitly. Native core CAD retains no slicer/runtime dependency.
+`SLICING.md`, protocol, agent guidance and shipped bundle docs define the contract.
+
+Planning captures source, a native scoped STL, three exact profile snapshots,
+fixed argv/placement and a portable hash ledger without executing the slicer.
+Run requires the exact plan hash, committed revision/model/build identity and
+complete saved source. It retains the original self-contained plan under
+`reviewed-plan/`, regenerates its executed STL from the same committed native
+source, numerically checks exact volume/area/COM/bounds and topology counts,
+probes actual version, executes fixed native argv and checks actual effective
+profile IDs, bed/firmware/FFF semantics and disabled post-processing. Actual
+mesh/profile bytes must remain unchanged during execution. Native G-code review
+retains failed/unknown findings. Every published file except the manifest itself
+has a portable relative size/hash ledger; no hardware is contacted or approved.
+
+The first actual native run failed a byte-equality test between cold-plan and
+warm-cache STL exports before executing Orca. Cache-restored triangulation/
+serialization can differ for the same exact curved source. The corrected driver
+executes a newly generated native mesh, retains both original plan and actual
+mesh hashes, and verifies exact-source measurements within
+`1e-6 + 1e-9 * max(abs(values))`, with matching solid/face/edge counts. It never
+executes a plan-supplied replacement mesh or claims triangle/byte stability.
+Cold/warm curved-source and altered plan/summary regression fixtures now cover
+this behavior. The independent actual exported mesh check found **404 finite
+triangles / 606 welded edges**, every edge incident to two triangles at 0.00001 mm.
+This is edge-incidence evidence, not global self-intersection certification.
+
+External execution uses the existing four-worker admission slots and a private
+native supervisor with direct argv, restricted stdio, deadlines, aggregate
+memory/staging/log limits, cancellation and coordinator-only atomic publication.
+POSIX descendants share a process group whose leader remains unreaped until the
+coordinator kills descendants, avoiding a reaped-PID reuse window. Parent-death
+monitoring terminates orphaned supervision. Windows uses restricted inherited
+handles and Job Objects with per-process and aggregate memory limits and
+kill-on-close. These controls are for explicit trusted local tools; they are not
+a hostile-binary sandbox. Memory/disk sampling can overshoot between 10 ms
+samples. Hard coordinator death may leave private staging files; recovery marks
+the job interrupted and never promotes an incomplete package.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The strengthened native slicing suite passes **292 checks**, including actual
+  native child/descendant execution, spaces/UTF-8 paths, source-feature scoping,
+  profile snapshots after originals disappear, independently checked complete
+  package hashes, durable replay, contradictory plan execution/geometry,
+  changed inputs, wrong version/effective settings, exit/missing-output failure,
+  cancellation, deadlines, memory/log limits and actual supervisor/coordinator
+  hard death. It observes live processes before cancel/kill and verifies they
+  stop without published results or source mutation. The fixture only tests
+  process/contract plumbing; it is not a slicer-accuracy simulation. Windows
+  fixture paths/argv use wide APIs, but remote Windows/Linux execution was not
+  performed for this increment. Streaming SHA-256 known-answer/padding/chunk
+  checks cover the incremental implementation moved out of jobs.
+- **All 43 CTest suites passed in one final run, 168.42 s**, including native
+  geometry/cache/assembly/fabrication/G-code, jobs, live viewer, robot export and
+  mocked renderer suites (`build-app-protocol/slicer-ctest-final.log`). Final
+  independent **635 schema checks across 24 tools** and **1,800 official MCP SDK
+  2.3.0 checks** passed, including native plan/run fixture jobs and both direct
+  and job result schemas (`slicer-schema-final.log`, `slicer-sdk-final.log`).
+  SDK counts include polling and may vary. Skill validation and `git diff --check`
+  passed. Structurally identical schema subtrees now share local definitions,
+  retaining every constraint; compact discovery is **403,361 bytes**, below the
+  unchanged 420 KiB / 430,080-byte bound. Pretty CLI `tools` output is larger;
+  that is distinct from the compact MCP discovery payload.
+- The relocated bundle passed with **empty PATH**, shipped slicing guidance,
+  explicit missing-tool rejection and actual native fixture plan/run execution
+  using an externally supplied absolute fixture path. Independent raw plan/
+  G-code and every package size/hash were verified (`slicer-bundle-final.log`).
+  The test fixture is not installed or presented as a slicer. CI commands now
+  pass it into schema/SDK checks, but remote CI was not executed here.
+- Final actual **installed OrcaSlicer 2.4.2** integration ran through native
+  durable plan/run jobs on saved `curved_linkage_demo`, revision 2, feature
+  `arm`. The executable's raw identity remains
+  `f22fe59f43f167503f11802d49a984787c896bd8a0ebc0c0af6cc6912b33a801`.
+  Captured profiles are the explicitly resolved stock Prusa MK3S 0.4 nozzle /
+  0.20 mm Quality / Generic PLA profiles sourced in the earlier external demo.
+  Actual effective settings independently confirm 0.20 mm layers, 220°C nozzle,
+  60°C High Temp Plate, profile IDs and no post-processing. Native slicing
+  returned 0, **1,441 ms / 56,018,168-byte sampled peak group memory**, and
+  produced **447,303 bytes / 30 layers**. Orca estimates **22m 9s / 5.57 g PLA**.
+  G-code SHA-256 is
+  `f2823a6ae29d9707276ecd480c5118e20b94992147b926946691082320a53f9d`.
+  All **20 package artifacts** were independently size/hash verified and every
+  file accounted for. Native review counts **15,330 moves / 12,842 deposition
+  commands** and retains **unknown** full swept bounds/firmware behavior; passing
+  heater targets do not approve a printer. Source HEAD remains revision 2 and
+  existing model-viewer drafts/packages are preserved.
+  `build/native-slicer-demo/{plan-request,plan-job,run-request,run-job,evidence}.json`,
+  `independent-mesh-settings.json` and `slicer-real-final.log` retain exact calls
+  and evidence. The first failed attempt remains in `slicer-real-first.log`.
+- The installed CAD Viewer package still lacks its documented `agent:start`
+  script, confirmed by unchanged package metadata. The required G-code handoff
+  is unavailable for that concrete reason; it is not presented as a successful
+  CAD Viewer review. A separate localhost diagnostic loads a copied complete
+  native package and depicts programmed XY extrusion segments with the native
+  **unknown** physical-motion coverage visible. Actual browser first/final layer
+  seek, full-bed/part toggle, playback through the loop and pause were exercised.
+  Final screenshot: `build/native-slicer-demo/live-toolpaths.png`; browser tab 12,
+  `http://127.0.0.1:54537/`, preview host session 53968 (12-hour lifetime).
+  It is a diagnostic example, not completion of native external-artifact viewing
+  or declarative presentation sequences.
+
+Final native executable SHA-256:
+`96ec42c335249ad95aa2fde83bf4708c378cc9c9970a4fedf387c2ccec6d2956`.
+This is **verified local implementation progress**; the full goal remains active.
+Next required work is intentional printer handoff with explicit setup/dry-run
+and separate physical-start authorization, then all remaining presentation
+controls in COMPOSITION_FABRICATION_REVIEW.md. Other slicers/bed types, inherited
+profiles and multi-solid plates remain unsupported. No blocker or automatic
+approval rejection occurred. Existing 1.0 host/install/signing gates remain
+independent. These changes have not been committed or released.
+
+## Native static G-code review — active larger goal, 2026-10-08
+
+`cad_gcode_review` is now implemented locally in the shared native service and
+published as the 23rd tool. It accepts an existing absolute plain `.gcode`, its
+expected raw SHA-256, explicit Marlin machine/material/initial-state assumptions,
+and a caller-associated committed document/revision/feature. The package retains
+original bytes, the complete saved source, source-qualified findings and a
+portable relative hash ledger. Its association is explicitly not proof of
+toolpath/geometry equivalence; it never executes G-code or starts hardware.
+
+Native inspection tracks relative/absolute modes, mm/inches, Marlin's reset of
+M82/M83 overrides by G90/G91, G92 coordinate offsets/E resets, caller-declared
+home endpoints and known linear sweeps. G17/G18/G19 and G2/G3 use analytical
+quarter extrema for relative centers, signed-radius minor/major arcs, full
+circles and orthogonal helical travel. Numeric words/comments/optional raw XOR
+checksums, heater targets and commanded extrusion have bounded witnesses.
+Unsupported firmware commands, unknown coordinate frames, volumetric/tool/unit
+changes and unmeasured sweeps remain unknown. Unknown temperature units retain
+programmed values without labeling them Celsius; an unknown arc start does not
+imply measured deposition. This is static inspection under caller assumptions,
+not firmware, thermal, deposition, collision or printer-compatibility simulation.
+
+The operation uses existing isolated bounded native worker slots, Windows/POSIX
+containment, cancellable durable jobs and coordinator-only atomic publication.
+An additional parser bound is 64 MiB / 4,096 bytes per line / one million lines /
+30 seconds. A hash mismatch publishes no package. Failure/cancellation/deadline
+preserves source HEAD/history and previous exports. Durable replay works after
+the caller removes its original file. Runtime schemas, protocol, native guidance,
+GCODE_REVIEW.md and relocated bundle checks describe the implemented contract.
+Identical mutation result branches are deduplicated in the job schema without
+changing admission or output contracts; the discovery size limit is unchanged.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The native G-code suite passes **74 checks**, including analytical relative/
+  inch/G92 envelopes, all three arc planes and interior extrema, minor/major/full
+  circle/helix paths, malformed/checksummed text, unknown firmware/state/unit
+  semantics, original bytes/raw hashes/portable package, unchanged HEAD, failed
+  publication, actual worker cancellation, deadline and durable replay. Initial
+  test corrections added a missing required model `parameters` field and captured
+  exports before starting the cancellation fixture, rather than treating its
+  temporary staging directory as a published result. Runtime limits were not
+  weakened.
+- **All 42 CTest suites have passed against the same final native binary.** The
+  broad run passed 41 in 143.52 s (`gcode-ctest-final.log`); its only failure was
+  the live suite's expected tool count of 22. After updating that fixture for the
+  required 23rd tool, live passed **145 checks / 11.71 s**
+  (`gcode-live-final.log`). This is combined evidence, not a claim that the first
+  broad run was green. `build-app-protocol/gcode-verification.json` records the
+  complete suite/evidence audit. Final **589 schema checks across 23 tools** and
+  **1,665 official MCP SDK 2.3.0 checks** passed (`gcode-schema-final.log`,
+  `gcode-sdk-final.log`; polling affects counts). Skill validation and
+  `git diff --check` passed. Compact discovery is **429,316 bytes**, below the
+  unchanged 420 KiB bound (430,080 bytes).
+- The relocated bundle passed with **empty PATH**, including native relative-
+  motion failure, unchanged original G-code bytes, independent raw report hashes
+  and shipped review guidance (`gcode-bundle-final.log`). No slicer or language
+  runtime is needed for this operation. Remote platform CI and installed desktop
+  client acceptance were not executed for this increment.
+- The final native service reviewed the actual **447,662-byte Orca output** from
+  the prior demo and independently verified all three package artifacts. It
+  counts **15,320 moves / 12,837 deposition commands**, with 220°C/60°C targets
+  passing the explicitly assessed ranges. Overall status is **unknown**: G28,
+  the G80 leveling macro, M115 and M862.1/M862.3 do not establish full firmware
+  behavior or a known physical frame. Complete swept bounds remain unknown;
+  the earlier helper's permissive pass is not promoted to native approval.
+  The exact G-code SHA-256 remains
+  `8be83dc552c0bfece39096ed9f8602b0cd43dd4613539a6b99067eb2faa4085d`.
+  `build/slicer-demo/native-review-{arguments,result,evidence}.json` and
+  `gcode-real-review-final.log` retain the actual native call/result. The curved
+  linkage's saved revision 2 and existing viewer drafts remain unchanged.
+
+Final native executable SHA-256:
+`2a432fb3bc3d6c51d12e74e484840701a2b842b6b94b14c331b4e7b4f6ec285d`.
+This turn is **verified implementation progress**. The full authorized objective
+is still active: the next increment must integrate installed slicers with
+explicit executable/profile identity, bounded cancellable native execution,
+actual output/provenance inspection and atomic publication. Intentional printer
+handoff and all remaining presentation controls in
+COMPOSITION_FABRICATION_REVIEW.md stay required. No blocker or automatic approval
+rejection occurred; these local changes have not been committed or released.
+
+## Real slicer workflow example — larger goal still active, 2026-10-08
+
+The requested skills example now takes the curved linkage's saved revision 2
+arm through an actual installed OrcaSlicer 2.4.2 CLI. This is **verified external
+workflow progress**, not an implemented native service slicing/printer tool.
+Production native/viewer code and the full acceptance scope are unchanged.
+The next implementation task remains bounded, cancellable native slicer jobs,
+explicit printer handoff, and the remaining presentation controls.
+
+The preferred backend was initially absent. Homebrew installation completed
+after its sandbox DNS/write restrictions were resolved by the allowed retry.
+Discovery and actual `--help` confirm the executable and version. The demo uses
+explicit bundled Prusa MK3S 0.4 nozzle, 0.20 mm Quality and Prusa Generic PLA
+profiles, with original files/hashes and resolved inheritance retained. No user
+machine was selected. Original source STL hash, finite triangles and welded
+edge counts were independently checked: 404 triangles; the mesh's bounds differ
+from exact curved B-rep bounds by the existing export tessellation approximation.
+
+The first CLI execution correctly failed process compatibility (exit 239).
+Inspection of the matching upstream source showed its CLI checks an explicit
+compatible-printer list rather than the bundled condition. The demo evaluates
+that unchanged condition for the exact MK3S 0.4 profile and materializes only
+that one matching printer in its derived profile, retaining the originals.
+Fabrication settings and native validity checks were not weakened. The first
+successful output exposed Orca's default Cool Plate at 35°C; that diagnostic
+file is kept separately. The final reviewed dry-run and execution explicitly
+select High Temp Plate, matching the stock 60°C value. A private `--datadir`,
+direct argv, 120-second time bound and 2 MiB log bound apply to this developer
+example. These do not establish the required cross-platform native resource
+containment, process cancellation or production job integration.
+
+Executed locally:
+
+- Final real slicing returned 0 in 0.21 s. Its **447,662-byte plain G-code**
+  contains **30 layers at 0.20 mm**; slicer estimates are **22m 7s / 5.57 g PLA**.
+  Raw SHA-256 is
+  `8be83dc552c0bfece39096ed9f8602b0cd43dd4613539a6b99067eb2faa4085d`.
+- The installed G-code validator passes its checks with unknown firmware-command
+  warnings. Independent inspection matches effective machine/process/material/
+  plate settings, finite explicit G0/G1 coordinates and 220°C/60°C targets.
+  Recorded motion includes the stock Y=-3 purge position and Z=55 end lift.
+  No arcs or relative XYZ occur. Initial units, incomplete coordinates, homing,
+  leveling, firmware checks, thermal behavior and physical printing have explicit
+  coverage limitations. No printer was contacted or print started.
+- A standalone diagnostic browser preview renders **12,837 actual XY extrusion
+  segments**. Actual browser execution verifies first/final layer seek, part/bed
+  views, playback advancing through looping, pause and restoration to layer 15.
+  `build/slicer-demo/live-toolpaths.jpg` captures the rendered result; the review
+  is at `http://127.0.0.1:57503/` with a 12-hour loopback host lifetime. Existing
+  CAD drafts/previews remain untouched. This preview is not a native viewer feature.
+- `build/slicer-demo/` retains exact STEP, STL, drawing, editable source, native
+  profile originals, effective settings, dry-run argv, logs, static coverage and
+  a **25-artifact hash ledger**. Each recorded size/hash was independently checked;
+  the saved source revision/model still match the original package.
+- CAD Viewer startup failed because its installed package lacks the documented
+  `agent:start` script. Explicit final and diagnostic G-code paths are recorded
+  in `review.json` with the failed handoff. The standalone diagnostic preview is
+  the fallback; no CAD Viewer integration claim is made.
+
+At that external-example stage no production source changed; its evidence did
+not claim new native/platform acceptance. The later native inspection increment
+above records the current implementation and its separate validation.
+`git diff --check` passed. No automatic approval rejection or repeated goal
+blocker occurred. The full goal remains active with no scope reduction; native
+slicer integration and the other pending acceptance items are still required.
+
+## Verified sourced-part identity — active larger goal, 2026-10-08
+
+`cad_import` now accepts optional `expected_sha256` and `purchase`. It hashes
+unchanged local STEP bytes and binds caller supplier/part/source identity to
+that measured artifact. A supplied expected/purchasing hash must match, otherwise
+`artifact_mismatch` publishes no revision. Saved sourced `import_step` features
+require the exact matching purchasing hash; ordinary imports remain compatible.
+No URL fetching, catalog code execution or manufacturer/history inference is
+introduced into native CAD. Discovery/download remains an explicit agent workflow.
+
+Unchanged imports and pure transform/instance chains derive purchase identity
+into rolled-up and hierarchical BOMs, including revision-pinned component reuse.
+Geometry-changing features do not imply the unchanged purchased part. Explicit
+BOM purchase must agree with its verified source; contradictions fail validation
+and preserve HEAD/history. Purchasing-only edits reuse the same geometry keys,
+while BOMs always read current intent. Item/material/process claims are not guessed.
+
+Manufacturing packages now include an unchanged sourced leaf's original
+`source.step` alongside independently exported geometry, with relative
+`source_artifact` path/hash/source-feature identity and the ordinary hash/byte
+ledger. This works for standalone scoped solids and nested assemblies. Component
+captures remain self-contained after source-file/library removal or source HEAD
+updates. Existing worker, package, cancellation and publication bounds apply;
+imports retain the 512 KiB/UTF-8/complete-root/valid-geometry requirements.
+PURCHASED_PARTS, protocol, examples, native guidance and relocated docs define
+the extended contract. Application discovery still has 22 tools.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The new native suite passes **78 purchased-part checks**: independent OCCT STEP
+  readback/volume, exact source bytes and actual hashes, malformed/mismatched
+  provenance, no publication on failure, deleted-file receipt replay, nested
+  quantities/occurrence paths, rigid copies versus modified geometry, contradictory
+  BOM edits, current metadata on cached shapes, historical/source-free pinned
+  components, portable package originals and independent artifact hashes, async
+  import success/replay and failed checksum jobs. One initial assertion required
+  bit-exact floating-point volume; it now uses the project's existing 0.000001 mm³
+  integration tolerance, with independent STEP volume verification retained.
+- The final broad run passed all **41 suites in 150.70 s**
+  (`build-app-protocol/sourcing-ctest-final.log`). Final **557 schema checks**
+  passed (`sourcing-schema-final.log`), including sourced imports, derived BOM,
+  original-file packages and required raw-model hash contracts. **1,298 official
+  MCP SDK 2.3.0 checks** passed (`sourcing-sdk-corrected-final.log`; polling affects
+  counts). The initial SDK fixture attempted unsupported `cad_export.feature_id`;
+  it was corrected to export the actual declared output, without changing the
+  export contract. Compact discovery is **423,739 bytes**, below the unchanged
+  420 KiB bound. Skill validation and `git diff --check` passed.
+- The relocated bundle passed with empty PATH, including actual native export,
+  sourced import with measured hash, preserved original STEP bytes in its package
+  and shipped sourcing guidance (`sourcing-bundle-final.log`). Remote platform CI
+  and installed desktop-host acceptance have not run this increment.
+- A real step.parts catalog search/download was executed, with sandbox DNS failure
+  resolved by the permitted network retry. Its M5 washer file is **14,999 bytes**;
+  raw SHA-256 matches the published
+  `51ff899874c1b231d8b120a3c92d5657faf50d085897c2b7fc6d92e27e10fe5a`.
+  The current catalog asserts **1.1 mm** thickness, while the unchanged STEP spans
+  **2.2 mm**, from Z=-1.1 to +1.1. Native volume **124.2515602458031 mm³** agrees
+  with the independently computed annulus volume at that actual height. Source
+  metadata is retained separately; no standards/seller claim or mesh substitution
+  hides the discrepancy. Source records/evidence are in `build/sourcing-demo/`.
+- The saved sourced-washer assembly **revision 2** has one editable plate and
+  two occurrences of its pinned imported washer, with nested paths
+  `hardware/left` and `hardware/right`. Measured stock review explicitly fails
+  the catalog thickness comparison and retains unknown unsupported checks.
+  Its native package contains **11 hashed artifacts / 245,152 bytes**, including
+  original supplier STEP, independent leaf/assembly exports, complete editable
+  source, BOM and failed review. Independent hashes, byte totals, source equality
+  and unchanged export-time HEAD were verified. No physical supplier was selected;
+  the recorded supplier label explicitly identifies the CAD catalog.
+- Actual browser rendering and selection show three solids and identify the
+  selected washer face as `hardware/left`, revision 2, with matching native view
+  context (`selected-context.json`). `live-sourced-assembly.jpg` captures that
+  view. The separate installed CAD Viewer launcher lacks its documented
+  `agent:start` script, so that skill's handoff could not start; the native
+  embedded viewer was used through the temporary loopback acceptance host.
+  The new review is at `http://127.0.0.1:54937/`; existing user previews are untouched.
+  Final native SHA-256:
+  `e1697d2b7a2cdfdd9ec152277fbf8502dc2af877fab659a98a9add894b5cbd53`.
+
+Next: installed slicer integration and explicit printer handoff, then the remaining
+interactive presentation/review work in COMPOSITION_FABRICATION_REVIEW.md.
+The larger goal remains active. These increments are not committed or released;
+native and browser verification do not establish installed desktop-host readiness.
+
+## Measured native fabrication review — active larger goal, 2026-10-08
+
+`cad_fabrication_review` is the twenty-second tool. It measures an explicit
+committed revision against caller-supplied FDM, CNC, sheet/laser or molding
+profiles and publishes a checksummed JSON artifact with source/model/revision,
+kernel and native build identity. Reports distinguish measured passes, measured
+failures and unsupported or unevaluated checks. Successful execution can return
+failed findings; no status implies production approval. Profiles require an
+explicit build frame and never infer machine/material limits or allowances.
+
+Native checks include exact oriented B-rep bounds, all-triangle welded mesh
+topology, sampled exact inward wall chords, FDM overhang area, axial concave
+cylinder radius and sampled CNC access, prismatic sheet form and explicit stock
+thickness, and sampled signed mold draft/pull obstructions. Global minimum wall,
+mesh self-intersection, swept cutter/fixture access, complete mold release and
+actual slicing remain unknown. Checks record methods, coverage, skipped samples
+and bounded witnesses; face/triangle identifiers are report-local evidence, never
+persistent design references. `FABRICATION_REVIEW.md` defines these limits.
+
+Unique assembly sources are reviewed in source coordinates, retaining quantities
+and occurrence paths. Exact B-rep distance and common-solid volume use actual
+saved occurrence transforms. Touching faces/edges contribute no material volume.
+Assemblies of at most 23 leaves measure all pairs; larger assemblies require
+explicit bounded pairs or report unknown. Per-source profiles are complete
+overrides. Limits include 256 sources/pairs, 200,000 total triangles, 128 samples
+per source and 4,096 total, within existing worker and 64 MiB report limits.
+
+All geometry remains serial inside isolated workers. The coordinator publishes
+only completed artifacts under the document lock and final cancellation check;
+failed or cancelled work preserves HEAD/history and earlier exports. The same
+options can join `cad_manufacture` as a hashed `review.json`, retaining failed or
+unknown findings in the manifest. Omission still means `not_evaluated`.
+Schemas, examples, native agent guidance and relocated runtime docs are updated.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The new analytic suite passes **78 checks**, including exact rotated bounds,
+  plate/tube wall witnesses, overhang reorientation, cylindrical cutter limits,
+  blocked tool access, sheet stock/form, independently imported tapered STEP
+  draft/undercuts, nested/rotated gaps and overlaps, zero-volume touching,
+  bounded pair subsets, mesh topology failure, overrides, raw hashes, historical
+  replay, integrated package findings and cancellation after native work starts.
+  Invalid inputs and failed/cancelled publication preserve source revisions.
+- Initial checks caught the unchanged 420 KiB discovery bound, the separate job
+  admission whitelist and the official SDK's explicit root object-type
+  requirement. Shared schema definitions retain constraints while reducing final
+  compact discovery to **422,015 bytes**; both native admission and root schema
+  regressions are covered. The final broad run passed **39 of 40 suites in
+  147.05 s** (`fabrication-ctest-clean-final.log`): the new mesh fixture used an
+  invalid zero pattern step. Correcting it to valid touching plates, without
+  weakening native validation or assertions, made the affected suite pass in
+  **2.86 s** (`fabrication-affected-final.log`). This gives combined passing
+  coverage of all **40 suites** on the unchanged final native executable.
+- Final **543 schema checks across 22 tools** and **1,300 official MCP SDK 2.3.0
+  checks** passed (`fabrication-schema-clean-final.log`,
+  `fabrication-sdk-clean-final.log`; polling affects SDK counts). The relocated
+  bundle passed with empty PATH, including native fabrication of the pinned
+  component consumer, independent raw report hash/identity verification and
+  packaged review guidance (`fabrication-bundle-final.log`). Skill validation
+  and `git diff --check` passed. Remote platform CI has not run this increment.
+- The actual curved-linkage demo reviews saved **revision 2**, six source parts,
+  **162 exact UV samples** and all **15 saved-pose occurrence pairs**. Illustrative
+  inputs are a 200 mm envelope, 2 mm sampled-wall limit, 45° FDM overhang and
+  0.5 mm clearance. The spindle has **52.965 mm²** above that overhang angle.
+  No pair has positive-volume interference; touching pairs fail the illustrative
+  clearance limit. No global thickness or fabrication approval is inferred.
+  The **49,690-byte** hashed report and a new **18-artifact / 710,293-byte** native
+  manufacturing package preserve these failed findings. Independent hashes,
+  byte totals, source/build identity, portable paths and unchanged HEAD/history
+  were verified (`build/fabrication-demo/evidence.json`). The existing unsaved
+  live pose and previous seven-sheet drawing package remain unchanged.
+  Final native SHA-256:
+  `bc88f0bec278b56bc734cb03ea54bb63ff33e9836def7a20adcb7bdd0e8ca2bd`.
+
+Next: purchased-part sourcing/import, installed slicer and printer handoff, and
+the remaining presentation work in `COMPOSITION_FABRICATION_REVIEW.md`.
+The larger goal remains active. These increments are not committed or released;
+native verification does not establish installed desktop-host readiness.
+
+## Native manufacturing packages — active larger goal, 2026-10-08
+
+`cad_manufacture` is the new twenty-first tool. An explicit committed revision
+produces a movable directory containing complete editable source, unique leaf
+STEP/STL/PDF/SVG/DXF files, drawing recipes and measured dimensions, saved
+assembly geometry and occurrence transforms, BOM JSON/CSV and a relative-path
+SHA-256 manifest. Source parts remain in their original feature coordinates;
+assembly exports retain the saved pose. Scoped solid outputs are supported.
+Repeated leaf sources export once with derived quantities and occurrence paths.
+
+Saved BOM `purchase` metadata preserves caller supplier/part identity, an
+HTTP(S) source URL and optional artifact hash through nesting and component
+capture. CSV adds four purchasing columns and retains formula neutralization.
+No supplier URL is fetched or independently verified by this metadata field.
+Process/material assumptions and notes are explicit caller inputs; the package
+records process review as `not_evaluated`. No slicing or hardware action occurs.
+
+Geometry and drawing generation run serially inside an isolated native worker.
+Only the coordinator publishes the complete private generation, under the
+document publication lock and final cancellation check. Failed or cancelled work
+removes its staging directory and preserves HEAD, history and previous exports.
+Limits are 256 unique source parts, 2,560 artifacts, 64 MiB per file and 256 MiB
+for the complete package, including its manifest. Generated part-directory names
+keep Windows device identifiers out of filenames. `MANUFACTURING.md`, schemas,
+protocol, examples, agent guidance and the relocated bundle define the contract.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The initial broad run passed 38 of 39 suites and exposed duplicate tool-schema
+  expansion exceeding the existing 420 KiB discovery bound. Shared drawing,
+  BOM, mate and identity definitions reduce final compact discovery to
+  **420,191 bytes**, retaining all constraints and the unchanged bound.
+  After the final build, all **39 suites passed in 145.27 s**
+  (`build-app-protocol/manufacturing-ctest-clean-final.log`). Earlier verification
+  overlapped a rebuild and is not the final build's acceptance evidence.
+- The new suite records **409 manufacturing checks**. Independent OCCT STEP
+  readback verifies valid shapes, solid counts and volumes; independent binary
+  STL decoding verifies finite bounds and watertight fixture edges. Tests cover
+  unique nested sources, placement, drawing dimensions, purchase metadata,
+  hashes/bytes, movable packages, source-free pinned-component rebuilds, invalid
+  recipes after staging, historical export/job replay, and cancellation after
+  actual native STEP generation begins. Historical documents and exports remain
+  unchanged throughout failed or cancelled generation.
+- Final **526 schema checks across 21 tools** and **1,129 official MCP SDK 2.3.0
+  checks** passed (`manufacturing-schema-clean-final.log`,
+  `manufacturing-sdk-clean-final.log`; polling affects counts). The final relocated
+  bundle passed with empty PATH, including historical pinned-component package
+  generation, independent manifest hash/byte checks and complete editable source
+  (`manufacturing-bundle-clean-final.log`). Skill validation and `git diff --check`
+  passed. Remote platform CI has not run this increment.
+- The actual curved-linkage demo exports saved **revision 2**: six unique source
+  parts, **68 hashed artifacts**, **1,272,901 bytes**, six A4 part sheets and one
+  A3 assembly/BOM sheet. Independent hashes and byte totals match the manifest;
+  editable source equals the committed model and original HEAD/revision hashes
+  are unchanged. All seven PDFs were rendered with Poppler and visually inspected.
+  The arm drawing measures nominal 76 mm width, 6 mm thickness and 26.119 mm
+  overall profile height. Evidence and PNGs are in `build/manufacturing-demo/`.
+  Native SHA-256:
+  `55ae203653c9123e8019d6a1ff95727f99c90f82eb651ee570c2e4506599b890`.
+  Its existing live preview still shows the unsaved 45° arm / 8 mm spindle lift;
+  that draft was inspected without saving or resetting it. Package geometry is
+  explicitly from the saved revision, not that unsaved preview.
+
+Next: measured fabrication/process review, sourcing/import, slicer/printer
+handoff and the remaining presentation work in `COMPOSITION_FABRICATION_REVIEW.md`.
+The larger goal remains active. These increments are not committed or released;
+native package verification does not establish installed desktop-host readiness.
+
+## Dependency-level native caching — active larger goal, 2026-10-08
+
+Workers now restore unchanged exact features individually, using fingerprints
+of each feature's geometry intent, referenced parameters, upstream keys and
+native build/SDK/kernel identity. Complete model snapshots remain a fast path.
+Assembly B-rep snapshots retain independently copied compound children;
+restoration validates shapes and occurrence transforms, rederives hierarchy and
+motion, and computes ownership from the actual restored children. No saved
+face/edge enumeration becomes a persistent design reference. Private snapshot
+format 2 invalidates old derived entries through the native build fingerprint.
+
+Every feature is still validated, including branches outside the output. Unused
+parameters, BOM/preset metadata and component source provenance do not invalidate
+shapes; summaries always use current intent. Projection keys follow the output
+closure, so a changed spare branch is validated without reprojecting unchanged
+output. Failed native features/drawings publish no preceding worker stages.
+Coordinators retain publication and cancellation checks. New feature stages have
+a 32 MiB aggregate encoded limit per worker, alongside the existing 32 MiB model
+snapshot, 64 MiB entry and shared 128-entry / 256 MiB cache bounds. Kernel state
+remains serial and process-local; callbacks carry JSON only.
+
+`DEPENDENCY_CACHE.md`, protocol, assembly guidance, development commands and the
+relocated bundle describe the behavior. There are no new public tools, response
+fields or runtime dependencies. The developer-only native benchmark is excluded
+from runtime bundles.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The broad **38-suite** run passed 35 suites in **140.32 s** and exposed three
+  assertions requiring bit-exact integration measurements after B-rep restore
+  (`dependency-cache-ctest-final.log`). Diagnostic runs established that drawing
+  files/dimensions and preview operations were exact, with only final-digit
+  differences in volume, area and center of mass. Numerical comparisons now
+  preserve exact IDs, metadata, ownership, counts and structure; drawing artifact
+  checks remain byte-exact. Final `motion`, `cache` and `assembly_drawing` suites
+  passed in **28.52 s** (`dependency-cache-affected-final.log`), giving combined
+  passing coverage of all **38 suites**. Final detailed output records **840
+  motion**, **44,662 cache** and **62 assembly-drawing** checks.
+- The new dependency suite covers radius/thickness/profile/pose/placement edits,
+  nested repeated ownership, current metadata on full hits, hidden-branch
+  projection reuse, corrupt B-reps/occurrences/provenance/checksums, cache deletion,
+  failed-build publication, independent cached STEP readback, pinned source
+  updates and consumer history. Parallel projection checks verify cold and warm
+  dependency decisions in actual separate processes, with aggregate limits and
+  failure cleanup. Existing job/transaction suites verify cancellation and HEAD
+  preservation.
+- **501 schema checks across 20 tools** and **1,022 official MCP SDK 2.3.0 checks**
+  passed (`dependency-cache-schema.log`, `dependency-cache-sdk.log`; polling
+  affects counts). The relocated bundle passed with empty PATH, including a bound
+  child pose edit that publishes only two changed assembly dependencies while
+  retaining both imported-solid entry files and hashes. It also rebuilds the
+  component in a workspace without its library. `dependency-cache-bundle.log`
+  records the result; `git diff --check` passed. Remote platform CI has not run
+  this increment.
+- The native 128-hole panel/two-adapter benchmark independently compared three
+  width edits: exactly five feature hits and two rebuilds each time, with matching
+  cold geometry. Incremental times were **0.484 / 0.481 / 0.453 s**, against
+  **0.508 / 0.503 / 0.505 s** cold (**1.04–1.12×**). Unchanged evaluation took
+  **0.241 s**, against **0.502 s** initially. This fixture demonstrates selective
+  work with a modest measured edit benefit, not a general large-speedup claim.
+  Evidence: `build/dependency-cache-benchmark/.pending-XXMsOk/report.json` and
+  `build-app-protocol/dependency-cache-benchmark-final.log`. The report includes
+  intent, per-feature decisions, kernel/build identity and native SHA-256
+  `93c98992f59403098ad274cbe8498213de41a0b5231edc1063db5e76829c306a`.
+
+The user's existing curved-linkage preview and both assembly demos remain open;
+the current linkage pose was inspected and captured without saving or resetting
+it (`build/showcase-20261008/new-skills-example.jpg`). Their original browser
+evidence remains qualified to the native builds recorded at their checkpoints.
+
+Next: revision-qualified manufacturing packages, then measured process review,
+sourcing, slicer/printer handoff and the remaining presentation work in
+`COMPOSITION_FABRICATION_REVIEW.md`. The larger goal stays active; this increment
+and the preceding composition work are not committed or released.
+
+## Pinned editable components — active larger goal, 2026-10-08
+
+`set_component`, `detach_component` and `remove_component` are ordinary atomic
+edit/preview operations. Capture names an explicit saved source revision and
+optional output feature. Its required dependency graph becomes editable local
+features, with deterministic feature/parameter maps and explicit consumer scalar
+bindings. The complete checksummed source snapshot stays in the consumer;
+ordinary rebuilds, edits and exports require no source library. Source updates
+are explicit, preserve the local root ID and reject local edits unless replacement
+is requested. Summary/viewer provenance identifies the pin and changed local IDs.
+Nested source provenance is bounded to four levels and 64 components, within
+existing document, feature, parameter, geometry and worker limits.
+
+`COMPONENTS.md`, runtime schemas, protocol, bundled native skill and paired
+`component-assembly` examples define the implemented contract. No end-user
+runtime or new tool was added. Shared job and model-identifier schema definitions
+keep complete MCP discovery at **415,164 compact bytes**, below its unchanged
+420 KiB regression bound.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- The broad 37-suite run passed 35 suites and exposed excessive schema duplication
+  plus an invalid cancellation fixture that held the publication lock needed by
+  cancellation (`build-app-protocol/components-ctest.log`, 136.14 s). Both were
+  corrected without relaxing acceptance bounds. Final affected suites `model`,
+  `protocol`, `app_protocol`, `component`, `service` and `live_mcp_flow` all passed
+  in **21.65 s** (`components-final-checks.log`); combined coverage includes all
+  **37 suites**. That final run records **56 component checks**, **4,852 app
+  protocol checks**, **138 service checks** and **40 live MCP checks**.
+- Component checks include exact STEP readback, copied consumers without source
+  libraries, source/consumer history, local-edit conflicts and preview, final-batch
+  parameter bindings, nested provenance limits, long-ID collisions, selector
+  remapping, kernel failure, snapshot restore, request replay and cancellation
+  during real native geometry work. Cancellation preserves the whole old model.
+- Final **503 schema checks across 20 tools** and **1,012 official MCP SDK 2.3.0
+  checks** passed (`components-schema.log`, `components-sdk.log`; polling affects
+  SDK counts). The final relocated bundle passed with empty PATH, including
+  pinned historical capture, parameter-driven child motion, a source-free
+  workspace rebuild and packaged component guidance (`components-bundle.log`).
+  `git diff --check` passed. Remote platform CI has not run this increment.
+
+Actual browser demo: two imported hinge occurrences preview and save 75 degrees
+as consumer revision 3 with preset `paired_hinges`. Reopening the verified build
+retains that pose. The viewer shows its source pin at revision 1 and local edits,
+while the library itself is revision 2. A refresh correctly returns
+`component_modified`; an explicit replacement preview changes volume from 6,208
+to 6,288 mm³ without changing saved revision 3. Exact STEP and BOM are exported.
+`build/component-demo/evidence.json`, `browser-state.txt`, `component-review.jpg`
+and the saved request/results preserve the evidence. This is local browser
+acceptance through a test stdio host, not installed desktop-host acceptance.
+The earlier curved-linkage and nested-module demos remain separate and open.
+
+Next: dependency-level native caching, then manufacturing packages, measured
+fabrication/process review, sourcing, slicer/printer handoff and the remaining
+presentation work in `COMPOSITION_FABRICATION_REVIEW.md`. The larger goal stays
+active. These composition increments are not committed or released.
+
+## Composed motion and robot handoff — earlier checkpoint, 2026-10-08
+
+The embedded Motion panel now selects reachable moving assembly definitions,
+lists their affected occurrence paths and previews child joints in the complete
+parent composition. Repeated occurrences share source pose values. Drafts from
+different definitions combine; Save commits them atomically as one revision.
+An optional preset belongs only to the selected definition. Reset also works
+when the displayed parent has no moving joints of its own. Runtime summaries,
+schemas, protocol and bundled agent guidance describe this scope explicitly.
+
+Nested robot export now retains all physical leaves, parent and child joints,
+cylindrical carriers and definition-scoped presets. Each subassembly attaches
+through a physical grounded anchor, without invented empty bodies or inertias.
+Length-encoded occurrence names avoid XML identifier collisions. Reused source
+definitions export unit-ratio mimic relationships with explicit ledger evidence.
+Independent URDF/SDF forward kinematics covers three levels, rotated datums,
+multiple roots, parent motion, repeated and independently posed definitions,
+authored mixed-unit couplings and all child presets. It also exposed and fixed
+loss of rotation precision when serializing near a quarter-turn pitch.
+
+Persisted views now qualify frozen data and pending read jobs by the native
+build. Upgrade refreshes derived geometry without discarding draft intent or
+admitted-save identity. The browser restores a same-document camera even when
+its old geometry pick is stale; stale picks remain unusable. Regression tests
+cover committed/draft refresh, obsolete completed reads, save reconciliation,
+camera/visibility retention and unchanged historical source.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- All **36 CTest suites passed** in two complementary runs: six focused suites
+  in **32.68 s**, then the other 30 in **96.18 s**. Logs:
+  `build-app-protocol/composed-upgrade-focused.log` and
+  `composed-upgrade-regression.log`. The focused details record **2,105 independent
+  robot XML/FK/artifact checks**, **112 composition checks**, **765 motion checks**
+  and **145 native live checks**; job polling contributes to some counts.
+- **471 schema checks across 20 tools** and **852 official MCP SDK 2.3.0 checks**
+  passed (`composed-upgrade-schema.log`, `composed-upgrade-sdk.log`).
+- The final browser camera fix passed **130 UI bridge/state checks** and all
+  three affected suites (`live_ui`, `app_protocol`, `live_mcp_flow`) in **5.70 s**.
+  Log: `composed-camera-checks.log`. Native geometry sources did not change in
+  that follow-up. The rebuilt relocated bundle passed with empty PATH, including
+  nested child pose editing, historical intent and composed URDF/SRDF export;
+  see `composed-camera-bundle.log`. Remote platform CI has not run this increment.
+
+Actual browser evidence: the existing nested-module workspace exposes child
+controls, previews/resets the shared pivot, saves `nested_review` at 30 degrees
+as revision 2, reloads and recalls that preset. Three hidden leaf paths remain.
+The first upgrade test exposed the camera reset; after its fix, a controlled
+legacy-view fixture verifies re-evaluation with the recorded camera preserved.
+`build/composition-demo/child-motion-evidence.json`, `camera-upgrade-fixture.json`
+and `child-motion-review.jpg` record the result and current asset/native hashes.
+The separate curved-linkage showcase remains open with its user's unsaved pose
+unchanged. This is local browser evidence, not installed desktop-host acceptance
+or an external ROS/Gazebo simulation claim.
+
+Next: pinned cross-document component snapshots with explicit parameter mappings
+and atomic updates, then dependency-level caching. Manufacturing packages,
+measured fabrication/process review, sourcing, slicer/printer handoff and the
+remaining presentation work in `COMPOSITION_FABRICATION_REVIEW.md` are still
+pending. The larger goal remains active; no release or commit of this work has
+been made.
+
+## Nested composition foundation — earlier checkpoint, 2026-10-08
+
+The owner authorized the remaining assembly-composition, fabrication-workflow
+and presentation/visual-review work. `COMPOSITION_FABRICATION_REVIEW.md` retains
+the full scope; this first increment does not complete that goal.
+
+Assembly inputs can now reference earlier assemblies. Native evaluation retains
+independent exact leaf solids, composes every parent placement with the child's
+evaluated motion, and publishes occurrence paths such as `left/link` and
+`right/link`. `assembly.tree` records hierarchy and owning definitions. Repeated
+subassemblies share source dimensions and joint values. Expansion is bounded
+before kernel work: eight levels, 1,024 leaves per assembly, 4,096 expanded leaves
+across definitions, while direct 64-part and document 256-declaration limits stay.
+Coincident occurrences retain distinct topology ownership; cached reconstruction
+retains hierarchy and transforms. Solid operations still cannot consume assemblies.
+
+BOM rows roll up leaf sources across repeated modules. Nested `structure` also
+retains each owner's original metadata, including subassembly part numbers and
+local item numbers. Conflicting descriptive metadata for one source fails.
+Drawing explosions accept leaf or group paths; ancestor and child offsets add
+in world coordinates. Balloon anchors stay leaf-local. Query, native visibility
+and viewer schemas accept the same bounded paths. The Parts panel shows and
+searches hierarchy and hides/isolates whole modules through their leaf paths.
+The native bundle includes the new contract and the previously omitted robot
+handoff document. `examples/nested-assembly.create.json` is a reusable fixture.
+
+Executed locally on macOS arm64 with OCCT 8.0.1:
+
+- Native build succeeded; **36/36 CTest suites passed (118.48 s)**. Evidence:
+  `build-app-protocol/composition-ctest.log`.
+- New assembly-composition suite: **111 checks**, including rotated repeated
+  child kinematics, independent STEP readback, coincident ownership, cache
+  restoration, expansion limits, BOM metadata, group explosion and revision
+  preservation through preview, save, failed edits and reopen.
+- **431 schema checks across 20 tools**, including a real nested BOM/drawing
+  balloon and persisted leaf visibility; **877 official MCP SDK 2.3.0 checks**.
+  Logs: `composition-schema.log` and `composition-sdk.log` in that build folder.
+- **123 live UI state checks** and **45 pure/mocked WebGL checks** passed. The
+  full CTest renderer run also exercises native payloads. Relocated `bundle-check`
+  passed with empty PATH (`composition-bundle.log`); `git diff --check` passed.
+  Remote platform CI has not been run for this increment.
+
+The relocated executable also passed a dedicated nested create/BOM/mesh/STEP
+workflow with empty PATH and loader overrides removed. Its five exact leaves,
+288 mm³ volume, occurrence ownership and subassembly metadata were checked, and
+both new workflow documents are present in the installed bundle. Evidence:
+`build-app-protocol/composition-bundle-evidence.json`.
+
+Observed in the actual embedded viewer through a loopback stdio test host:
+searching `rod` shows both module ancestors and their link leaves; hiding `left`
+hides two leaves; isolating `right` hides the other three; Fit frames the visible
+module; reload restores camera and exact hidden paths. Native `cad_context`
+independently confirms revision 1 and `left/foot`, `left/link`, `spare` hidden.
+Evidence: `build/composition-demo/browser-evidence.json` and
+`isolated-module.jpg`. This is browser evidence, not an installed desktop-host
+acceptance claim. The user's curved-linkage showcase remains open separately;
+its unsaved pose was preserved.
+
+Child mechanism controls and complete robot graphs were the next tasks at this
+checkpoint and are now implemented in the increment above. Pinned cross-document
+components, dependency-level caches, fabrication and remaining presentation work
+are still pending under the same active goal.
 
 ## Modeling flexibility and moving mechanisms — implemented and locally verified, 2026-10-07
 

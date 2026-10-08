@@ -1,0 +1,10 @@
+{
+  "document_id": "component_assembly_demo",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": { "module_angle": 30 },
+    "features": [{ "id": "base", "type": "box", "size": [100, 20, 3] }],
+    "output": "base"
+  }
+}

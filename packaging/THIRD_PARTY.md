@@ -39,6 +39,14 @@ The exact upstream notice-bearing files for its embedded BDF/PCF, hash, zlib,
 and HarfBuzz-derived components are retained under `freetype/embedded/`.
 Source: https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/
 
+TinyXML2 11.0.0 is compiled statically into the native service under its
+upstream zlib license. Unmodified source/header files, the license, upstream
+README and their release/source hashes are retained in `tinyxml2/`.
+Source: https://github.com/leethomason/tinyxml2/tree/11.0.0
+The release archive SHA-256 is
+`5556deb5081fb246ee92afae73efd943c889cef0cafea92b0b82422d6a18f289`.
+Upstream copyright and license headers remain intact.
+
 The pinned recipe uses shared OCCT and FreeType libraries. Library replacement
 and relinking must remain possible according to the applicable upstream terms.
 Use the recorded source archives and `cmake/dependencies` build recipe to build

@@ -94,7 +94,7 @@ the cache automatically. Packaging and service-test changes do not change the SD
 
 The original project code is released under the MIT License (`LICENSE`).
 Third-party components keep their own licenses, listed below.
-No third-party library is checked into the project. The reproducible OCCT patch
+TinyXML2 is the pinned source-vendored exception described below; other native dependencies come from verified archives. The reproducible OCCT patch
 contains upstream source context with its attribution; complete dependency source
 downloads stay under ignored build/cache directories.
 
@@ -108,3 +108,21 @@ hash their files in `provenance.json`. Linux compiler runtime notices are
 supplied from the actual build toolchain. See `DISTRIBUTION.md` for bundle
 construction and remaining public-release requirements; preview packaging
 does not assert completed legal review of the third-party notices.
+
+## External-artifact XML and ZIP readers
+
+TinyXML2 **11.0.0** is compiled statically from unchanged source files under
+`third_party/tinyxml2`. The official
+[release archive](https://github.com/leethomason/tinyxml2/archive/refs/tags/11.0.0.tar.gz)
+has SHA-256 `5556deb5081fb246ee92afae73efd943c889cef0cafea92b0b82422d6a18f289`.
+`PROVENANCE.json` records exact source, header and notice hashes; portable
+packaging verifies those hashes and retains complete source and zlib license
+notices. It adds no runtime language or shared-library dependency.
+
+ZIP inflation reuses the selected FreeType 2.14.3 library's public
+[FT_Gzip_Uncompress](https://freetype.org/freetype2/docs/reference/ft2-gzip.html#ft_gzip_uncompress)
+API, with independent wrapper, DEFLATE, CRC, size and expansion-budget checks.
+A FreeType build without gzip support fails explicitly as unsupported. The
+native cache identity hashes the resolved selected FreeType binary, including
+when FindFreetype selects a symlink alias. Executed evidence currently covers
+macOS arm64; Windows and Linux qualification remains pending.

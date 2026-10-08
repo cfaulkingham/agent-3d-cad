@@ -1,0 +1,24 @@
+{
+  "document_id": "section_inspection",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"outer_radius": 12, "bore_radius": 6, "height": 20},
+    "features": [
+      {"id":"outer", "type":"cylinder", "radius":{"parameter":"outer_radius"}, "height":{"parameter":"height"}},
+      {"id":"bore", "type":"cylinder", "radius":{"parameter":"bore_radius"}, "height":{"parameter":"height"}},
+      {"id":"housing", "type":"cut", "left":"outer", "right":"bore"},
+      {"id":"base_blank", "type":"box", "size":[28,28,3]},
+      {"id":"base", "type":"transform", "input":"base_blank", "translation":[-14,-14,-3]},
+      {"id":"module", "type":"assembly", "parts":[
+        {"id":"housing", "input":"housing"},
+        {"id":"base", "input":"base"}
+      ]},
+      {"id":"assembly", "type":"assembly", "parts":[
+        {"id":"left", "input":"module"},
+        {"id":"right", "input":"module", "placement":{"translation":[40,0,0]}}
+      ]}
+    ],
+    "output":"assembly"
+  }
+}

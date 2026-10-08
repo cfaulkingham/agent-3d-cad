@@ -17,6 +17,8 @@ int run(int argc, const char* const* argv) {
       return geometry_worker_main(path_from_utf8(argv[2]), path_from_utf8(argv[3]));
     if (argc == 4 && std::string(argv[1]) == "--internal-job-worker")
       return job_worker_main(path_from_utf8(argv[2]), argv[3]);
+    if (argc == 4 && std::string(argv[1]) == "--internal-process-worker")
+      return process_worker_main(path_from_utf8(argv[2]), path_from_utf8(argv[3]));
     if (argc == 2 && std::string(argv[1]) == "--version") {
       std::cout << Json{{"name", "agent-3d-cad"}, {"version", AGENTCAD_VERSION}, {"kernel", "OpenCascade"}, {"kernel_version", kernel_version()}}.dump() << '\n';
       return 0;

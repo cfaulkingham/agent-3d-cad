@@ -1,0 +1,532 @@
+[
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "forward": {
+          "$ref": "#/$defs/shared"
+        },
+        "model": {
+          "additionalProperties": false,
+          "properties": {
+            "tag": {
+              "const": 2
+            }
+          },
+          "required": [
+            "tag"
+          ],
+          "type": "object"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "go"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        "shared": {
+          "maxLength": 3,
+          "minLength": 1,
+          "type": "string"
+        },
+        "single": {
+          "maximum": 5,
+          "minimum": 3,
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "dependentSchemas": {
+        "enum": {
+          "properties": {
+            "const": {
+              "$ref": "#/$defs/shared"
+            }
+          }
+        }
+      },
+      "patternProperties": {
+        "default": {
+          "$ref": "#/$defs/shared"
+        }
+      },
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/single"
+        },
+        "b": {
+          "$ref": "#/$defs/forward"
+        },
+        "const": {
+          "$ref": "#/$defs/shared"
+        },
+        "default": {
+          "$ref": "#/$defs/shared"
+        },
+        "enum": {
+          "$ref": "#/$defs/shared"
+        },
+        "literal_boolean": {
+          "const": false
+        },
+        "literal_const": {
+          "const": {
+            "$ref": "#/$defs/missing"
+          }
+        },
+        "literal_default": {
+          "default": {
+            "$ref": "#/$defs/missing"
+          }
+        },
+        "literal_enum": {
+          "enum": [
+            {
+              "$ref": "#/$defs/missing"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        }
+      },
+      "type": "object"
+    },
+    "name": "single_forward_literals_maps",
+    "outputSchema": {
+      "$defs": {
+        "forward": {
+          "$ref": "#/$defs/shared"
+        },
+        "model": {
+          "additionalProperties": false,
+          "properties": {
+            "tag": {
+              "const": 2
+            }
+          },
+          "required": [
+            "tag"
+          ],
+          "type": "object"
+        },
+        "operation": {
+          "additionalProperties": false,
+          "properties": {
+            "op": {
+              "const": "go"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        "shared": {
+          "maxLength": 3,
+          "minLength": 1,
+          "type": "string"
+        },
+        "single": {
+          "maximum": 5,
+          "minimum": 3,
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false,
+      "dependentSchemas": {
+        "enum": {
+          "properties": {
+            "const": {
+              "$ref": "#/$defs/shared"
+            }
+          }
+        }
+      },
+      "patternProperties": {
+        "default": {
+          "$ref": "#/$defs/shared"
+        }
+      },
+      "properties": {
+        "a": {
+          "$ref": "#/$defs/single"
+        },
+        "b": {
+          "$ref": "#/$defs/forward"
+        },
+        "const": {
+          "$ref": "#/$defs/shared"
+        },
+        "default": {
+          "$ref": "#/$defs/shared"
+        },
+        "enum": {
+          "$ref": "#/$defs/shared"
+        },
+        "literal_boolean": {
+          "const": false
+        },
+        "literal_const": {
+          "const": {
+            "$ref": "#/$defs/missing"
+          }
+        },
+        "literal_default": {
+          "default": {
+            "$ref": "#/$defs/missing"
+          }
+        },
+        "literal_enum": {
+          "enum": [
+            {
+              "$ref": "#/$defs/missing"
+            }
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "operation": {
+          "$ref": "#/$defs/operation"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "left": {
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/right"
+            }
+          },
+          "type": "object"
+        },
+        "right": {
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/left"
+            }
+          },
+          "type": "object"
+        },
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "properties": {
+        "r": {
+          "$ref": "#/$defs/left"
+        },
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "recursive",
+    "outputSchema": {
+      "$defs": {
+        "left": {
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/right"
+            }
+          },
+          "type": "object"
+        },
+        "right": {
+          "properties": {
+            "next": {
+              "$ref": "#/$defs/left"
+            }
+          },
+          "type": "object"
+        },
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "properties": {
+        "r": {
+          "$ref": "#/$defs/left"
+        },
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "pointer": {
+          "properties": {
+            "x": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "sibling": {
+          "type": "integer"
+        },
+        "single": false
+      },
+      "properties": {
+        "p": {
+          "$ref": "#/$defs/pointer/properties/x"
+        },
+        "s": {
+          "$ref": "#/$defs/sibling",
+          "minimum": 4
+        },
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "pointer_and_siblings",
+    "outputSchema": {
+      "$defs": {
+        "pointer": {
+          "properties": {
+            "x": {
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "sibling": {
+          "type": "integer"
+        },
+        "single": false
+      },
+      "properties": {
+        "p": {
+          "$ref": "#/$defs/pointer/properties/x"
+        },
+        "s": {
+          "$ref": "#/$defs/sibling",
+          "minimum": 4
+        },
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$id": "urn:test:scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$id",
+    "outputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$id": "urn:test:scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$anchor",
+    "outputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$dynamicAnchor": "scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$dynamicAnchor",
+    "outputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$dynamicAnchor": "scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$dynamicRef": "#scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$dynamicRef",
+    "outputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$dynamicRef": "#scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$recursiveAnchor": "scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$recursiveAnchor",
+    "outputSchema": {
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$recursiveAnchor": "scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "description": "unchanged",
+    "inputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$recursiveRef": "#scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    },
+    "name": "scoped_$recursiveRef",
+    "outputSchema": {
+      "$anchor": "scope",
+      "$defs": {
+        "single": {
+          "type": "boolean"
+        }
+      },
+      "$recursiveRef": "#scope",
+      "properties": {
+        "x": {
+          "$ref": "#/$defs/single"
+        }
+      },
+      "type": "object"
+    }
+  }
+]

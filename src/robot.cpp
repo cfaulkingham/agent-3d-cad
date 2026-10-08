@@ -33,8 +33,12 @@ std::string triple(const Json& value,double scale=1) {
   return formatted(value[0].get<double>()*scale)+" "+formatted(value[1].get<double>()*scale)+" "+formatted(value[2].get<double>()*scale);
 }
 std::pair<std::string,std::string> pose(const Json& m) {
-  const double pitch=std::asin(std::clamp(-m[8].get<double>(),-1.0,1.0));
-  const bool regular=std::abs(std::cos(pitch))>1e-10;
+  // asin loses the tiny cosine near a quarter-turn and can choose arbitrary
+  // roll/yaw from roundoff. The matrix's first-column norm detects the actual
+  // singularity without turning a 1-ulp sine error into a large rotation error.
+  const double cosine=std::hypot(m[0].get<double>(),m[4].get<double>());
+  const double pitch=std::atan2(-m[8].get<double>(),cosine);
+  const bool regular=cosine>1e-10;
   const double roll=regular?std::atan2(m[9].get<double>(),m[10].get<double>()):0;
   const double yaw=regular?std::atan2(m[4].get<double>(),m[0].get<double>()):std::atan2(-m[1].get<double>(),m[5].get<double>());
   return {triple(Json::array({m[3],m[7],m[11]}),.001),triple(Json::array({roll,pitch,yaw}))};
@@ -79,29 +83,83 @@ std::string inertia_xml(const Json& item,bool sdf) {
 }
 }
 
+std::string robot_name(const std::string& kind,const std::string& occurrence) {
+  if (occurrence.find('/')==std::string::npos) return kind+"_"+occurrence;
+  std::string result="nested_"+kind;
+  std::size_t start=0;
+  while (true) {
+    const auto end=occurrence.find('/',start);
+    const auto segment=occurrence.substr(start,end==std::string::npos?end:end-start);
+    result+="_"+std::to_string(segment.size())+"_"+segment;
+    if (end==std::string::npos) break;
+    start=end+1;
+  }
+  return result;
+}
+Json composed_robot_motion(const Json& model,const std::string& assembly_id) {
+  const auto scopes=assembly_mechanisms(model,assembly_id);
+  const auto tree=assembly_structure(model,assembly_id);
+  const bool nested=std::any_of(tree.begin(),tree.end(),[](const Json& node){return node.at("kind")=="assembly";});
+  std::map<std::string,const Json*> definitions;
+  for (const auto& feature:model.at("features")) definitions.emplace(text_field(feature,"id"),&feature);
+  const auto qualify=[](const std::string& path,const std::string& id){return path.empty()?id:path+"/"+id;};
+  Json result={{"motion",{{"dofs",Json::array()},{"poses",Json::array()}}},{"couplings",Json::array()},{"pose_sources",Json::array()}};
+  for (const auto& scope:scopes) {
+    const auto id=text_field(scope,"assembly_id");const auto& feature=*definitions.at(id);
+    auto paths=scope.at("occurrences");std::sort(paths.begin(),paths.end());
+    const auto first=paths[0].get<std::string>();
+    for (const auto& occurrence:paths) {
+      const auto path=occurrence.get<std::string>();
+      for (auto dof:scope.at("motion").at("dofs")) {
+        const auto local=text_field(dof,"mate_id");dof["mate_id"]=qualify(path,local);
+        dof["assembly_id"]=id;dof["assembly_path"]=path;
+        if (dof.contains("coupling_id")) dof["coupling_id"]=qualify(path,text_field(dof,"coupling_id"));
+        if (path!=first) {
+          dof["driven"]=true;dof.erase("coupling_id");dof["shared_with"]=qualify(first,local);
+          result["couplings"].push_back({{"source",{{"mate_id",qualify(first,local)},{"coordinate",dof.at("coordinate")}}},
+            {"target",{{"mate_id",dof.at("mate_id")},{"coordinate",dof.at("coordinate")}}},{"ratio",1},{"reason","shared_definition"}});
+        }
+        result["motion"]["dofs"].push_back(std::move(dof));
+        if (result["motion"]["dofs"].size()>robot_coordinate_limit) throw Error("limit_exceeded","Robot export permits at most 4096 expanded coordinates");
+      }
+      if (path==first) for (auto coupling:feature.value("couplings",Json::array())) {
+        for (const auto* side:{"source","target"}) coupling[side]["mate_id"]=qualify(path,text_field(coupling.at(side),"mate_id"));
+        result["couplings"].push_back(std::move(coupling));
+      }
+    }
+    for (const auto& pose:feature.value("poses",Json::array())) {
+      const auto local=text_field(pose,"id"),name=nested?robot_name("pose",id+"/"+local):local;
+      result["motion"]["poses"].push_back(name);
+      result["pose_sources"].push_back({{"name",name},{"assembly_id",id},{"pose_id",local}});
+      if (result["pose_sources"].size()>256) throw Error("limit_exceeded","Robot export permits at most 256 composed named poses");
+    }
+  }
+  return result;
+}
+
 Json robot_options_schema() {
-  const Json id={{"type","string"},{"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
+  const auto id=occurrence_schema();
   const Json real={{"type","number"},{"minimum",-1e9},{"maximum",1e9}};
   const auto vector=[&](int n){return Json{{"type","array"},{"items",real},{"minItems",n},{"maxItems",n}};};
   const auto property=object({{"mate_id",id},{"coordinate",{{"enum",{"angle_deg","travel_mm"}}}},
     {"effort",{{"type","number"},{"minimum",0},{"maximum",1e9}}},{"velocity",{{"type","number"},{"exclusiveMinimum",0},{"maximum",1e9}}}},
     {"mate_id","coordinate","effort","velocity"});
-  const auto inertial=object({{"link",{{"type","string"},{"pattern","^(part_|carrier_)[A-Za-z][A-Za-z0-9_-]{0,63}$"}}},
+  const auto inertial=object({{"link",{{"type","string"},{"maxLength",600},{"pattern","^(part_|carrier_|nested_part_|nested_carrier_)[A-Za-z0-9_-]+$"}}},
     {"mass_kg",{{"type","number"},{"exclusiveMinimum",0},{"maximum",1e9}}},{"center_of_mass_m",vector(3)},{"inertia_kg_m2",vector(6)}},
     {"link","mass_kg","center_of_mass_m","inertia_kg_m2"});
   return object({{"format",{{"enum",{"urdf","srdf","sdf"}}}},
-    {"joint_properties",{{"type","array"},{"items",property},{"maxItems",126}}},
-    {"inertials",{{"type","array"},{"items",inertial},{"maxItems",127}}}}, {"format","joint_properties"});
+    {"joint_properties",{{"type","array"},{"items",property},{"maxItems",robot_coordinate_limit}}},
+    {"inertials",{{"type","array"},{"items",inertial},{"maxItems",robot_link_limit}}}}, {"format","joint_properties"});
 }
 void validate_robot_options(const Json& options) {
   fields(options,{"format","joint_properties"},{"inertials"});
   const auto format=text_field(options,"format");
   if(format!="urdf" && format!="srdf" && format!="sdf") throw Error("invalid_argument","Robot format must be urdf, srdf or sdf");
   const auto& properties=options.at("joint_properties");
-  if(!properties.is_array() || properties.size()>126) throw Error("invalid_argument","Robot export permits at most 126 joint property records");
+  if(!properties.is_array() || properties.size()>robot_coordinate_limit) throw Error("invalid_argument","Robot export permits at most 4096 joint property records");
   std::set<std::string> seen;
   for(const auto& item:properties) {
-    fields(item,{"mate_id","coordinate","effort","velocity"});model_identifier(text_field(item,"mate_id"));
+    fields(item,{"mate_id","coordinate","effort","velocity"});validate_occurrence_path(text_field(item,"mate_id"));
     const auto coordinate=text_field(item,"coordinate");
     if(coordinate!="angle_deg" && coordinate!="travel_mm") throw Error("invalid_argument","Unknown robot coordinate");
     if(!seen.insert(key(item)).second) throw Error("invalid_argument","Duplicate joint properties");
@@ -109,12 +167,15 @@ void validate_robot_options(const Json& options) {
   }
   if(options.contains("inertials")) {
     const auto& inertials=options.at("inertials");
-    if(!inertials.is_array() || inertials.size()>127) throw Error("invalid_argument","Robot export permits at most 127 inertials");
+    if(!inertials.is_array() || inertials.size()>robot_link_limit) throw Error("invalid_argument","Robot export permits at most 8192 inertials");
     seen.clear();
     for(const auto& item:inertials) {
       fields(item,{"link","mass_kg","center_of_mass_m","inertia_kg_m2"});
       const auto link=text_field(item,"link");
-      if(link.starts_with("part_")) model_identifier(link.substr(5));
+      if(link.starts_with("nested_part_") || link.starts_with("nested_carrier_")) {
+        if (link.size()>600 || link.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-")!=std::string::npos)
+          throw Error("invalid_argument","Invalid nested robot link name");
+      } else if(link.starts_with("part_")) model_identifier(link.substr(5));
       else if(link.starts_with("carrier_")) model_identifier(link.substr(8));
       else throw Error("invalid_argument","Robot inertial link must start with part_ or carrier_");
       if(!seen.insert(link).second) throw Error("invalid_argument","Duplicate link inertial");
@@ -149,7 +210,7 @@ Json robot_description(const Json& model,const Json& frames,const Json& options)
   if(sdf) for(const auto& name:links) if(!inertials.contains(name))
     throw Error("invalid_argument","SDF requires an explicit inertial for every part and cylindrical carrier link",{{"link",name}});
   for(const auto& item:frames.at("joints")) if(item.contains("coordinate")) joints[key(item)]=text_field(item,"name");
-  for(const auto& item:assembly->value("couplings",Json::array())) couplings[key(item.at("target"))]=item;
+  for(const auto& item:frames.at("couplings")) couplings[key(item.at("target"))]=item;
   for(const auto& item:frames.at("links")) if(item.contains("input")) meshes.emplace(text_field(item,"input"),"");
   Json mesh_sources=Json::array();int index=0;
   for(auto& [source,path]:meshes) {path="meshes/mesh_"+std::to_string(index++)+".stl";mesh_sources.push_back({{"feature_id",source},{"path",path}});}
@@ -182,12 +243,14 @@ Json robot_description(const Json& model,const Json& frames,const Json& options)
       else xml+="<axis xyz=\"0 0 1\"/><limit lower=\""+lower+"\" upper=\""+upper+"\" effort=\""+formatted(property.at("effort"))+"\" velocity=\""+formatted(property.at("velocity"))+"\"/>";
       Json coordinate={{"joint",jname},{"mate_id",dof.at("mate_id")},{"coordinate",dof.at("coordinate")},{"source_value",rest},{"si_scale",factor},
         {"lower",(dof.at("minimum").get<double>()-rest)*factor},{"upper",(dof.at("maximum").get<double>()-rest)*factor}};
+      coordinate["assembly_id"]=dof.at("assembly_id");coordinate["assembly_path"]=dof.at("assembly_path");
       if(couplings.contains(k)) {
         const auto& coupling=couplings.at(k);const auto source=key(coupling.at("source"));
         const double multiplier=scalar(coupling.at("ratio"),parameters,"dimensionless")*factor/scale(dofs.at(source));
         if(sdf) xml+="<mimic joint=\""+joints.at(source)+"\" axis=\"axis\"><multiplier>"+formatted(multiplier)+"</multiplier><offset>0</offset><reference>0</reference></mimic>";
         else xml+="<mimic joint=\""+joints.at(source)+"\" multiplier=\""+formatted(multiplier)+"\" offset=\"0\"/>";
         coordinate["mimic"]={{"joint",joints.at(source)},{"multiplier",multiplier},{"offset",0}};
+        if (coupling.contains("reason")) coordinate["mimic"]["reason"]=coupling.at("reason");
       }
       if(sdf) xml+="</axis>";
       coordinates.push_back(std::move(coordinate));
@@ -202,11 +265,10 @@ Json robot_description(const Json& model,const Json& frames,const Json& options)
   for(const auto& joint:frames.at("joints")) if(joint.contains("coordinate")) srdf+="<joint name=\""+text_field(joint,"name")+"\"/>";
   if(dofs.empty()) for(const auto& link:frames.at("links")) srdf+="<link name=\""+text_field(link,"name")+"\"/>";
   srdf+="</group>";
-  for(const auto& pose:assembly->value("poses",Json::array())) {
-    const auto pid=text_field(pose,"id");
-    const auto posed=apply_operations(model,Json::array({{{"op","apply_pose"},{"assembly_id",frames.at("feature_id")},{"pose_id",pid}}}));
-    const Json* feature=nullptr;for(const auto& item:posed.at("features")) if(item.at("id")==frames.at("feature_id")) feature=&item;
-    const auto motion=assembly_motion(*feature,posed.at("parameters"));Json values=Json::object();
+  for(const auto& pose:frames.at("pose_sources")) {
+    const auto pid=text_field(pose,"name");
+    const auto posed=apply_operations(model,Json::array({{{"op","apply_pose"},{"assembly_id",pose.at("assembly_id")},{"pose_id",pose.at("pose_id")}}}));
+    const auto motion=composed_robot_motion(posed,text_field(frames,"feature_id")).at("motion");Json values=Json::object();
     srdf+="<group_state name=\""+pid+"\" group=\"mechanism\">";
     for(const auto& dof:motion.at("dofs")) {
       const auto k=key(dof);const double value=(dof.at("value").get<double>()-dofs.at(k).at("value").get<double>())*scale(dof);

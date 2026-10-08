@@ -119,8 +119,8 @@ STEP exports remain exact solids.
 
 ## Exploded assembly views
 
-An assembly output can add `explode` to any drawing view. It contains one to 64
-unique assembly part IDs, each with a three-component translation in world mm:
+An assembly output can add `explode` to any drawing view. It contains one to 1,024
+unique leaf or subassembly occurrence paths, each with a three-component translation in world mm:
 
 ```json
 {"layout":"grid", "views":[
@@ -136,6 +136,12 @@ the same parameters and bounded mm expressions as model coordinates. Empty
 lists, duplicate IDs, unknown parts and an output that is not an assembly fail
 explicitly. A section with `explode` intersects the translated assembly with
 the requested world plane and hatches the resulting material.
+
+An offset for a subassembly such as `left` moves all of its leaf descendants.
+An additional offset for `left/link` adds to the ancestor offset, in world axes.
+Normalization expands groups into a deterministic leaf-offset list. Balloons
+identify leaf paths and keep their anchors in the original leaf source frame;
+every parent transform and accumulated explosion is applied exactly once.
 
 PDF/SVG view labels and individual DXFs visibly say `EXPLODED`. Dimensions in
 these views measure the **exploded geometry**, including artificial spacing;

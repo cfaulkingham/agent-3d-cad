@@ -1,0 +1,1 @@
+<robot name="primitives"><link name="base"><visual><geometry><sphere radius="0.01"/></geometry></visual><collision><origin xyz="0.03 0 0"/><geometry><cylinder radius="0.005" length="0.02"/></geometry></collision></link></robot>

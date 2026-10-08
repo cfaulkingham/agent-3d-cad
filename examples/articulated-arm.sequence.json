@@ -1,0 +1,21 @@
+{
+  "name": "Coordinated arm review",
+  "frames": [
+    {
+      "time_s": 0,
+      "presentation": {"clip": null, "explode": {"distance_mm": 0, "directions": []}},
+      "joints": [{"assembly_id": "mechanism", "values": [
+        {"mate_id": "hinge", "coordinate": "angle_deg", "value": 0},
+        {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": 0}
+      ]}]
+    },
+    {
+      "time_s": 2,
+      "presentation": {"clip": null, "explode": {"distance_mm": 10, "directions": []}},
+      "joints": [{"assembly_id": "mechanism", "values": [
+        {"mate_id": "hinge", "coordinate": "angle_deg", "value": 90},
+        {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": 18}
+      ]}]
+    }
+  ]
+}

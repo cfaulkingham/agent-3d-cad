@@ -3,6 +3,7 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/service.hpp"
+#include "geometry_equivalence.hpp"
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -113,7 +114,8 @@ void cache_tests() {
   require(cold.at("projection_keys")[0]!=cold.at("projection_keys")[1],"Assembled and exploded views have different projection keys");
   const auto again=evaluate_model(temp.path,source,worker_request(source,drawing),&warm);
   require(warm.at("geometry_hit") && warm.at("projection_hit"),"Warm assembly drawing restores both caches");
-  require(first==again,"Warm assembly artifacts and dimensions match cold bytes");
+  require(test::geometry_equivalent(first.at("summary"),again.at("summary")),"Warm assembly measurements and ownership match cold geometry");
+  require(first.at("drawing")==again.at("drawing"),"Warm assembly artifacts and dimensions match cold bytes");
   drawing["views"][1]["explode"][0]["translation"][2]=15;
   dimensions(evaluate_model(temp.path,source,worker_request(source,drawing),&warm).at("drawing"),8,23);
   require(warm.at("geometry_hit") && !warm.at("projection_hit"),"Changed explode offset invalidates projections only");

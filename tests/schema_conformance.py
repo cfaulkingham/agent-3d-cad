@@ -2,6 +2,7 @@
 Runs the actual executable; no Python is used by the product or native CTest.
 """
 import json
+import hashlib
 import csv
 import io
 import math
@@ -12,6 +13,7 @@ import tempfile
 import time
 
 from jsonschema import Draft202012Validator
+from slicer_contract_fixture import options as slice_options, verify_package
 
 exe = str(pathlib.Path(sys.argv[1]).resolve())
 source = pathlib.Path(__file__).resolve().parents[1]
@@ -47,6 +49,83 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     model = {"schema_version": 1, "units": "mm", "parameters": {"height": 6},
              "features": [{"id": "base", "type": "box", "size": [20, 10, {"parameter": "height"}]}], "output": "base"}
     created = call("cad_create", {"document_id": "part", "model": model, "request_id": "create_once"})
+    gcode = pathlib.Path(workspace) / "review fixture.gcode"
+    raw_gcode = b"G21\nG90\nM83\nM104S210\nM140S60\nG1X10Y5Z.2E1\nG91\nG1X15E1\n"
+    gcode.write_bytes(raw_gcode)
+    gcode_options = {"firmware": "marlin", "machine": {"name": "Analytic fixture", "motion_bounds_mm": [[-20, 20], [-20, 20], [0, 100]]},
+                     "material": {"name": "Fixture PLA", "nozzle_temperature_c": [190, 230], "bed_temperature_c": [50, 70]},
+                     "initial": {"units": "mm", "xyz_mode": "absolute", "extrusion_mode": "absolute", "position_mm": [0, 0, 0], "extruder_mm": 0}}
+    gcode_arguments = {"document_id": "part", "revision": 1, "path": str(gcode),
+                       "expected_sha256": hashlib.sha256(raw_gcode).hexdigest(), "options": gcode_options}
+    gcode_result = call("cad_gcode_review", gcode_arguments)
+    assert gcode_result["report"]["status"] == "fail" and gcode_result["report"]["statistics"]["commanded_bounds_mm"][0][1] == 25
+    assert pathlib.Path(gcode_result["artifact_path"]).read_bytes() == raw_gcode
+    report_bytes = pathlib.Path(gcode_result["path"]).read_bytes()
+    assert len(report_bytes) == gcode_result["report_bytes"] and hashlib.sha256(report_bytes).hexdigest() == gcode_result["report_sha256"]
+    assert json.loads(report_bytes)["source_association"] == "caller_declared_not_geometry_verified"
+    gcode_job = call("cad_job", {"action": "submit", "request_id": "schema_gcode", "tool": "cad_gcode_review", "arguments": gcode_arguments})
+    for _ in range(500):
+        gcode_job = call("cad_job", {"action": "get", "job_id": gcode_job["job_id"]})
+        if gcode_job["state"] not in {"queued", "running", "cancelling"}:
+            break
+        time.sleep(.01)
+    assert gcode_job["state"] == "succeeded" and gcode_job["result"]["report"]["status"] == "fail"
+    for bad in [dict(gcode_arguments, shell="bad"), dict(gcode_arguments, expected_sha256="BAD"),
+                dict(gcode_arguments, options=dict(gcode_options, script="bad"))]:
+        assert not Draft202012Validator(tools["cad_gcode_review"]["inputSchema"]).is_valid(bad)
+        checks += 1
+    checks += 7
+    printer_profiles = {}
+    for role in ["machine", "process", "filament"]:
+        profile_path = pathlib.Path(workspace) / ("printer-" + role + ".json")
+        profile_raw = json.dumps({"type": role, "name": "Explicit schema " + role, "post_process": []}).encode()
+        profile_path.write_bytes(profile_raw)
+        printer_profiles[role] = {"path": str(profile_path), "expected_sha256": hashlib.sha256(profile_raw).hexdigest()}
+    printer_args = {"document_id": "part", "revision": 1, "action": "plan", "path": str(gcode),
+                    "expected_sha256": hashlib.sha256(raw_gcode).hexdigest(), "options": {
+                        "printer": {"backend": "manual", "id": "schema_printer", "model": "Assessed fixture",
+                                    "nozzle_diameter_mm": .4, "bed_type": "Explicit plate", "handoff": "plain_gcode"},
+                        "profiles": printer_profiles, "review": gcode_options}}
+    printer_plan = call("cad_printer_handoff", printer_args)
+    assert printer_plan["readiness"]["status"] == "fail" and not printer_plan["hardware_contact"]
+    assert printer_plan["source_association"] == "caller_declared_not_geometry_verified"
+    printer_verified = call("cad_printer_handoff", {"document_id": "part", "revision": 1, "action": "verify",
+                          "plan_path": printer_plan["path"], "expected_sha256": printer_plan["sha256"]})
+    assert printer_verified["readiness"] == printer_plan["readiness"] and not printer_verified["physical_print_started"]
+    printer_job = call("cad_job", {"action": "submit", "request_id": "schema_printer", "tool": "cad_printer_handoff", "arguments": printer_args})
+    for _ in range(500):
+        printer_job = call("cad_job", {"action": "get", "job_id": printer_job["job_id"]})
+        if printer_job["state"] not in {"queued", "running", "cancelling"}:
+            break
+        time.sleep(.01)
+    assert printer_job["state"] == "succeeded" and printer_job["result"]["readiness"]["status"] == "fail"
+    Draft202012Validator(tools["cad_printer_handoff"]["outputSchema"]).validate(printer_job["result"])
+    for bad in [dict(printer_args, action="start"), dict(printer_args, execute=True),
+                dict(printer_args, options=dict(printer_args["options"], host="guessed")),
+                dict(printer_args, expected_sha256="BAD")]:
+        assert not Draft202012Validator(tools["cad_printer_handoff"]["inputSchema"]).is_valid(bad)
+        checks += 1
+    checks += 5
+    if len(sys.argv) > 2:
+        slicing = {"document_id": "part", "revision": 1, "action": "plan",
+                   "options": slice_options(pathlib.Path(workspace) / "native profiles", sys.argv[2], gcode_options)}
+        planned = call("cad_slice", slicing)
+        assert hashlib.sha256(pathlib.Path(planned["path"]).read_bytes()).hexdigest() == planned["sha256"]
+        running = {"document_id": "part", "revision": 1, "action": "run", "plan_path": planned["path"], "expected_sha256": planned["sha256"]}
+        slice_job = call("cad_job", {"action": "submit", "request_id": "schema_slice", "tool": "cad_slice", "arguments": running})
+        for _ in range(500):
+            slice_job = call("cad_job", {"action": "get", "job_id": slice_job["job_id"]})
+            if slice_job["state"] not in {"queued", "running", "cancelling"}:
+                break
+            time.sleep(.01)
+        assert slice_job["state"] == "succeeded", slice_job
+        checks += verify_package(slice_job["result"])
+        # Validate direct result and cad_job's compacted result schema separately.
+        Draft202012Validator(tools["cad_slice"]["outputSchema"]).validate(slice_job["result"])
+        for bad in [dict(slicing, shell="bad"), dict(slicing, options=dict(slicing["options"], version="2.4.1")),
+                    dict(running, expected_sha256="BAD"), dict(running, options=slicing["options"])]:
+            assert not Draft202012Validator(tools["cad_slice"]["inputSchema"]).is_valid(bad)
+            checks += 1
     assert call("cad_create", {"document_id": "part", "model": model, "request_id": "create_once"}) == created
     call("cad_read", {"document_id": "part"})
     drawing_recipe = {"title": "Plate & fixture <A>", "sheet": "A4", "scale": 2,
@@ -116,6 +195,34 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         "operations": [{"op": "set_parameter", "name": "height", "value": 10}]})
     exported = call("cad_export", {"document_id": "part", "revision": 2, "format": "step"})
     imported = call("cad_import", {"document_id": "imported", "path": exported["path"], "request_id": "import_once"})
+    step_bytes = pathlib.Path(exported["path"]).read_bytes()
+    step_hash = hashlib.sha256(step_bytes).hexdigest()
+    purchase = {"supplier": "Schema fixture supplier", "part_number": "FIXTURE-1", "source_url": "https://example.invalid/FIXTURE-1"}
+    bought = call("cad_import", {"document_id": "purchased_schema", "path": exported["path"],
+        "expected_sha256": step_hash, "purchase": purchase})
+    bound_purchase = dict(purchase, artifact_sha256=step_hash)
+    assert bought["model"]["features"][0]["purchase"] == bound_purchase
+    purchased_assembly = json.loads(json.dumps(bought["model"]))
+    purchased_assembly["features"].append({"id": "assembly", "type": "assembly", "parts": [
+        {"id": "one", "input": "imported"}, {"id": "two", "input": "imported", "placement": {"translation": [30, 0, 0]}}]})
+    purchased_assembly["output"] = "assembly"
+    call("cad_create", {"document_id": "purchased_assembly_schema", "model": purchased_assembly})
+    bought_bom = call("cad_bom", {"document_id": "purchased_assembly_schema", "revision": 1})
+    assert bought_bom["bom"]["items"][0]["purchase"] == bound_purchase and bought_bom["bom"]["items"][0]["quantity"] == 2
+    bought_package = call("cad_manufacture", {"document_id": "purchased_assembly_schema", "revision": 1, "options": {"drawings": False}})
+    bought_manifest = json.loads(pathlib.Path(bought_package["path"]).read_text())
+    original = bought_manifest["parts"][0]["source_artifact"]
+    assert original["sha256"] == step_hash and (pathlib.Path(bought_package["directory"]) / original["path"]).read_bytes() == step_bytes
+    assert bought_manifest["parts"][0]["purchase"] == bound_purchase
+    for bad in [{"expected_sha256": "broken"}, {"purchase": dict(purchase, source_url="file:///tmp/part")},
+                {"purchase": dict(purchase, artifact_sha256="broken")}]:
+        assert not Draft202012Validator(tools["cad_import"]["inputSchema"]).is_valid(
+            dict(document_id="bad_purchase", path=exported["path"], **bad))
+        checks += 1
+    missing_hash = json.loads(json.dumps(bought["model"]))
+    del missing_hash["features"][0]["purchase"]["artifact_sha256"]
+    assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid({"document_id": "missing_hash", "model": missing_hash})
+    checks += 5
     pathlib.Path(exported["path"]).unlink()
     rebuilt = call("cad_query", {"document_id": "imported", "revision": 1})
     assert abs(rebuilt["summary"]["volume_mm3"] - imported["summary"]["volume_mm3"]) < 1e-6
@@ -246,9 +353,34 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         time.sleep(.02)
     assert synced["state"] == "ready" and len(synced["summary"]["assembly"]["parts"]) == len(inventory)
     assert synced["hidden_part_ids"] == []
+    measurement_args={"document_id":aid,"revision":1,"evaluation_id":synced["evaluation_id"],"feature_id":synced["feature_id"],
+        "query":{"action":"pair","targets":[{"kind":"part","part_id":"spacer_a"},{"kind":"part","part_id":"spacer_b"}],"minimum_clearance_mm":1}}
+    measured=call("cad_measure",measurement_args)
+    assert math.isclose(measured["report"]["minimum_distance_mm"],math.hypot(40,10)-10,abs_tol=1e-6)
+    assert measured["report"]["status"]=="pass" and measured["report"]["pairs"][0]["intersection_volume_mm3"]==0
+    all_pairs=call("cad_measure",dict(measurement_args,query={"action":"clearance"}))
+    assert len(all_pairs["report"]["pairs"])==6 and all_pairs["report"]["coverage"]=="all_assembly_leaves"
+    viewer_measure={"action":"measure","view_id":"assembly_schema","evaluation_id":synced["evaluation_id"],"query":measurement_args["query"]}
+    pending_measure=call("cad_viewer",viewer_measure)
+    for _ in range(500):
+        pending_measure=call("cad_viewer",{k:v for k,v in viewer_measure.items() if k!="query"})
+        if pending_measure["state"] not in {"queued","running","cancelling"}:break
+        time.sleep(.01)
+    assert pending_measure["state"]=="succeeded" and pending_measure["result"]["report"]["status"]=="pass"
+    assert call("cad_context",{"view_id":"assembly_schema"})["measurement"]["job_id"]==pending_measure["job_id"]
+    call("cad_viewer",dict(viewer_measure,query=None))
+    for bad_query in [{"action":"pair","targets":[{"kind":"face","entity_id":"edge-1"},{"kind":"part","part_id":"cover"}]},
+        {"action":"clearance","script":"bad"},{"action":"clearance","part_ids":["base"]},
+        {"action":"clearance","minimum_clearance_mm":-1}]:
+        assert not Draft202012Validator(tools["cad_measure"]["inputSchema"]).is_valid(dict(measurement_args,query=bad_query));checks+=1
+    checks+=5
+    default_presentation = {"clip": None, "explode": {"distance_mm": 0, "directions": []}}
+    assert synced["presentation"] == default_presentation
+    presentation = {"clip": {"normal": [0, 0, 1], "offset_mm": 4, "keep": "negative"},
+                    "explode": {"distance_mm": 20, "directions": [{"part_id": "cover", "direction": [0, 0, 1]}]}}
     visibility_args = {"action": "context", "view_id": "assembly_schema",
                        "evaluation_id": synced["evaluation_id"], "selection": None,
-                       "hidden_part_ids": ["cover", "spacer_b"]}
+                       "hidden_part_ids": ["cover", "spacer_b"], "presentation": presentation}
     hidden_context = call("cad_viewer", visibility_args)
     assert hidden_context["hidden_part_ids"] == ["cover", "spacer_b"]
     hidden_sync = call("cad_viewer", {"action": "sync", "view_id": "assembly_schema",
@@ -259,6 +391,17 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     assert call("cad_viewer", omitted_visibility)["hidden_part_ids"] == ["cover", "spacer_b"]
     assert call("cad_viewer", {**visibility_args, "hidden_part_ids": []})["hidden_part_ids"] == []
     checks += 6
+    assert hidden_context["presentation"] == hidden_sync["presentation"] == presentation
+    omitted_presentation = {k: v for k, v in visibility_args.items() if k != "presentation"}
+    assert call("cad_viewer", omitted_presentation)["presentation"] == presentation
+    assert call("cad_read", {"document_id": aid})["model"] == assembly["model"]
+    for bad_presentation in [dict(presentation, script="bad"),
+            dict(presentation, clip=dict(presentation["clip"], normal=[0, 0, 2])),
+            dict(presentation, explode=dict(presentation["explode"], distance_mm=-1))]:
+        assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(
+            dict(visibility_args, presentation=bad_presentation))
+        checks += 1
+    checks += 4
     for invalid_hidden in ["cover", [1], ["cover", "cover"], ["../part"], ["cover"] * 65]:
         assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(
             {**visibility_args, "hidden_part_ids": invalid_hidden})
@@ -280,7 +423,9 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
             {"document_id": aid, "expected_revision": 3, "operations": [operation]})
         checks += 1
     metadata = {"input": "plate", "item_number": 8, "part_number": "P-01",
-                "description": 'Plate, "checked"', "material": "Aluminum"}
+                "description": 'Plate, "checked"', "material": "Aluminum",
+                "purchase": {"supplier": "Example supplier", "part_number": "V-P01",
+                             "source_url": "https://example.invalid/V-P01", "artifact_sha256": "a" * 64}}
     metadata_edit = call("cad_apply", {"document_id": aid, "expected_revision": 3, "operations": [
         {"op": "set_bom_item", "assembly_id": feature["id"], "item": metadata}]})
     updated_bom = call("cad_bom", {"document_id": aid, "revision": 4, "feature_id": feature["id"]})
@@ -291,6 +436,45 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     with pathlib.Path(csv_path).open(newline="") as stream:
         parsed_rows = list(csv.DictReader(stream))
     assert parsed_rows[-1]["description"] == metadata["description"]
+    assert parsed_rows[-1]["supplier_part_number"] == "V-P01"
+    package = call("cad_manufacture", {"document_id": aid, "revision": 4,
+        "options": {"drawings": False, "parts": [{"feature_id": "plate", "process": "cnc"}]}})
+    package_root = pathlib.Path(package["directory"])
+    package_manifest = json.loads(pathlib.Path(package["path"]).read_text())
+    assert package["part_count"] == 2 and package_manifest["process_review"]["status"] == "not_evaluated"
+    assert next(p for p in package_manifest["parts"] if p["feature_id"] == "plate")["purchase"] == metadata["purchase"]
+    for artifact in package_manifest["artifacts"]:
+        assert not pathlib.Path(artifact["path"]).is_absolute()
+        content = (package_root / artifact["path"]).read_bytes()
+        assert len(content) == artifact["bytes"] and hashlib.sha256(content).hexdigest() == artifact["sha256"]
+        checks += 2
+    assert call("cad_read", {"document_id": aid})["model"] == metadata_edit["model"]
+    checks += 5
+    process_profile = {"process": "fdm", "orientation": {"build_direction": [0, 0, 1], "x_direction": [1, 0, 0]},
+                       "minimum_wall_mm": 7, "overhang_angle_deg": 45}
+    reviewed = call("cad_fabrication_review", {"document_id": "part", "revision": 3,
+                                              "options": {"profile": process_profile}})
+    review_bytes = pathlib.Path(reviewed["path"]).read_bytes()
+    review_file = json.loads(review_bytes)
+    assert len(review_bytes) == reviewed["bytes"] and hashlib.sha256(review_bytes).hexdigest() == reviewed["sha256"]
+    assert review_file["source"]["revision"] == 3 and review_file["source"]["native_build"] == reviewed["native_build"]
+    findings = {c["id"]: c for c in reviewed["report"]["parts"][0]["checks"]}
+    assert findings["sampled_wall_thickness"]["status"] == "fail"
+    assert abs(findings["sampled_wall_thickness"]["evidence"]["minimum_sampled_chord_mm"] - 6) < 1e-5
+    assert findings["global_minimum_wall"]["status"] == "unknown"
+    integrated = call("cad_manufacture", {"document_id": "part", "revision": 3, "options": {
+        "drawings": False, "fabrication_review": {"profile": process_profile}}})
+    integrated_manifest = json.loads(pathlib.Path(integrated["path"]).read_text())
+    assert integrated_manifest["process_review"] == {"status": "fail", "report_path": "review.json"}
+    integrated_review = next(a for a in integrated_manifest["artifacts"] if a["path"] == "review.json")
+    assert hashlib.sha256((pathlib.Path(integrated["directory"]) / "review.json").read_bytes()).hexdigest() == integrated_review["sha256"]
+    assert call("cad_read", {"document_id": "part"})["revision"] == 3
+    checks += 9
+    for bad_profile in [{"process": "cnc", "orientation": process_profile["orientation"], "overhang_angle_deg": 45},
+                        {"process": "sheet_laser", "orientation": process_profile["orientation"], "sheet_thickness_mm": 2}]:
+        assert not Draft202012Validator(tools["cad_fabrication_review"]["inputSchema"]).is_valid(
+            {"document_id": "part", "revision": 3, "options": {"profile": bad_profile}})
+        checks += 1
     assert call("cad_bom", {"document_id": aid, "revision": 1})["bom"] == bom["bom"]
     call("cad_apply", {"document_id": aid, "expected_revision": 4, "operations": [
         {"op": "remove_bom_item", "assembly_id": feature["id"], "input": "plate"}]})
@@ -313,6 +497,100 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         assert not Draft202012Validator(tools["cad_drawing"]["inputSchema"]).is_valid(
             {"document_id": aid, "revision": 1, "drawing": bad})
         checks += 1
+    nested_example = json.loads((source / "examples/nested-assembly.create.json").read_text())
+    nested = call("cad_create", nested_example)
+    nid = nested["document_id"]
+    leaves = {"left/foot", "left/link", "right/foot", "right/link", "spare"}
+    assert {part["id"] for part in nested["summary"]["assembly"]["parts"]} == leaves
+    nested_mesh = call("cad_query", {"document_id": nid, "revision": 1, "kind": "mesh"})
+    assert {face["part_id"] for face in nested_mesh["topology"]["faces"]} == leaves
+    nested_bom = call("cad_bom", {"document_id": nid, "revision": 1})["bom"]
+    assert nested_bom["total_quantity"] == 5 and nested_bom["structure"][0]["bom"]["part_number"] == "MODULE"
+    call("cad_drawing", {"document_id": nid, "revision": 1, "drawing": {
+        "views": [{"id": "top", "orientation": "top", "explode": [{"part_id": "left", "translation": [0, 0, 20]}]}],
+        "bom": True, "balloons": [{"view": "top", "part_id": "left/foot", "anchor": [5, 2, 2], "label": [-5, 15]}]}})
+    call("cad_open", {"document_id": nid, "view_id": "nested_schema"})
+    for _ in range(300):
+        nested_view = call("cad_viewer", {"action": "sync", "view_id": "nested_schema"})
+        if nested_view["state"] == "ready":
+            break
+        time.sleep(0.02)
+    assert nested_view["state"] == "ready"
+    review_appearance={"default_color":[.2,.3,.4],"parts":[{"part_id":"left/foot","color":[1,0,0]},{"part_id":"spare","color":[0,1,0]}]}
+    review_camera={"yaw":.2,"pitch":.4,"zoom":2,"pan":[.1,.2]}
+    appearance_context={"action":"context","view_id":"nested_schema","evaluation_id":nested_view["evaluation_id"],"selection":None,"appearance":review_appearance,"camera":review_camera}
+    colored=call("cad_viewer",appearance_context)
+    assert colored["appearance"]==review_appearance and colored["presets"]==[]
+    preset_action={"action":"preset","view_id":"nested_schema","evaluation_id":nested_view["evaluation_id"]}
+    saved=call("cad_viewer",dict(preset_action,operation="save",name="Assembly review"))
+    assert saved["presets"][0]["appearance"]==review_appearance and saved["presets"][0]["camera"]==review_camera
+    call("cad_viewer",dict(appearance_context,appearance={"default_color":[.4,.4,.4],"parts":[]}))
+    applied=call("cad_viewer",dict(preset_action,operation="apply",name="Assembly review"))
+    assert applied["appearance"]==review_appearance and applied["camera"]==review_camera and applied["selection"] is None
+    assert len(call("cad_viewer",dict(preset_action,operation="list"))["presets"])==1
+    assert call("cad_viewer",dict(preset_action,operation="delete",name="Assembly review"))["presets"]==[]
+    for bad in [dict(appearance_context,appearance={"default_color":[0,2,0],"parts":[]}),dict(appearance_context,appearance={"default_color":[0,0,0],"parts":[],"opacity":.5}),dict(preset_action,operation="save"),dict(preset_action,operation="list",name="extra"),dict(preset_action,operation="save",name="x"*65),dict(preset_action,operation="shell",name="bad")]:
+        assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(bad)
+        checks+=1
+    checks+=7
+    call("cad_viewer", {"action": "context", "view_id": "nested_schema", "evaluation_id": nested_view["evaluation_id"],
+                        "selection": None, "hidden_part_ids": ["left/foot", "left/link"]})
+    assert call("cad_context", {"view_id": "nested_schema"})["hidden_part_ids"] == ["left/foot", "left/link"]
+    call("cad_viewer", {"action": "motion_preview", "view_id": "nested_schema", "evaluation_id": nested_view["evaluation_id"],
+                        "assembly_id": "module", "values": [{"mate_id": "pivot", "coordinate": "angle_deg", "value": 0}]})
+    for _ in range(300):
+        nested_view = call("cad_viewer", {"action": "sync", "view_id": "nested_schema"})
+        if nested_view["state"] == "ready":
+            break
+        time.sleep(0.02)
+    assert nested_view["state"] == "ready" and nested_view["draft"] and nested_view["feature_id"] == "machine"
+    assert nested_view["summary"]["assembly"]["mechanisms"][0]["occurrences"] == ["left", "right"]
+    draft_presets=call("cad_viewer",{"action":"preset","operation":"list","view_id":"nested_schema","evaluation_id":nested_view["evaluation_id"]})
+    assert draft_presets["evaluation_id"]==nested_view["evaluation_id"] and draft_presets["revision"]==nested_view["revision"] and draft_presets["feature_id"]==nested_view["feature_id"] and not draft_presets["stale"] and draft_presets["draft"]
+    assert draft_presets["selection"] is None and "camera" not in draft_presets
+    checks+=2
+
+    call("cad_viewer", {"action": "motion_save", "view_id": "nested_schema", "evaluation_id": nested_view["evaluation_id"],
+                        "assembly_id": "module", "pose_id": "nested_review"})
+    for _ in range(300):
+        nested_view = call("cad_viewer", {"action": "sync", "view_id": "nested_schema"})
+        if nested_view["state"] == "ready":
+            break
+        time.sleep(0.02)
+    assert nested_view["state"] == "ready" and not nested_view["draft"] and nested_view["revision"] == 2
+    call("cad_robot_export", {"document_id": nid, "revision": 2, "robot": {"format": "urdf", "joint_properties": [
+        {"mate_id": path + "/pivot", "coordinate": "angle_deg", "effort": 5, "velocity": 0.2} for path in ["left", "right"]]}})
+    assert call("cad_read", {"document_id": nid, "revision": 1})["model"] == nested_example["model"]
+    checks += 4
+    component_base = {"schema_version": 1, "units": "mm", "parameters": {"angle": 45},
+                      "features": [{"id": "seed", "type": "box", "size": [1, 1, 1]}], "output": "seed"}
+    call("cad_create", {"document_id": "component_schema", "model": component_base})
+    component_op = {"op": "set_component", "id": "library_machine", "source_document_id": nid, "source_revision": 1,
+                    "bindings": {"angle": {"parameter": "angle"}}}
+    component_edits = [component_op, {"op": "set_output", "feature_id": "library_machine"}]
+    call("cad_preview", {"document_id": "component_schema", "expected_revision": 1, "kind": "mesh", "operations": component_edits})
+    imported = call("cad_apply", {"document_id": "component_schema", "expected_revision": 1, "operations": component_edits})
+    assert imported["summary"]["components"][0]["source"]["revision"] == 1 and not imported["summary"]["components"][0]["modified"]
+    assert imported["model"]["components"][0]["snapshot"] == nested_example["model"]
+    call("cad_read", {"document_id": "component_schema"})
+    call("cad_create", {"document_id": "copied_component_schema", "model": imported["model"]})
+    call("cad_open", {"document_id": "component_schema", "view_id": "component_schema"})
+    for _ in range(300):
+        component_view = call("cad_viewer", {"action": "sync", "view_id": "component_schema"})
+        if component_view["state"] == "ready":
+            break
+        time.sleep(.02)
+    assert component_view["state"] == "ready" and component_view["summary"]["components"] == imported["summary"]["components"]
+    for patch in [{"source_revision": 0}, {"discard_local_changes": "yes"}, {"bindings": {"angle": "eval(45)"}}]:
+        assert not Draft202012Validator(tools["cad_apply"]["inputSchema"]).is_valid({"document_id": "component_schema", "expected_revision": 2,
+            "operations": [dict(component_op, **patch)]})
+        checks += 1
+    call("cad_apply", {"document_id": "component_schema", "expected_revision": 2,
+                       "operations": [{"op": "detach_component", "id": "library_machine"}]})
+    call("cad_apply", {"document_id": "copied_component_schema", "expected_revision": 1,
+                       "operations": [{"op": "set_output", "feature_id": "seed"}, {"op": "remove_component", "id": "library_machine"}]})
+    checks += 3
+    checks += 5
     # New curves remain editable native documents on every process invocation;
     # validate the actual service's input/output schemas, including curve mesh
     # and drawing publication, not just JSON shapes in isolation.
@@ -334,6 +612,41 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     mechanism = json.loads((source / "examples/articulated-arm.create.json").read_text())
     mid = mechanism["document_id"]
     call("cad_create", mechanism)
+    call("cad_open", {"document_id": mid, "view_id": "playback_schema"})
+    for _ in range(500):
+        timeline = call("cad_viewer", {"action": "sync", "view_id": "playback_schema"})
+        if timeline["state"] == "ready": break
+        time.sleep(.01)
+    assert timeline["state"] == "ready"
+    playback_base = {"action": "sequence", "view_id": "playback_schema", "evaluation_id": timeline["evaluation_id"]}
+    playback_source = call("cad_read", {"document_id": mid})
+    def playback_frame(time_s, angle, travel, distance):
+        return {"time_s": time_s, "presentation": {"clip": None, "explode": {"distance_mm": distance, "directions": []}},
+                "joints": [{"assembly_id": "mechanism", "values": [{"mate_id": "hinge", "coordinate": "angle_deg", "value": angle}, {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": travel}]}]}
+    sequence = {"name": "Schema coordinated playback", "frames": [playback_frame(0, 0, 0, 0), playback_frame(2, 90, 18, 10)]}
+    sequence_saved = call("cad_viewer", dict(playback_base, operation="save", sequence=sequence))
+    assert sequence_saved["sequences"][0]["source"]["evaluation_id"] == timeline["evaluation_id"]
+    options = call("cad_viewer", dict(playback_base, operation="options", name=sequence["name"], speed=1.5, loop=True))
+    assert options["playback"]["state"] == "unapplied"
+    call("cad_viewer", dict(playback_base, operation="seek", name=sequence["name"], time_s=1))
+    for _ in range(500):
+        timeline = call("cad_viewer", {"action": "sync", "view_id": "playback_schema"})
+        if timeline["state"] == "ready": break
+        time.sleep(.01)
+    assert timeline["state"] == "ready" and timeline["draft"] and timeline["playback"]["state"] == "displayed" and timeline["playback"]["time_s"] == 1
+    dofs = timeline["summary"]["assembly"]["motion"]["dofs"]
+    assert next(v["value"] for v in dofs if v["mate_id"] == "hinge") == 45
+    assert next(v["value"] for v in dofs if v["mate_id"] == "rail") == 4.5
+    assert timeline["presentation"]["explode"]["distance_mm"] == 5 and call("cad_read", {"document_id": mid}) == playback_source
+    playback_base["evaluation_id"] = timeline["evaluation_id"]
+    listed = call("cad_viewer", dict(playback_base, operation="list"))
+    assert listed["evaluation_id"] == timeline["evaluation_id"] and not listed["stale"]
+    assert call("cad_context", {"view_id": "playback_schema"})["playback"]["time_s"] == 1
+    assert call("cad_viewer", dict(playback_base, operation="delete", name=sequence["name"]))["sequences"] == []
+    for bad in [dict(playback_base, operation="seek", name=sequence["name"], time_s=3601), dict(playback_base, operation="list", script="forbidden"), dict(playback_base, operation="options", name=sequence["name"], speed=5), dict(playback_base, operation="save", sequence=dict(sequence, script="forbidden")), dict(playback_base, operation="save", sequence=dict(sequence, frames=sequence["frames"][:1]))]:
+        assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(bad)
+        checks += 1
+    checks += 8
     robot_args = json.loads((source / "examples/articulated-arm.robot.json").read_text())
     call("cad_robot_export", robot_args)
     robot_args["robot"]["format"] = "srdf"
@@ -386,6 +699,105 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     call("cad_drawing", {"document_id": mid, "revision": 2, "drawing": {"views": [{"id": "top", "orientation": "top"}]}})
     assert call("cad_read", {"document_id": mid, "revision": 1})["model"] == mechanism["model"]
     checks += 4
+    # Native section reports have their own material mesh and result-local IDs;
+    # validate the actual service through the independent Draft 2020-12 reader.
+    ring_model={"schema_version":1,"units":"mm","parameters":{"radius":5},"features":[
+        {"id":"outer","type":"cylinder","radius":{"parameter":"radius"},"height":10},
+        {"id":"inner","type":"cylinder","radius":2,"height":10},
+        {"id":"ring","type":"cut","left":"outer","right":"inner"}],"output":"ring"}
+    call("cad_create",{"document_id":"section_schema","model":ring_model})
+    ring_eval=call("cad_query",{"document_id":"section_schema","revision":1,"kind":"topology"})
+    section_query={"action":"section","plane":{"normal":[0,0,1],"offset_mm":5}}
+    section_args={"document_id":"section_schema","revision":1,"evaluation_id":ring_eval["evaluation_id"],"feature_id":"ring","query":section_query}
+    section_result=call("cad_measure",section_args)
+    assert math.isclose(section_result["report"]["area_mm2"],21*math.pi,abs_tol=1e-6)
+    assert section_result["report"]["regions"][0]["wire_count"]==2 and section_result["report"]["mesh"]["triangles"]
+    assert all(item.startswith("cap-") for item in section_result["report"]["mesh"]["triangle_regions"])
+    oblique_eval=call("cad_query",{"document_id":"section_schema","revision":1,"kind":"topology","feature_id":"outer"})
+    oblique=call("cad_measure",dict(section_args,evaluation_id=oblique_eval["evaluation_id"],feature_id="outer",
+        query={"action":"section","plane":{"normal":[1/math.sqrt(2),0,1/math.sqrt(2)],"offset_mm":5/math.sqrt(2)}}))
+    assert oblique["report"]["curves"][0]["curve_kind"]=="ellipse"
+    checks+=4
+    for bad in [dict(section_query,script="eval()"),dict(section_query,part_ids=[]),
+                dict(section_query,plane={"normal":[0,0,1],"offset_mm":1e13}),
+                dict(section_query,plane={"normal":[0,1],"offset_mm":5}),
+                dict(section_query,explode={"distance_mm":-1,"directions":[]})]:
+        assert not Draft202012Validator(tools["cad_measure"]["inputSchema"]).is_valid(dict(section_args,query=bad));checks+=1
+    changed_report=json.loads(json.dumps(section_result));changed_report["report"]["mesh"]["triangle_regions"][0]="face-1"
+    assert not Draft202012Validator(tools["cad_measure"]["outputSchema"]).is_valid(changed_report);checks+=1
+    call("cad_open",{"document_id":"section_schema","view_id":"section_schema"})
+    deadline=time.monotonic()+15
+    while True:
+        section_view=call("cad_viewer",{"action":"sync","view_id":"section_schema"})
+        if section_view["state"]=="ready":break
+        assert section_view["state"]=="loading" and time.monotonic()<deadline;time.sleep(.02)
+    section_presentation={"clip":{"normal":[0,0,1],"offset_mm":5,"keep":"negative"},"explode":{"distance_mm":0,"directions":[]}}
+    section_context={"action":"context","view_id":"section_schema","evaluation_id":section_view["evaluation_id"],"selection":None,"presentation":section_presentation}
+    call("cad_viewer",section_context)
+    section_action={"action":"section","view_id":"section_schema","evaluation_id":section_view["evaluation_id"]}
+    section_started=call("cad_viewer",dict(section_action,query=section_query))
+    deadline=time.monotonic()+15
+    while True:
+        section_done=call("cad_viewer",section_action)
+        if section_done["state"]=="succeeded":break
+        assert section_done["state"] in ["queued","running"] and time.monotonic()<deadline;time.sleep(.02)
+    assert math.isclose(section_done["result"]["report"]["area_mm2"],21*math.pi,abs_tol=1e-6)
+    assert call("cad_context",{"view_id":"section_schema"})["section"]["job_id"]==section_started["job_id"]
+    section_presentation["clip"]["keep"]="positive"
+    assert call("cad_viewer",section_context)["section"]["job_id"]==section_started["job_id"]
+    assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(dict(section_action,action="measure",query=section_query));checks+=4
+    assert call("cad_viewer",dict(section_action,query=None))["state"]=="empty";checks+=1
+    section_job=call("cad_job",{"action":"submit","request_id":"section_schema_job","tool":"cad_measure","arguments":section_args})
+    deadline=time.monotonic()+15
+    while True:
+        section_job_done=call("cad_job",{"action":"get","job_id":section_job["job_id"]})
+        if section_job_done["state"]=="succeeded":break
+        assert section_job_done["state"] in ["queued","running"] and time.monotonic()<deadline;time.sleep(.02)
+    call("cad_apply",{"document_id":"section_schema","expected_revision":1,"operations":[{"op":"set_parameter","name":"radius","value":6}]})
+    assert call("cad_job",{"action":"get","job_id":section_job["job_id"]})["result"]==section_job_done["result"]
+    checks+=1
+    # Review notes use native inspection centers and independently closed schemas.
+    call("cad_create",{"document_id":"annotation_schema","model":{"schema_version":1,"units":"mm","parameters":{},"features":[{"id":"box","type":"box","size":[20,10,6]}],"output":"box"}})
+    call("cad_open",{"document_id":"annotation_schema","view_id":"annotation_schema"})
+    deadline=time.monotonic()+15
+    while True:
+        note_view=call("cad_viewer",{"action":"sync","view_id":"annotation_schema"})
+        if note_view["state"]=="ready":break
+        assert note_view["state"]=="loading" and time.monotonic()<deadline;time.sleep(.02)
+    note_action={"action":"annotation","view_id":"annotation_schema","evaluation_id":note_view["evaluation_id"]}
+    note_result=call("cad_viewer",dict(note_action,operation="add",anchor={"kind":"model"},text="Inspect clearance <plain text>"))
+    note=note_result["annotations"][0]
+    assert note["status"]=="current" and note["anchor"]["point_mm"]==[10,5,3]
+    assert note["anchor_lifetime"]=="evaluation" and note["coordinate_space"]=="committed_source_pose"
+    assert call("cad_context",{"view_id":"annotation_schema"})["annotations"]==[note]
+    checks+=3
+    note_topology=call("cad_query",{"document_id":"annotation_schema","revision":1,"kind":"topology"})
+    note_ref={"document_id":"annotation_schema","revision":1,"evaluation_id":note_view["evaluation_id"],"feature_id":"box","kind":"face","entity_id":note_topology["topology"]["faces"][0]["id"]}
+    note_result=call("cad_viewer",dict(note_action,operation="add",anchor={"kind":"entity","reference":note_ref},text="Native face inspection center"))
+    assert note_result["annotations"][1]["anchor"]["point_mm"]==note_topology["topology"]["faces"][0]["center_mm"];checks+=1
+    note_result=call("cad_viewer",dict(note_action,operation="update",annotation_id=note["id"],text="Edited note"))
+    assert note_result["annotations"][0]["anchor"]==note["anchor"];checks+=1
+    invalid_notes=[dict(note_action,operation="add",anchor={"kind":"model","point_mm":[0,0,0]},text="bad"),
+        dict(note_action,operation="add",anchor={"kind":"model"},text="x"*513),
+        dict(note_action,operation="add",anchor={"kind":"model"},text="bad\u0001"),
+        dict(note_action,operation="update",annotation_id=note["id"],text="bad",anchor={"kind":"model"}),
+        dict(note_action,operation="delete",annotation_id=note["id"],script="x")]
+    for bad in invalid_notes:
+        assert not Draft202012Validator(tools["cad_viewer"]["inputSchema"]).is_valid(bad);checks+=1
+    malformed=json.loads(json.dumps(note_result));malformed["annotations"][0]["anchor_lifetime"]="stable"
+    assert not Draft202012Validator(tools["cad_viewer"]["outputSchema"]).is_valid(malformed);checks+=1
+    call("cad_apply",{"document_id":"annotation_schema","expected_revision":1,"operations":[{"op":"replace_feature","id":"box","feature":{"id":"box","type":"box","size":[21,10,6]}}]})
+    historical=call("cad_context",{"view_id":"annotation_schema"})["annotations"]
+    assert all(item["status"]=="retired" and item["evaluation_id"]==note_view["evaluation_id"] for item in historical);checks+=1
+    deadline=time.monotonic()+15
+    while True:
+        note_view2=call("cad_viewer",{"action":"sync","view_id":"annotation_schema"})
+        if note_view2["state"]=="ready":break
+        assert note_view2["state"]=="loading" and time.monotonic()<deadline;time.sleep(.02)
+    note_current=dict(note_action,evaluation_id=note_view2["evaluation_id"])
+    assert call("cad_viewer",dict(note_current,operation="list"))["annotations"]==historical;checks+=1
+    assert len(call("cad_viewer",dict(note_current,operation="delete",annotation_id=note["id"]))["annotations"])==1;checks+=1
+    assert not call("cad_viewer",dict(note_current,operation="clear"))["annotations"];checks+=1
     frames = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "schema-conformance", "version": "1"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},

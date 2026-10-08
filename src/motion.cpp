@@ -115,4 +115,23 @@ Json assembly_motion(const Json& feature,const Json& parameters) {
   }
   return result;
 }
+Json assembly_mechanisms(const Json& model,const std::string& assembly_id) {
+  const auto tree=assembly_structure(model,assembly_id);
+  std::map<std::string,const Json*> definitions;
+  for (const auto& feature:model.at("features")) definitions.emplace(text_field(feature,"id"),&feature);
+  std::map<std::string,Json> occurrences;
+  std::vector<std::string> order;
+  const auto append=[&](const std::string& id,const std::string& path) {
+    if (!occurrences.contains(id)) {occurrences[id]=Json::array();order.push_back(id);}
+    occurrences[id].push_back(path);
+  };
+  append(assembly_id,"");
+  for (const auto& node:tree) if (node.at("kind")=="assembly") append(text_field(node,"input"),text_field(node,"id"));
+  Json result=Json::array();
+  for (const auto& id:order) {
+    auto motion=assembly_motion(*definitions.at(id),model.at("parameters"));
+    if (!motion.at("dofs").empty()) result.push_back({{"assembly_id",id},{"occurrences",occurrences.at(id)},{"motion",std::move(motion)}});
+  }
+  return result;
+}
 }

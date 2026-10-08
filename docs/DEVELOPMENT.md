@@ -3,6 +3,38 @@
 Run these commands from the repository root. For installation and everyday use,
 see the [README](../README.md) and [client setup](GETTING_STARTED.md).
 
+Use `cad_fabrication_review` with explicit machine/process limits for measured
+source-part checks and saved-pose clearance/interference. The new
+`nested-assembly.review.json` example uses illustrative fixture limits.
+[FABRICATION_REVIEW.md](FABRICATION_REVIEW.md) defines coverage and unknowns;
+`cad_manufacture.options.fabrication_review` includes its hashed report.
+
+Use `cad_gcode_review` for an existing checksummed plain G-code artifact with
+explicit machine/material/initial state. Native static inspection preserves
+original bytes, failed/unknown findings and a portable hash ledger. It supports
+`cad_job` cancellation/replay and does not require a slicer or language runtime.
+[GCODE_REVIEW.md](GCODE_REVIEW.md) defines its subset, assumptions and bounds;
+the native `gcode` suite tests analytic paths and package/job behavior.
+
+Use `cad_slice` to plan and run one committed source solid through an explicitly
+installed OrcaSlicer 2.4.2. Supply raw executable/profile hashes, self-contained
+compatible Marlin FFF profiles, High Temp Plate and explicit review assumptions;
+then run the returned plan by its raw hash. [SLICING.md](SLICING.md) describes
+fixed argv, exact-source numerical verification, effective settings, bounded
+processes and portable publication. It never contacts a printer. The native
+`slicer` suite uses an actual native process-control fixture, not a simulated
+slicing-accuracy claim. To include its plan/run contracts in independent schema
+and SDK tests, pass `build/cad_slicer_fixture` (Windows: `.exe`) as the optional
+second argument after the service executable. Actual installed Orca integration
+has separate evidence in HANDOFF; core CAD requires neither Orca nor Python.
+
+For sourced STEP geometry, `cad_import` accepts `expected_sha256` and optional
+`purchase`, binding supplier/part/source identity to unchanged raw file bytes.
+Unchanged imported sources and rigid copies retain that identity in BOMs and
+manufacturing packages, including an original `source.step`. See
+[PURCHASED_PARTS.md](PURCHASED_PARTS.md); the washer example needs a downloaded
+local STEP path, while native regression tests create isolated local fixtures.
+
 ## Build and test
 
 Development needs CMake 3.24+ and a C++20 compiler. Build checksum-pinned native
@@ -13,12 +45,17 @@ cmake -S cmake/dependencies -B build-deps \
   -DAGENTCAD_DEPS_PREFIX="$PWD/.deps/occt" -DAGENTCAD_JOBS=4
 cmake --build build-deps --parallel 4
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DOpenCASCADE_DIR="$PWD/.deps/occt/lib/cmake/opencascade"
+  -DOpenCASCADE_DIR="$PWD/.deps/occt/lib/cmake/opencascade" \
+  -DCMAKE_PREFIX_PATH="$PWD/.deps/occt"
 cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
 ```
 
 An existing exact exception-enabled OCCT SDK can be selected with OpenCASCADE_DIR.
+Use its prefix for CMAKE_PREFIX_PATH as well. When switching SDKs in an existing
+build directory, clear cached FreeType locations with `cmake -U 'FREETYPE_*'`
+and the same configure arguments, or use a fresh build directory; an older SDK
+library directory on the loader search path can override the selected OCCT.
 Use the supplied dependency recipe's HLR midpoint, root streaming and grid reuse
 patch for the cold-drawing optimization and current performance geometry regressions; an unmodified SDK
 retains the previous behavior. The patch and modified source accompany bundles.
@@ -34,6 +71,20 @@ open while using `cad_apply`; it updates automatically. `cad_context` reads the
 user's current selection and camera, and `cad_show` switches the document in the
 same view. The bundled [native-cad skill](../skills/native-cad/SKILL.md) guides this
 agent workflow. The CLI/offline workflow below remains available.
+
+The live viewer also persists uncapped clipping and exploded inspection through
+the same native context actions. Native live tests cover validation, source
+immutability, revisions and restart; renderer/controller tests cover clipped
+occlusion, shared vertex ownership, graphics recovery and delayed context writes.
+See [PRESENTATION.md](PRESENTATION.md) and HANDOFF for actual browser evidence.
+
+Use `cad_measure` with a current committed topology/mesh evaluation for exact
+face/edge/leaf-pair distances and bounded assembly clearance queries. The live
+Exact measurement panel submits native jobs and retains source-pose results
+while clipping, hiding or exploding parts. [MEASUREMENTS.md](MEASUREMENTS.md)
+defines qualification, analytic angles, witnesses and material-interference
+semantics. The native `measurement` suite covers analytic geometry, cold-cache
+reference recovery, deadlines/cancellation, revision retirement and job replay.
 
 Use a fresh workspace:
 
@@ -71,7 +122,8 @@ Assembly geometry stays separate even where parts touch or overlap. Use
 `set_part_placement`, `set_mate`, and `remove_mate` for atomic arrangement edits,
 and view-specific part offsets for exploded drawings. See
 [ASSEMBLIES.md](ASSEMBLIES.md) for a complete editable example, transform
-conventions, inspection fields and the supported one-level assembly scope.
+conventions, inspection fields and bounded nested composition. The
+`nested-assembly.create.json` example reuses an articulated subassembly twice.
 Source-keyed BOM metadata supplies optional item/part numbers, descriptions and
 materials; quantities count instances. `cad_bom` exports revision-qualified
 JSON/CSV. Drawing `bom: true` adds the table and optional visible-surface balloons.
@@ -84,10 +136,21 @@ exports URDF with paired SRDF and source meshes; its physical limits are illustr
 test values. [Robot export](ROBOT_EXPORT.md) documents SI coordinate conversion,
 SDF inertial requirements and consumer-validation limits.
 
+`examples/section-inspection.create.json` reuses two bored housings on separate
+bases. Open its live view, enable a Z clipping plane through the housings, and
+calculate the exact section. A plane strictly between Z=0 and Z=20 has two
+annular regions with total area `216π mm²`; the bases remain outside that plane.
+The native report retains each bore. Section surfaces are read-only review
+geometry; original faces remain selectable through the openings. See
+[SECTIONS.md](SECTIONS.md). The native `section`, `live`, `app_protocol`,
+`live_ui` and `webgl_renderer` suites cover the service and view coordination.
+
 Repeated queries, exports and drawings automatically reuse exact geometry and
-projected drawing views in a bounded workspace cache. Drawing layout, dimensions,
-tolerances and formats can change without repeating projection. Model edits or
-native build changes invalidate the cache; removing it loses no editable work.
+projected drawing views in a bounded workspace cache. Parameter edits rebuild
+only affected feature dependencies. Drawing layout, dimensions, tolerances and
+formats can change without repeating projection; unrelated branches do not
+invalidate the output's projections. Native build changes invalidate derived
+entries; removing the cache loses no editable work.
 Complex first-time threaded drawings may still need `cad_job` with a longer
 timeout. Developer benchmark: `python3 tests/cache_benchmark.py
 build/agent-3d-cad build/cache-benchmark` (isolated workspaces; two hatched sections
@@ -95,6 +158,18 @@ of the full M20 knob, cold/warm/style-change and geometry-only timings). Optiona
 `--views standard` exercises the much slower four-view hidden-line drawing.
 Use `--cold-only` to measure the first drawing alone, and `--timeout-ms` to set
 its bounded job budget. Failed jobs retain timings and errors in the report.
+
+The native dependency benchmark builds a panel with 128 holes and two editable
+adapter occurrences, then compares three adapter-width edits against independent
+cold workspaces. It verifies matching geometry and records per-feature reuse,
+timings, native/kernel identity and the executable hash:
+
+```sh
+build/cad_dependency_cache_benchmark build/dependency-cache-benchmark
+```
+
+This is a developer executable, excluded from runtime bundles. Timing is evidence,
+not a flaky test threshold. See [DEPENDENCY_CACHE.md](DEPENDENCY_CACHE.md).
 
 ## Jobs and retries
 
@@ -128,9 +203,11 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-Twenty application tools expose create/read/apply/restore/import, query/export/BOM/drawing/robot handoff,
-view/preview/selection resolution, comparison, jobs, model discovery and live
-view context. `cad_open` attaches the bundled MCP App resource; `cad_viewer` is an
+Twenty-eight application tools expose create/read/apply/restore/import,
+query/measurement/export/BOM/drawing/manufacturing/process review, G-code review,
+slicing/printer plans, robot handoff, external artifact review, view/preview/
+selection resolution, comparison, jobs, model discovery and live view context.
+`cad_open` attaches the bundled MCP App resource; `cad_viewer` is an
 app-only transport tool. This is a local stdio service with no HTTP endpoint.
 No global host configuration is installed for you.
 
@@ -153,6 +230,22 @@ It exercises discovery, schema validation, edits, exports, structured errors,
 responsive jobs and restart through an independent client. Python is not part of
 the native distribution.
 
+For a final discovery inlining change, retain the native tool catalog immediately
+before that pass and compare it with the final catalog using
+`python tests/discovery_compaction_check.py before-tools.json after-tools.json --source .`
+in the same Python environment. This independently expands removed definitions,
+checks every schema and reference, and compiles the exact source pass privately
+to test literal, recursive, scoped and pointer-reference safeguards. Both catalogs
+must have the same tool contracts and alias names. JSON headers are found in the
+local pinned dependency or CMake FetchContent directories; use
+`--json-include /path/to/include` for another nlohmann JSON 3.12.0 installation.
+
+External-artifact acceptance uses `tests/artifact_mcp_sdk_smoke.py` with the same
+official SDK environment. After the `artifact_mcp_flow` CTest produces
+`build/artifact-flow-evidence.json`, run
+`python tests/artifact_schema_tests.py build/artifact-flow-evidence.json` for
+independent Draft 2020-12 validation of actual artifact calls and results.
+
 ## Bundle
 
 ```sh
@@ -171,6 +264,7 @@ notarization remain owner decisions.
 | Location | Responsibility |
 |---|---|
 | `src/model.cpp` | Closed schemas, units/expressions, dependencies and semantic edits |
+| `src/component.cpp` | Pinned source snapshots, dependency materialization, bindings and local-edit status |
 | `src/kernel.cpp` | OCCT shapes, history, selectors, mesh mapping, exchange |
 | `src/storage.cpp` | Native locking, atomic revisions, durable request receipts |
 | `src/jobs.cpp` | Process budgets, admission, cancellation and recovery |

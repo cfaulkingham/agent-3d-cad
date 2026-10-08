@@ -1,0 +1,15 @@
+{
+  "document_id": "nested_assembly_demo",
+  "revision": 1,
+  "options": {
+    "parts": [
+      { "feature_id": "block", "process": "cnc", "material": "Aluminum",
+        "notes": ["Illustrative process choice; tooling and production tolerances are unspecified."] },
+      { "feature_id": "rod", "process": "unspecified" }
+    ],
+    "part_drawing": {
+      "views": [{ "id": "front", "orientation": "front" }],
+      "dimensions": [{ "view": "front", "kind": "width" }]
+    }
+  }
+}

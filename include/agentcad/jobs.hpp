@@ -3,9 +3,12 @@
 
 namespace agentcad {
 // All OCCT work runs in a fresh native process. Input is bounded structured JSON.
-// Result always has summary; topology/view add topology, view adds mesh.
+// Geometry results carry summary; non-geometry inspection returns its report.
 Json evaluate_model(const fs::path& workspace, const Json& model,
                     const Json& request = Json{{"kind", "summary"}}, Json* cache_diagnostics = nullptr);
+// Private fixed-driver supervision; never exposed as an arbitrary execution tool.
+Json run_native_process(const fs::path& workspace, const Json& request);
+int process_worker_main(const fs::path& input, const fs::path& output);
 Json dispatch_job(const fs::path& workspace, const Json& arguments);
 void check_job_cancelled();
 Json job_request_context();

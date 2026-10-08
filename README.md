@@ -62,6 +62,21 @@ Your saved model is the editable source. Exports are separate outputs; exporting
 does not replace the project. Failed edits preserve the last committed revision.
 Keep the project folder outside the extension installation so updates preserve it.
 
+## Review external files
+
+The current source can review original STEP, STL, 3MF, GLB, DXF and URDF/SDF/SRDF
+robot files in the same viewer. Ask your agent to review the file with its actual
+SHA-256 and explicit units. `cad_artifact` captures and validates a portable
+review; `cad_artifact_show` opens it with source hashes, geometry or semantic
+metadata, and format limitations.
+
+These views are read-only. Mesh groups and curves belong to the captured review;
+they do not recover original CAD face selectors or editable feature history.
+A saved native project remains the editable source. Use `cad_show` to return to
+that project, or explicitly import a STEP file with `cad_import` to create an
+opaque native feature. Final combined validation and desktop-host acceptance
+remain pending. See the [external artifact guide](docs/ARTIFACT_REVIEW.md).
+
 ## Other clients and development previews
 
 CLI agents, OpenCode and the standalone Tauri viewer are deferred from the 1.0
@@ -73,8 +88,27 @@ in [advanced client setup](docs/GETTING_STARTED.md) and
 
 - [Client setup and troubleshooting](docs/GETTING_STARTED.md)
 - [Viewer and saved projects](docs/LIVE_VIEWER.md)
+- [External CAD, mesh, drawing and robot review](docs/ARTIFACT_REVIEW.md)
+- [Clipping and exploded inspection](docs/PRESENTATION.md)
+- [Exact measurements and assembly clearance](docs/MEASUREMENTS.md)
+- [Exact planar sections and material caps](docs/SECTIONS.md)
+- [Colors, saved review views and PNG captures](docs/APPEARANCE.md)
+- [Saved inspection notes and revision-qualified pins](docs/ANNOTATIONS.md)
+- [Coordinated mechanism and presentation sequences](docs/PLAYBACK.md)
 - [Modeling tools and CLI protocol](docs/PROTOCOL.md)
 - [Drawings](docs/DRAWINGS.md) and [assemblies](docs/ASSEMBLIES.md)
+- [Manufacturing packages](docs/MANUFACTURING.md): editable source, per-part exports,
+  drawings, BOM and a portable manifest
+- [Measured fabrication review](docs/FABRICATION_REVIEW.md): explicit process limits,
+  geometric evidence and saved-pose clearance/interference
+- [Native G-code review](docs/GCODE_REVIEW.md): explicit commanded-path checks,
+  preserved original bytes and unknown firmware behavior
+- [Native slicing](docs/SLICING.md): explicit installed OrcaSlicer/profile inputs,
+  reviewed plans, bounded jobs and real G-code provenance
+- [Printer handoff](docs/PRINTER_HANDOFF.md): portable offline plans, native
+  re-verification and explicit external installation/machine prerequisites
+- [Sourced parts](docs/PURCHASED_PARTS.md): verified STEP identity, reusable
+  purchasing provenance and original supplier artifacts
 - [Build, test, and contribute](docs/DEVELOPMENT.md)
 - [Release process and packaging](docs/DISTRIBUTION.md)
 

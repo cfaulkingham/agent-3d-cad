@@ -1,0 +1,1 @@
+<sdf version="1.12"><model name="external"><pose>1 0 0 0 0 0</pose><link name="base"><pose>2 0 0 0 0 0</pose><visual name="box"><pose>0.002 0 0 0 0 0</pose><geometry><box><size>0.002 0.004 0.006</size></box></geometry></visual></link></model></sdf>

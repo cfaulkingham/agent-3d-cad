@@ -1,0 +1,27 @@
+{
+  "document_id": "component_assembly_demo",
+  "expected_revision": 1,
+  "operations": [
+    {
+      "op": "set_component",
+      "id": "hinge_module",
+      "source_document_id": "nested_assembly_demo",
+      "source_revision": 1,
+      "source_feature_id": "module",
+      "bindings": { "angle": { "parameter": "module_angle" } }
+    },
+    {
+      "op": "add_feature",
+      "feature": {
+        "id": "fixture",
+        "type": "assembly",
+        "parts": [
+          { "id": "base", "input": "base" },
+          { "id": "left", "input": "hinge_module", "placement": { "translation": [10, 8, 3] } },
+          { "id": "right", "input": "hinge_module", "placement": { "translation": [70, 8, 3] } }
+        ]
+      }
+    },
+    { "op": "set_output", "feature_id": "fixture" }
+  ]
+}

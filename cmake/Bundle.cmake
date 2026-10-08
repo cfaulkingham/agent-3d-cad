@@ -20,12 +20,27 @@ if(MSVC)
   set(CMAKE_INSTALL_UCRT_LIBRARIES TRUE)
   include(InstallRequiredSystemLibraries)
 endif()
+# TinyXML2 is compiled from the unchanged pinned release sources. Verify the
+# provenance record at configure time and ship complete source/license notices.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinyxml2/PROVENANCE.json" AGENTCAD_ARTIFACT_DEPENDENCIES)
+foreach(source tinyxml2.cpp tinyxml2.h LICENSE.txt readme.md)
+  string(JSON expected_hash GET "${AGENTCAD_ARTIFACT_DEPENDENCIES}" tinyxml2 files "${source}")
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/third_party/tinyxml2/${source}" actual_hash)
+  if(NOT actual_hash STREQUAL expected_hash)
+    message(FATAL_ERROR "Pinned TinyXML2 source/notice changed: ${source}")
+  endif()
+endforeach()
+install(FILES third_party/tinyxml2/tinyxml2.cpp third_party/tinyxml2/tinyxml2.h
+  third_party/tinyxml2/LICENSE.txt third_party/tinyxml2/readme.md third_party/tinyxml2/PROVENANCE.json
+  DESTINATION share/agent-3d-cad/notices/tinyxml2)
 get_target_property(AGENTCAD_OCCT_LINKAGE TKernel TYPE)
 file(SHA256 "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" AGENTCAD_APP_SHA256)
 install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/occt)
 install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples)
 install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
-install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/DRAWINGS.md docs/ASSEMBLIES.md DESTINATION share/agent-3d-cad)
+install(FILES docs/ANNOTATIONS.md DESTINATION share/agent-3d-cad)
+install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/ARTIFACT_REVIEW.md docs/PRESENTATION.md docs/APPEARANCE.md docs/MEASUREMENTS.md docs/SECTIONS.md docs/DRAWINGS.md docs/ASSEMBLIES.md docs/ROBOT_EXPORT.md docs/MANUFACTURING.md docs/FABRICATION_REVIEW.md docs/GCODE_REVIEW.md docs/PRINTER_HANDOFF.md docs/SLICING.md docs/PURCHASED_PARTS.md docs/COMPONENTS.md docs/DEPENDENCY_CACHE.md docs/COMPOSITION_FABRICATION_REVIEW.md DESTINATION share/agent-3d-cad)
+install(FILES docs/PLAYBACK.md DESTINATION share/agent-3d-cad)
 install(FILES LICENSE NOTICE packaging/THIRD_PARTY.md DESTINATION share/agent-3d-cad/notices)
 configure_file(cmake/InstallBundle.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle.cmake" @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle-$<CONFIG>.cmake"
@@ -57,5 +72,6 @@ include(CPack)
 add_custom_target(bundle-check
   COMMAND "${CMAKE_COMMAND}" "-DBUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}"
     "-DTEST_DIR=${CMAKE_CURRENT_BINARY_DIR}/bundle-check"
+    "-DSLICER_FIXTURE=$<$<TARGET_EXISTS:cad_slicer_fixture>:$<TARGET_FILE:cad_slicer_fixture>>"
     -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/bundle_smoke.cmake"
   DEPENDS agent-3d-cad USES_TERMINAL)

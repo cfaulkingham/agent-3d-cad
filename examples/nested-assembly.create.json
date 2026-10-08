@@ -1,0 +1,171 @@
+{
+  "document_id": "nested_assembly_demo",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "angle": 90
+    },
+    "features": [
+      {
+        "id": "block",
+        "type": "box",
+        "size": [
+          10,
+          4,
+          2
+        ]
+      },
+      {
+        "id": "rod",
+        "type": "box",
+        "size": [
+          6,
+          2,
+          2
+        ]
+      },
+      {
+        "id": "module",
+        "type": "assembly",
+        "parts": [
+          {
+            "id": "foot",
+            "input": "block"
+          },
+          {
+            "id": "link",
+            "input": "rod"
+          }
+        ],
+        "mates": [
+          {
+            "id": "pivot",
+            "type": "revolute",
+            "parent": "foot",
+            "child": "link",
+            "angle_deg": {
+              "parameter": "angle"
+            },
+            "angle_limits_deg": [
+              0,
+              180
+            ],
+            "parent_frame": {
+              "origin": [
+                10,
+                0,
+                2
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          }
+        ],
+        "bom": [
+          {
+            "input": "block",
+            "item_number": 7,
+            "part_number": "BLOCK"
+          },
+          {
+            "input": "rod",
+            "item_number": 2,
+            "part_number": "ROD"
+          }
+        ]
+      },
+      {
+        "id": "machine",
+        "type": "assembly",
+        "parts": [
+          {
+            "id": "left",
+            "input": "module",
+            "placement": {
+              "translation": [
+                20,
+                0,
+                0
+              ],
+              "rotation": {
+                "origin": [
+                  0,
+                  0,
+                  0
+                ],
+                "axis": [
+                  0,
+                  0,
+                  1
+                ],
+                "angle_deg": 90
+              }
+            }
+          },
+          {
+            "id": "right",
+            "input": "module",
+            "placement": {
+              "translation": [
+                60,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "spare",
+            "input": "block",
+            "placement": {
+              "translation": [
+                100,
+                0,
+                0
+              ]
+            }
+          }
+        ],
+        "bom": [
+          {
+            "input": "block",
+            "item_number": 5,
+            "part_number": "BLOCK"
+          },
+          {
+            "input": "module",
+            "item_number": 9,
+            "part_number": "MODULE",
+            "description": "Articulated two-part module"
+          }
+        ]
+      }
+    ],
+    "output": "machine"
+  }
+}

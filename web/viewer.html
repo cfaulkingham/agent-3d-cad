@@ -6,29 +6,96 @@
 <body>
 <header><div class="wordmark"><span class="brand-icon" aria-hidden="true">◇</span> AGENT <b>CAD</b></div><div class="document-heading"><h1 id="document-title">Your workspace</h1><span id="revision">Editable native CAD</span></div><span id="connection" class="connection">Connecting</span><button id="fullscreen" class="quiet" hidden title="Expand viewer">Expand ↗</button></header>
 <main>
-  <aside class="library"><div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div><p id="workspace-label" class="workspace-label">Saved projects</p><button id="open-workspace" class="workspace-button" hidden>Open workspace…</button><select id="recent-workspaces" aria-label="Recent workspaces" hidden><option value="">Recent workspaces…</option></select><label class="sr-only" for="project-search">Find a saved project</label><input id="project-search" type="search" placeholder="Find a project…"><nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav><div class="section-heading feature-heading"><h2>Features</h2><span id="feature-count" class="count">0</span></div><div id="features"><p class="muted">Open a model to explore its design.</p></div><div class="library-foot">Exact geometry · OpenCascade 8.0.1<br>Dimensions in millimeters</div></aside>
+  <aside class="library"><div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div><p id="workspace-label" class="workspace-label">Saved projects</p><button id="open-workspace" class="workspace-button" hidden>Open workspace…</button><select id="recent-workspaces" aria-label="Recent workspaces" hidden><option value="">Recent workspaces…</option></select><label class="sr-only" for="project-search">Find a saved project</label><input id="project-search" type="search" placeholder="Find a project…"><nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav><div class="section-heading feature-heading"><h2 id="feature-heading-title">Features</h2><span id="feature-count" class="count">0</span></div><div id="features"><p class="muted">Open a model to explore its design.</p></div><div id="library-foot" class="library-foot">Exact geometry · OpenCascade 8.0.1<br>Dimensions in millimeters</div></aside>
   <section class="stage" aria-label="CAD viewport">
     <div class="viewport-toolbar"><div class="segmented" aria-label="Selection mode"><button id="mode-face" aria-pressed="true">Faces</button><button id="mode-edge" aria-pressed="false">Edges</button></div><div class="toolbar-right"><button id="fit" title="Fit model (Home)">Fit</button><button id="view-iso" title="Isometric view">Iso</button><button id="view-top" title="Top view">Top</button><button id="view-front" title="Front view">Front</button><button id="view-right" title="Right view">Right</button></div></div>
     <canvas id="viewport" tabindex="0" aria-label="CAD model. Drag to orbit, shift-drag to pan, scroll to zoom. Click to select geometry."></canvas>
+    <div id="annotation-overlay" class="annotation-overlay" aria-label="Review pins"></div>
     <div id="empty-state" class="empty-state"><div class="empty-mark" aria-hidden="true">◇</div><h2>Your next idea starts here</h2><p>Ask your agent to create a model,<br>or open one from the list.</p></div>
     <div id="all-hidden" class="all-hidden" hidden><p>All parts are hidden.</p><button id="restore-parts">Show all parts</button></div>
+    <div id="artifact-semantic-empty" class="all-hidden" hidden><p id="artifact-empty-help">This file contains robot semantics without geometry.</p><p>Review its groups and references in Source metadata.</p></div>
     <div id="loading" class="loading" hidden><span class="spinner" aria-hidden="true"></span><span id="loading-text">Building current revision…</span></div>
     <div id="view-error" role="alert" class="view-error" hidden></div>
     <div class="viewport-foot"><span>Drag to orbit · Shift-drag to pan · Scroll to zoom</span><span id="dimensions"></span></div>
   </section>
   <aside class="inspector">
+    <section id="artifact-review-panel" class="artifact-review-panel" aria-label="External artifact review" hidden><div class="section-heading"><h2>Read-only review</h2></div><dl id="artifact-source"></dl><p id="artifact-association" class="fine-print"></p><details><summary>Captured source identity</summary><pre id="artifact-hashes"></pre></details><details><summary>Review limitations</summary><ul id="artifact-limitations"></ul></details></section>
+    <section id="presentation-panel" class="presentation-panel" aria-label="Visual inspection" hidden>
+      <div class="section-heading"><h2>Visual inspection</h2><button id="presentation-reset" class="quiet">Reset</button></div>
+      <label class="capture-option"><input id="clip-enabled" type="checkbox"> Clip with a plane</label>
+      <div id="clip-controls" hidden><label for="clip-axis">Plane normal</label><select id="clip-axis"><option value="x">X</option><option value="y">Y</option><option value="z" selected>Z</option><option value="custom" hidden>Custom direction</option></select>
+        <label for="clip-offset">Offset <span id="clip-position"></span></label><input id="clip-offset" type="range" min="0" max="1" step="0.001" value="0.5">
+        <label class="capture-option"><input id="clip-flip" type="checkbox"> Keep the negative side</label></div>
+      <div id="explode-controls" hidden><label for="explode-distance">Explode parts <span id="explode-position"></span></label><input id="explode-distance" type="range" min="0" max="100" step="0.1" value="0"></div>
+      <p id="presentation-status" role="status" aria-live="polite" class="fine-print">Visual offsets change this view. Measurements and exports use the saved source geometry.</p>
+    </section>
+    <section id="appearance-panel" class="presentation-panel appearance-panel" aria-label="Model colors" hidden>
+      <div class="section-heading"><h2>Colors</h2><button id="appearance-reset" class="quiet">Reset colors</button></div>
+      <label for="appearance-default">Default model color</label><div class="color-row"><input id="appearance-default" type="color" value="#a8bfcc"><button id="appearance-default-apply">Set default</button></div>
+      <div id="appearance-part-controls" hidden><label for="appearance-part">Leaf part</label><select id="appearance-part"></select><label for="appearance-color">Part color</label><div class="color-row"><input id="appearance-color" type="color" value="#a8bfcc"><button id="appearance-part-apply">Set part color</button></div><button id="appearance-part-reset" class="quiet">Use default for this part</button></div>
+      <p id="appearance-status" role="status" aria-live="polite" class="fine-print">Colors affect this view and saved images.</p>
+    </section>
+    <section id="annotations-panel" class="presentation-panel" aria-label="Review annotations" hidden>
+      <div class="section-heading"><h2>Review notes</h2><button id="annotation-refresh" class="quiet">Refresh</button></div>
+      <label for="annotation-list">Saved note</label><select id="annotation-list"><option value="">Choose a note…</option></select>
+      <label for="annotation-anchor">New pin location</label><select id="annotation-anchor"><option value="model">Model center</option></select>
+      <label for="annotation-text">Review text</label><textarea id="annotation-text" rows="3" maxlength="512" placeholder="Describe what your agent should inspect…"></textarea>
+      <div class="note-actions"><button id="annotation-add">Add pin</button><button id="annotation-update">Save text</button><button id="annotation-delete" class="quiet">Delete</button></div>
+      <button id="annotation-clear" class="quiet">Clear all notes</button>
+      <p id="annotation-status" role="status" aria-live="polite" class="fine-print">Pins mark inspection centers for this evaluation.</p>
+      <ol id="annotation-notes" class="annotation-notes"></ol>
+    </section>
+    <section id="presets-panel" class="presentation-panel presets-panel" aria-label="Saved review views" hidden>
+      <div class="section-heading"><h2>Saved views</h2><button id="preset-refresh" class="quiet">Refresh</button></div>
+      <label for="preset-list">Review view</label><select id="preset-list"><option value="">No saved views yet</option></select>
+      <div class="view-buttons"><button id="preset-apply" disabled>Apply view</button><button id="preset-delete" class="quiet" disabled>Delete view</button></div>
+      <label for="preset-name">Save current view as</label><input id="preset-name" type="text" maxlength="64" placeholder="e.g. Exploded overview" autocomplete="off"><button id="preset-save" disabled>Save view</button>
+      <p id="preset-status" role="status" aria-live="polite" class="muted"></p><p class="fine-print">Saves camera, clipping, explosion, colors and hidden parts. Saving the same name replaces that view. Geometry and revisions stay unchanged.</p>
+    </section>
+    <section id="section-panel" class="presentation-panel section-panel" aria-label="Exact sections" hidden>
+      <div class="section-heading"><h2>Exact section</h2><button id="section-clear" class="quiet" disabled>Clear result</button></div>
+      <button id="section-calculate" class="section-calculate" disabled>Calculate exact section</button>
+      <p id="section-state" role="status" aria-live="polite" class="muted">Enable a clipping plane, then calculate its exact section.</p>
+      <dl id="section-result" aria-label="Exact section dimensions"></dl>
+      <p id="section-coverage" class="fine-print" hidden></p>
+    </section>
+    <section id="measurement-panel" class="presentation-panel" aria-label="Exact measurements" hidden>
+      <div class="section-heading"><h2>Exact measurement</h2><button id="measurement-clear" class="quiet">Clear result</button></div>
+      <label for="measurement-a">Target A</label><select id="measurement-a"><option value="">Choose a part or use a pick</option></select><button id="measurement-pick-a" class="quiet">Use selected face/edge as A</button>
+      <label for="measurement-b">Target B</label><select id="measurement-b"><option value="">Choose a part or use a pick</option></select><button id="measurement-pick-b" class="quiet">Use selected face/edge as B</button>
+      <label for="measurement-threshold">Minimum clearance (mm, optional)</label><input id="measurement-threshold" type="number" min="0" max="1000000" step="any" placeholder="Your required clearance">
+      <button id="measurement-pair">Measure pair</button><button id="measurement-assembly">Check assembly clearance</button>
+      <p id="measurement-state" role="status" aria-live="polite" class="fine-print">Distances use the saved source pose, including hidden parts.</p>
+      <dl id="measurement-result"></dl>
+      <p class="fine-print">Clipping and explosion do not change these measurements. Assembly checks cover up to 23 leaf parts; your agent can check an explicit subset.</p>
+    </section>
+    <section id="sequence-panel" class="presentation-panel" aria-label="Timed sequences" hidden>
+      <div class="section-heading"><h2>Sequences</h2><button id="sequence-refresh" class="quiet">Refresh</button></div>
+      <label for="sequence-list">Saved sequence</label><select id="sequence-list"><option value="">No saved sequences</option></select>
+      <div class="view-buttons"><button id="sequence-play">Play</button><button id="sequence-pause" class="quiet">Pause</button><button id="sequence-delete" class="quiet">Delete</button></div>
+      <label for="sequence-seek">Time <output id="sequence-time">0.00 s</output></label><input id="sequence-seek" type="range" min="0" max="1" value="0" step="0.01">
+      <div class="view-buttons"><label>Speed <input id="sequence-speed" type="number" min="0.1" max="4" step="0.1" value="1"></label><label><input id="sequence-loop" type="checkbox"> Loop</label></div>
+      <p id="sequence-status" class="muted" role="status" aria-live="polite"></p>
+      <details><summary>Create a sequence</summary><label for="sequence-name">Name</label><input id="sequence-name" maxlength="64" placeholder="e.g. Inspection cycle" autocomplete="off">
+        <label for="sequence-keytime">Keyframe time (seconds)</label><input id="sequence-keytime" type="number" min="0" max="3600" value="0" step="0.1">
+        <div class="view-buttons"><button id="sequence-capture">Add current pose</button><button id="sequence-clear" class="quiet">Clear keyframes</button></div><p id="sequence-frames" class="fine-print">No keyframes captured.</p><button id="sequence-save">Save sequence</button>
+        <p class="fine-print">Capture time zero, change the joints or explosion, then capture a later pose. Reset the pose before saving. Joint values, explosion and clipping offsets interpolate between keyframes. This is a visual review, with no dynamics simulation or source edits.</p>
+      </details>
+    </section>
     <section id="motion-panel" class="motion-panel" aria-label="Mechanism motion" hidden>
       <div class="section-heading"><h2>Motion</h2><button id="motion-reset" class="quiet">Reset</button></div>
       <p id="motion-status" role="status" aria-live="polite" class="muted"></p>
+      <label for="motion-mechanism">Mechanism definition</label><select id="motion-mechanism"></select>
+      <p id="motion-occurrences" class="fine-print"></p>
       <label class="sr-only" for="motion-poses">Saved poses</label><select id="motion-poses"></select>
       <div id="motion-values"></div>
       <label for="motion-name">Pose name <span class="muted">(optional)</span></label>
       <input id="motion-name" type="text" maxlength="64" placeholder="e.g. inspection" autocomplete="off">
       <button id="motion-save" class="primary" disabled>Save pose</button>
-      <p class="fine-print">Preview joint positions, then save a revision. A name also adds or updates a reusable pose.</p>
+      <p class="fine-print">Save keeps all previewed mechanisms in one revision. A name also saves a reusable pose for the selected definition.</p>
     </section>
-    <section id="parts-panel" class="parts-panel" aria-label="Assembly part visibility" hidden><div class="section-heading"><h2>Parts</h2><button id="show-all-parts" class="quiet">Show all</button></div><p id="parts-status" role="status" aria-live="polite" class="muted"></p><div id="parts-list"></div></section><div class="section-heading"><h2>Inspect</h2><button id="clear-selection" class="quiet" hidden>Clear</button></div><div id="selection-name" class="selection-name">Model overview</div><p id="selection-help" class="muted">Select a face or edge to inspect it and discuss a precise edit.</p><dl id="measurements"></dl><details id="reference-details" hidden><summary>Selection reference</summary><pre id="reference"></pre></details><div class="quick-edit"><div class="section-heading"><h2>Quick Edit</h2><span id="selection-badge" class="count">Whole model</span></div><label class="sr-only" for="prompt">Describe a change for your agent</label><textarea id="prompt" rows="4" maxlength="8000" placeholder="Describe a change…&#10;e.g. Round this edge to 2 mm"></textarea><label class="capture-option" id="capture-option" hidden><input id="include-capture" type="checkbox"> Include this view</label><button id="send" class="primary" disabled>Send to chat <span aria-hidden="true">↗</span></button><button id="copy-request" class="copy-request" disabled>Copy request</button><p id="edit-status" role="status" aria-live="polite"></p><p class="fine-print">If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.</p><details id="copy-fallback" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="8" aria-label="Request text to copy"></textarea></details></div><section class="export-panel"><h2>Export</h2><label class="sr-only" for="export-format">Export format</label><select id="export-format"><option value="step">STEP · exact solid</option><option value="stl">STL · 3D printing</option><option value="pdf">PDF · 2D drawing</option><option value="svg">SVG · 2D drawing</option><option value="dxf">DXF · 1:1 views</option></select><button id="export-model" disabled>Export saved revision</button><p class="fine-print">Drawings use an A4 sheet with standard views. Ask your agent to add dimensions or customize the drawing.</p></section><details class="parameters"><summary>Parameters</summary><dl id="parameters"></dl></details></aside>
+    <section id="parts-panel" class="parts-panel" aria-label="Assembly part visibility" hidden><div class="section-heading"><h2>Parts</h2><button id="show-all-parts" class="quiet">Show all</button></div><p id="parts-status" role="status" aria-live="polite" class="muted"></p><label class="sr-only" for="parts-search">Search parts and subassemblies</label><input id="parts-search" type="search" maxlength="519" placeholder="Search parts or sources…"><div id="parts-list"></div><p id="parts-empty" class="muted" hidden>No matching parts.</p></section><div class="section-heading"><h2>Inspect</h2><button id="clear-selection" class="quiet" hidden>Clear</button></div><div id="selection-name" class="selection-name">Model overview</div><p id="selection-help" class="muted">Select a face or edge to inspect it and discuss a precise edit.</p><dl id="measurements"></dl><details id="reference-details" hidden><summary>Selection reference</summary><pre id="reference"></pre></details><div class="quick-edit"><div class="section-heading"><h2 id="edit-heading">Quick Edit</h2><span id="selection-badge" class="count">Whole model</span></div><label class="sr-only" for="prompt">Describe a change for your agent</label><textarea id="prompt" rows="4" maxlength="8000" placeholder="Describe a change…&#10;e.g. Round this edge to 2 mm"></textarea><label class="capture-option" id="capture-option" hidden><input id="include-capture" type="checkbox"> Include this view</label><button id="send" class="primary" disabled>Send to chat <span aria-hidden="true">↗</span></button><button id="copy-request" class="copy-request" disabled>Copy request</button><p id="edit-status" role="status" aria-live="polite"></p><p id="edit-help" class="fine-print">If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.</p><details id="copy-fallback" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="8" aria-label="Request text to copy"></textarea></details></div><section id="export-panel" class="export-panel"><h2>Export</h2><label class="sr-only" for="export-format">Export format</label><select id="export-format"><option value="step">STEP · exact solid</option><option value="stl">STL · 3D printing</option><option value="pdf">PDF · 2D drawing</option><option value="svg">SVG · 2D drawing</option><option value="dxf">DXF · 1:1 views</option></select><button id="export-model" disabled>Export saved revision</button><p class="fine-print">Drawings use an A4 sheet with standard views. Ask your agent to add dimensions or customize the drawing.</p></section><details id="parameters-panel" class="parameters"><summary>Parameters</summary><dl id="parameters"></dl></details></aside>
 </main>
-<footer><span id="model-facts">Ready when you are</span><span id="update-status" role="status" aria-live="polite">Connecting to native service</span></footer>
+<footer><span id="model-facts">Ready when you are</span><button id="save-image" class="quiet" disabled>Save PNG image</button><span id="update-status" role="status" aria-live="polite">Connecting to native service</span></footer>
 <script>@VIEWER_BRIDGE@</script><script>@VIEWER_RENDERER@</script><script>@VIEWER_STATE@</script><script>@VIEWER_APP@</script>
 </body></html>

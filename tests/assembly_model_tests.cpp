@@ -77,7 +77,8 @@ void validation_tests() {
   changed=source; changed["features"][1]["parts"][0]["placement"]["unknown"]=1;
   error("invalid_argument",[&]{validate_model(changed);},"assembly");
   changed=source; changed["features"].push_back({{"id","nested"},{"type","assembly"},{"parts",Json::array({{{"id","inner"},{"input","assembly"}}})}});
-  error("invalid_model",[&]{validate_model(changed);},"nested");
+  validate_model(changed); ++checks;
+  require(assembly_structure(changed,"nested")[1].at("id")=="inner/base","Nested assembly has occurrence paths");
   for (const Json feature : Json::array({
     {{"id","after"},{"type","transform"},{"input","assembly"}},
     {{"id","after"},{"type","instance"},{"input","assembly"}},
