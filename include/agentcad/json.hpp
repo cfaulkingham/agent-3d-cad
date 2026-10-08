@@ -19,6 +19,9 @@ public:
 };
 
 Json parse_json(const std::string& text, std::size_t max_bytes = max_json_bytes);
+// Parse one finite decimal token with classic-locale syntax, no leading '+' or
+// whitespace, and no overflow or underflow to zero. Leaves value unchanged on failure.
+bool parse_decimal(std::string_view text, double& value);
 void fields(const Json& value, std::initializer_list<const char*> required,
             std::initializer_list<const char*> optional = {});
 std::string text_field(const Json& value, const std::string& key);

@@ -3,6 +3,7 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <locale>
 #include <sstream>
 
 namespace agentcad::artifact_detail {
@@ -11,15 +12,15 @@ namespace agentcad::artifact_detail {
 void require(bool condition, const std::string& message) { if (!condition) invalid(message); }
 double finite(double value) { require(std::isfinite(value) && std::abs(value)<=1e9, "Artifact coordinate must be finite and within 1e9 mm"); return value; }
 double real(const std::string& text) {
-  double value{}; const auto parsed=std::from_chars(text.data(),text.data()+text.size(),value);
-  require(parsed.ec==std::errc{} && parsed.ptr==text.data()+text.size(),"Malformed numeric value"); return finite(value);
+  double value{};
+  require(parse_decimal(text,value),"Malformed numeric value"); return finite(value);
 }
 std::size_t integer(const std::string& text, std::size_t maximum) {
   std::uint64_t value{}; const auto parsed=std::from_chars(text.data(),text.data()+text.size(),value);
   require(parsed.ec==std::errc{} && parsed.ptr==text.data()+text.size() && value<=maximum,"Malformed or out-of-range integer"); return static_cast<std::size_t>(value);
 }
 std::vector<double> numbers(const std::string& text, std::size_t count) {
-  std::istringstream input(text); std::string token; std::vector<double> values;
+  std::istringstream input(text); input.imbue(std::locale::classic()); std::string token; std::vector<double> values;
   while(input>>token) { require(values.size()<count,"Too many numeric components"); values.push_back(real(token)); }
   require(values.size()==count,"Wrong number of numeric components"); return values;
 }

@@ -1,5 +1,7 @@
 #include "agentcad/json.hpp"
 #include <cmath>
+#include <cstdlib>
+#include <locale.h>
 #include <set>
 
 namespace agentcad {
@@ -15,6 +17,53 @@ Json parse_json(const std::string& text, std::size_t max_bytes) {
       return true;
     });
   } catch (const Json::exception& e) { throw Error("invalid_json", e.what()); }
+}
+
+bool parse_decimal(std::string_view text, double& value) {
+  if (text.empty() || text.front() == '+') return false;
+  // Check decimal syntax before the C conversion, which also accepts leading
+  // whitespace, hexadecimal numbers, infinities and NaNs.
+  std::size_t at = text.front() == '-' ? 1 : 0;
+  const auto digits = [&] {
+    const auto begin = at;
+    while (at < text.size() && text[at] >= '0' && text[at] <= '9') ++at;
+    return at != begin;
+  };
+  bool have_digit = digits();
+  if (at < text.size() && text[at] == '.') { ++at; have_digit = digits() || have_digit; }
+  if (!have_digit) return false;
+  const auto mantissa = text.substr(0, at);
+  if (at < text.size() && (text[at] == 'e' || text[at] == 'E')) {
+    ++at;
+    if (at < text.size() && (text[at] == '+' || text[at] == '-')) ++at;
+    if (!digits()) return false;
+  }
+  if (at != text.size()) return false;
+  // Floating-point from_chars requires macOS 26. A private C numeric locale
+  // supports our macOS 15 baseline and never changes the process locale.
+  struct NumericLocale {
+#ifdef _WIN32
+    _locale_t handle = _create_locale(LC_NUMERIC, "C");
+    ~NumericLocale() { if (handle) _free_locale(handle); }
+#else
+    locale_t handle = newlocale(LC_NUMERIC_MASK, "C", nullptr);
+    ~NumericLocale() { if (handle) freelocale(handle); }
+#endif
+  };
+  static const NumericLocale locale;
+  if (!locale.handle) return false;
+  const std::string token(text);
+  char* end = nullptr;
+#ifdef _WIN32
+  const double candidate = _strtod_l(token.c_str(), &end, locale.handle);
+#else
+  const double candidate = strtod_l(token.c_str(), &end, locale.handle);
+#endif
+  if (end != token.c_str() + token.size() || !std::isfinite(candidate)) return false;
+  // Retain representable subnormals, but reject underflow rounded to zero.
+  if (candidate == 0 && mantissa.find_first_of("123456789") != std::string_view::npos) return false;
+  value = candidate;
+  return true;
 }
 
 void fields(const Json& value, std::initializer_list<const char*> required,

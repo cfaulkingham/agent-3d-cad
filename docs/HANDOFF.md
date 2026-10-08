@@ -7,6 +7,47 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## CI portability repairs — 2026-10-08
+
+Investigated [run 37833296104](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37833296104)
+at `8a8c66866b0283d4f2ba6999db88ee8f68ef1015`. Both macOS lanes stopped compiling
+`artifact_common.cpp`: floating-point `std::from_chars` requires macOS 26, while
+CI explicitly targets macOS 15. A local macOS-15 compile reproduced that error
+and the same problem in `gcode.cpp`. Both now use one strict decimal parser with
+a private C numeric locale, POSIX/Windows conversion implementations, complete
+token consumption, finite-range validation and rejection of underflow rounded
+to zero. Representable subnormals and signed zero remain accepted. Artifact
+coordinate-list tokenization explicitly uses the classic locale. Dependency
+pins, the macOS deployment target and public tool contracts are unchanged.
+
+Both Linux lanes passed all 54 native tests, then failed the relocated-package
+history check. In the standalone CMake script, unset CMP0054 made the quoted
+literal `"angle"` resolve to a variable from an earlier fixture. Setting the
+script's minimum CMake version to the project's existing 3.24 baseline fixes
+the comparison without changing its assertions. The original script reproduces
+the exact CI failure under CMake 3.31.6; the repaired complete package workflow
+passes under both CMake 3.31.6 and 4.3 with empty PATH and cleared loader overrides.
+
+Executed macOS arm64 validation:
+
+- Warning-free `cmake --build build-app-protocol --parallel 3` and **54/54 CTest
+  suites passed in 204.56 s**, including **135 artifact** and **79 G-code** checks.
+  New regressions cover decimal syntax, locale independence, signed/fractional
+  G-code words, overflow, underflow, signed zero and representable subnormals.
+- **899 JSON Schema checks across 28 tools** and **2,931 official MCP SDK 2.3.0
+  interoperability checks** passed with the explicit native slicer fixture.
+- Full `cad_core` compilation in `build-ci-macos15` with
+  `CMAKE_OSX_DEPLOYMENT_TARGET=15.0` passed without warnings. Direct syntax checks
+  of all three changed parser sources passed for macOS 15 arm64 and x86_64.
+  This is compilation evidence; the local SDK is not a macOS-15 runtime trial.
+- Complete relocated bundle smoke passed with each CMake version above;
+  `git diff --check` passed. Logs are `ci-fix-*` in `build-app-protocol` and
+  `build-ci-macos15/ci-fix-build.log`.
+
+The repair is prepared on `codex/fix-ci-macos15-parsing` for a draft PR and new
+five-platform CI validation. Check that run before merging. Earlier public
+release/host-installation gates remain as recorded in RELEASE_1_0.md.
+
 ## Combined implementation acceptance — 2026-10-08
 
 All seventeen software increments in COMPOSITION_FABRICATION_REVIEW.md are now
