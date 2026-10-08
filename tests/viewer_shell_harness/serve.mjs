@@ -2,6 +2,7 @@
 // page, backed by the real native stdio service. Nothing here ships or is a test.
 //   node tests/viewer_shell_harness/serve.mjs build-package/agent-3d-cad [port]
 // Then open the printed URL. Query: ?doc=live_plate&theme=auto|light|dark&width=900&height=620
+// Read-only artifact mode: ?review_path=<review.json>&review_sha=<sha256> (create one with cad_artifact via POST /rpc).
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';

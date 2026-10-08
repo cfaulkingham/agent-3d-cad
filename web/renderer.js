@@ -4,6 +4,8 @@
   const MAX_VERTICES=200000, MAX_TRIANGLES=200000, MAX_ENTITIES=10000, MAX_EDGE_POINTS=200000;
   const MAX_PIXELS=4000000, PICK_BUDGET=2000000, DEPTH_EPS=1e-8;
   const EDGE_TOLERANCE=9, AUTO_EDGE_TOLERANCE=6;
+  // Hover repeats the click hit test on every pointer move. Past this cost it backs off so huge models stay responsive.
+  const HOVER_SLOW_MS=8, HOVER_BACKOFF=4;
   const CLIP_EPS=1e-7;
   const DEFAULT_CAMERA={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]};
   const cloneCamera=c=>({yaw:c.yaw,pitch:c.pitch,zoom:c.zoom,pan:[...c.pan]});
@@ -631,7 +633,7 @@
   class CadRenderer {
     constructor(canvas,{onPick=()=>{},onHover=()=>{},onView=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{},now=defaultNow,reducedMotion=defaultReducedMotion}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
-      this.canvas=canvas;this.callbacks={onPick,onHover,onView,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.insets={top:0,right:0,bottom:0,left:0};this.view=null;this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
+      this.canvas=canvas;this.callbacks={onPick,onHover,onView,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.insets={top:0,right:0,bottom:0,left:0};this.view=null;this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.hoverResumeAt=0;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this.callbacks.onAnnotations([]);this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
       this._controls();
@@ -800,8 +802,12 @@
     _scheduleHover(){if(this.destroyed||this.hoverPending!==null)return;this.hoverPending=requestAnimationFrame(()=>{this.hoverPending=null;this._updateHover();});}
     _updateHover(){
       if(this.destroyed||this.lost||!this.model||this.drag||!this.hoverPoint)return;
+      const started=this.now();
+      if(started<this.hoverResumeAt){this._scheduleHover();return;}
       const {width,height}=this._size(),mode=this.mode,result=pick(this.model,this.camera,width,height,this.hoverPoint.x,this.hoverPoint.y,mode);
       this._setHover(result.id?{kind:mode==='auto'?result.kind:mode,entity_id:result.id}:null);
+      const elapsed=this.now()-started;
+      if(elapsed>HOVER_SLOW_MS)this.hoverResumeAt=started+elapsed*HOVER_BACKOFF;
     }
     _setHover(value){
       const same=(a,b)=>a===b||(a&&b&&a.kind===b.kind&&a.entity_id===b.entity_id);

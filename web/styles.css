@@ -138,7 +138,7 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 .dock-button:hover:not(:disabled){color:var(--text)}
 .dock-button[aria-expanded=true]{background:var(--accent-soft);color:var(--accent)}
 .dock-toggle{position:absolute;right:12px;top:162px;z-index:5}
-#app[data-dock=menu] .dock{top:202px}
+#app[data-dock=menu] .dock{top:202px;max-height:calc(100% - 202px - 170px)}
 #tool-popover-body>section{border:0;padding:0;margin:0}
 /* The popover title already names the tool; keep the panel's own action buttons. */
 #tool-popover-body .section-heading{justify-content:flex-end;min-height:0}
@@ -198,15 +198,20 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 .selection-key{font-size:10.5px;color:var(--text-2);font-variant-numeric:tabular-nums;white-space:nowrap}
 .selection-key:empty{display:none}
 .selection-bar[data-state=idle] .selection-summary{display:none}
+#details-toggle{transition:transform .15s}
+#details-toggle[aria-expanded=true]{transform:rotate(180deg)}
 #prompt{flex:1 1 auto;min-width:0;resize:none;border:0;background:transparent;padding:7px 4px;line-height:1.4;max-height:104px;outline:none}
 #prompt::placeholder{color:var(--text-2)}
 #prompt:focus-visible{outline:none}
 .bar-row:focus-within{border-color:var(--accent)}
-.floating-note{position:absolute;left:50%;transform:translateX(-50%);bottom:84px;z-index:7;width:min(560px,calc(100% - 150px));padding:8px 12px}
+.floating-note{position:absolute;left:50%;transform:translateX(-50%);bottom:118px;z-index:7;width:min(560px,calc(100% - 150px));padding:8px 12px}
 .floating-note textarea{width:100%;margin:8px 0 0}
 
 /* Small sizes (layout attributes are set by shell.js from layoutMode()) */
 #app[data-compact=true] .pill-sub,#app[data-compact=true] .connection{display:none}
+#app[data-compact=true] .top-left{max-width:calc(100% - 226px)}
+#app[data-compact=true] .pill-title{max-width:100px}
+#app[data-compact=true] .top-right{gap:6px}
 #app[data-compact=true] .corner-readout{display:none}
 #app[data-compact=true] .cube-area{transform:scale(.8);transform-origin:top right}
 #app[data-compact=true] .selection-bar{width:calc(100% - 24px)}

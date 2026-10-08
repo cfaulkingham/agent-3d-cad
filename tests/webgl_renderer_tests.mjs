@@ -598,6 +598,23 @@ test('renderer insets drive reset, fit-all and framing, and reject bad values',(
   assert.ok(Math.max(...after)<=480-200,'fit-all honours the inset too');r.destroy();
 });
 
+test('hover backs off after a slow pick and resumes with the latest pointer position',()=>{
+  let t=0;const {canvas,stats}=mockCanvas(),hovers=[],r=new Renderer(canvas,{now:()=>(t+=20),onHover:h=>hovers.push(plain(h))});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),f=project([-.2,-.2,0],defaultCamera,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy);flush();assert.equal(hovers.length,1);assert.equal(hovers[0].kind,'edge');
+  move(f[0],f[1]);flush();assert.equal(hovers.length,1,'a pick inside the back-off window is deferred, not dropped');
+  for(let i=0;i<8&&hovers.length<2;i++)flush();
+  assert.equal(hovers.length,2);assert.equal(hovers[1].kind,'face','the deferred pick uses the latest pointer position');
+  r.destroy();
+});
+test('fast picks never back off',()=>{
+  const {canvas,stats}=mockCanvas(),hovers=[],r=new Renderer(canvas,{now:()=>0,onHover:h=>hovers.push(plain(h))});
+  r.load(withEdge());r.setCamera(defaultCamera);flush();
+  const [cx,cy]=edgeMid(r.model,640,480),f=project([-.2,-.2,0],defaultCamera,640,480),move=(x,y)=>stats.listeners.get('pointermove')({pointerId:1,clientX:x,clientY:y,buttons:0});
+  move(cx,cy);flush();move(f[0],f[1]);flush();move(cx,cy);flush();assert.equal(hovers.length,3);r.destroy();
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {

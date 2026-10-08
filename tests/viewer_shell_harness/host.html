@@ -58,7 +58,12 @@ addEventListener('message', async event => {
       post({ id: message.id, result });
     } catch (error) { post({ id: message.id, error: { code: -32603, message: error.message } }); }
   } else if (message.method === 'ui/notifications/initialized') {
-    const result = await rpc('tools/call', { name: 'cad_open', arguments: { document_id: settings.doc, view_id: settings.view } });
+    // ?review_path=<review.json>&review_sha=<sha256> opens a read-only artifact review instead of a document.
+    const review = query.get('review_path');
+    const call = review
+      ? { name: 'cad_artifact_show', arguments: { review_path: review, expected_sha256: query.get('review_sha'), view_id: settings.view } }
+      : { name: 'cad_open', arguments: { document_id: settings.doc, view_id: settings.view } };
+    const result = await rpc('tools/call', call);
     post({ method: 'ui/notifications/tool-result', params: result });
   }
 });
