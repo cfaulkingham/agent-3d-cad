@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.24)
+
 if(NOT DEFINED BUILD_DIR OR NOT DEFINED TEST_DIR)
   message(FATAL_ERROR "BUILD_DIR and TEST_DIR are required")
 endif()

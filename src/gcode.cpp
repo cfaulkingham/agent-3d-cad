@@ -117,8 +117,7 @@ Parsed parse(std::string_view original) {
       p.valid=false;p.reason="Parameter requires a finite decimal number";return p;
     }
     double value=0;const auto* from=s.data()+begin;if(*from=='+')++from;
-    const auto conversion=std::from_chars(from,s.data()+i,value);
-    if(conversion.ec!=std::errc{}||conversion.ptr!=s.data()+i||!std::isfinite(value)||std::abs(value)>1e9||!p.values.emplace(key,value).second) {
+    if(!parse_decimal(std::string_view(from,s.data()+i-from),value)||std::abs(value)>1e9||!p.values.emplace(key,value).second) {
       p.valid=false;p.reason="Nonfinite, excessive or repeated parameter";return p;
     }
   }

@@ -7,6 +7,63 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## CI portability repairs — 2026-10-08
+
+Investigated [run 37833296104](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37833296104)
+at `8a8c66866b0283d4f2ba6999db88ee8f68ef1015`. Both macOS lanes stopped compiling
+`artifact_common.cpp`: floating-point `std::from_chars` requires macOS 26, while
+CI explicitly targets macOS 15. A local macOS-15 compile reproduced that error
+and the same problem in `gcode.cpp`. Both now use one strict decimal parser with
+a private C numeric locale, POSIX/Windows conversion implementations, complete
+token consumption, finite-range validation and rejection of underflow rounded
+to zero. Representable subnormals and signed zero remain accepted. Artifact
+coordinate-list tokenization explicitly uses the classic locale. Dependency
+pins, the macOS deployment target and public tool contracts are unchanged.
+
+Both Linux lanes passed all 54 native tests, then failed the relocated-package
+history check. In the standalone CMake script, unset CMP0054 made the quoted
+literal `"angle"` resolve to a variable from an earlier fixture. Setting the
+script's minimum CMake version to the project's existing 3.24 baseline fixes
+the comparison without changing its assertions. The original script reproduces
+the exact CI failure under CMake 3.31.6; the repaired complete package workflow
+passes under both CMake 3.31.6 and 4.3 with empty PATH and cleared loader overrides.
+
+The original Windows lane subsequently passed native tests but failed the
+independent schema fixture's slicing-package inventory check. Slicer run manifests
+used native backslashes for recursively discovered nested paths. The writer now
+uses generic UTF-8 paths with forward slashes; native execution/output paths
+keep their existing OS representation. The native slicer verifier now rejects
+backslashes and explicitly requires nested profile/reviewed-plan/G-code entries.
+The independent Python inventory assertion is unchanged.
+
+Executed macOS arm64 validation:
+
+- At `c4f029d`, warning-free `cmake --build build-app-protocol --parallel 3` and **54/54 CTest
+  suites passed in 204.56 s**, including **135 artifact** and **79 G-code** checks.
+  New regressions cover decimal syntax, locale independence, signed/fractional
+  G-code words, overflow, underflow, signed zero and representable subnormals.
+- **899 JSON Schema checks across 28 tools** and **2,931 official MCP SDK 2.3.0
+  interoperability checks** passed with the explicit native slicer fixture.
+- Full `cad_core` compilation in `build-ci-macos15` with
+  `CMAKE_OSX_DEPLOYMENT_TARGET=15.0` passed without warnings. Direct syntax checks
+  of all three changed parser sources passed for macOS 15 arm64 and x86_64.
+  This is compilation evidence; the local SDK is not a macOS-15 runtime trial.
+- Complete relocated bundle smoke passed with each CMake version above;
+  `git diff --check` passed. Logs are `ci-fix-*` in `build-app-protocol` and
+  `build-ci-macos15/ci-fix-build.log`.
+- After the Windows manifest repair, the warning-free rebuild and **304 native
+  slicer checks** passed in 17.19 s, along with **883 schema checks across 28
+  tools**, **3,268 MCP SDK checks** and CMake 3.31.6 relocated bundle smoke.
+  A concurrent local schema run hit a motion-job deadline; an isolated rerun
+  passed with unchanged assertions. Logs are `ci-fix-slicer-*`.
+
+The repair is in [draft PR #4](https://github.com/cfaulkingham/agent-3d-cad/pull/4)
+on `codex/fix-ci-macos15-parsing`. [PR run 37834814433](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37834814433)
+at `c4f029d` passed both macOS and both Linux lanes; Windows reproduced the
+manifest inventory failure. A new five-platform run must validate the Windows
+repair before merging. Earlier public
+release/host-installation gates remain as recorded in RELEASE_1_0.md.
+
 ## Combined implementation acceptance — 2026-10-08
 
 All seventeen software increments in COMPOSITION_FABRICATION_REVIEW.md are now

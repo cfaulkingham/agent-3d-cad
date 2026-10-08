@@ -48,10 +48,16 @@ Json verify(const Json& result) {
   const auto path=path_from_utf8(text_field(result,"path"));const auto manifest=parse_json(read_text(path));
   std::set<std::string> found;
   for(const auto& item:manifest.at("artifacts")) {
-    const auto relative=path_from_utf8(text_field(item,"path"));require(!relative.is_absolute()&&relative.lexically_normal()==relative,"Portable manifest paths");
+    const auto name=text_field(item,"path");const auto relative=path_from_utf8(name);
+    require(name.find('\\')==std::string::npos&&!relative.is_absolute()&&relative.lexically_normal()==relative,"Portable manifest paths use forward slashes on every platform");
     const auto file=path.parent_path()/relative;require(fs::file_size(file)==item.at("bytes")&&sha256_file(file,128*1024*1024)==text_field(item,"sha256"),"Actual size/hash of each package artifact");found.insert(text_field(item,"path"));
   }
-  for(const auto& item:fs::recursive_directory_iterator(path.parent_path()))if(item.is_regular_file()&&item.path()!=path)require(found.contains(path_to_utf8(item.path().lexically_relative(path.parent_path()))),"Every published file is in the manifest");
+  for(const auto& item:fs::recursive_directory_iterator(path.parent_path()))if(item.is_regular_file()&&item.path()!=path) {
+    const auto relative=item.path().lexically_relative(path.parent_path()).generic_u8string();
+    require(found.contains(std::string(reinterpret_cast<const char*>(relative.data()),relative.size())),"Every published file is in the manifest");
+  }
+  for(const auto* name:{"profiles/machine.json","reviewed-plan/profiles/machine.json","output/plate_1.gcode"})
+    require(found.contains(name),"Nested artifact paths retain the portable package layout");
   return manifest;
 }
 bool alive(std::uint64_t pid) {
