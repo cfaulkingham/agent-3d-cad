@@ -7,6 +7,112 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Viewer shell redesign — Shapr3D-style layout, selection and navigation — 2026-10-08
+
+Sub-project A of three (spec `docs/superpowers/specs/2026-10-08-viewer-shell-design.md`,
+plan `docs/superpowers/plans/2026-10-08-viewer-shell.md`). The embedded and Tauri
+viewer's `web/` UI is rebuilt; **no protocol change** and no native code change.
+`cad_context` and `cad_resolve_selection` see the same face/edge references as before.
+
+Behavior now implemented:
+
+- **Layout.** The canvas fills the viewer; controls float over it: project pill
+  (Models menu, revision, connection), Scene card (Features, Parameters, a Parts
+  tab for assemblies), Export menu, orientation cube with Fit, a right-hand tool
+  dock (Visual inspection, Colors, Review notes, Saved views, Exact section,
+  Measure, Sequences, Motion, Source) and a bottom selection bar that carries
+  Quick Edit. Existing section elements keep their IDs and `app.js` logic; they
+  are moved into one popover at a time. A dock icon shows only while its panel is
+  not `hidden`. Breakpoints 900/560 px (`layoutMode`): Scene card open / chip,
+  dock icons / a single Tools button; the viewer still works at 360 px.
+- **Unified selection.** No Faces/Edges switch. `CadRenderer` mode defaults to
+  `auto`: a visible edge within 6 px wins when exactly one is nearest, else the
+  face. Hover highlights (face wash, thicker edge); click selects; empty click or
+  Esc clears. `setMode('face'|'edge')` remains. Read-only artifacts use the same
+  rule across curves and mesh groups.
+- **Navigation.** Left or right drag orbits (right-drag used to pan), middle or
+  Shift+drag pans, wheel zooms toward the cursor, double-click frames an entity or
+  fits, Space frames the hovered/selected entity, digits 1–7 pick standard views.
+  Camera moves animate ~250 ms (instant under `prefers-reduced-motion`) and save
+  once at the end. Fit/reset/framing centre in the area the floating chrome leaves
+  uncovered (`setInsets`). The orientation cube is six real buttons in a CSS 3D
+  scene that follows the camera (`onView`); click a face or its border for
+  face/edge/corner views, drag to orbit, double-click for iso.
+- **Look.** Light studio by default; dark when the host context reports
+  `theme: dark`, else `prefers-color-scheme`, switched live. The gradient
+  backdrop is a WebGL2 pass (attribute-less, `gl_VertexID`) so Save PNG matches the
+  screen; WebGL1 keeps a solid theme-coloured clear. Edge lines are dark in both
+  themes because the model is light in both. Stored default model colour is
+  unchanged.
+
+Exact evidence (macOS arm64, Node v26.8.1, build `build-package`, branch
+`viewer-shell-shapr3d`):
+
+- Node suites: `webgl_renderer` **106 checks** with the native binary (26 new
+  renderer tests: camera math, auto pick, hover, hover back-off, navigation input,
+  animation, theme, insets, onView), `viewer_shell` **5**, `live_ui` **325**,
+  `playback_ui` **51**, `export_ui` **110**, `artifact_retarget_ui` **34**,
+  `offline_renderer` **30**, `desktop_bridge` exit 0. The unmodified baseline
+  counts were 325/51/110/34/30.
+- CTest: **55 suites, 54 pass** (73.10 s, `-j4`); this includes `embedded_assets`,
+  `app_protocol` (byte-for-byte embed check including `shell.js`) and the new
+  `viewer_shell`. The one failure, `performance_geometry`, is **pre-existing**: it
+  fails identically (exit 1, same output) when that test is built from the base
+  commit `8a8c668` in a clean worktree, so it is not caused by this work. It is a
+  native drawing/HLR test; its output says streaming-root checks need the v2 patched
+  SDK and only projection regressions run otherwise. The failing assertion was not
+  investigated.
+- Embedded `viewer.html` SHA-256 (local macOS arm64 build):
+  `0d22ccf8034f22011c6c0dc2f8fb97b862311bd80da9053092b60eecf67dfdf3`. This changed
+  because the viewer changed; no cross-platform equality is claimed until CI rebuilds.
+- Hover cost, `pick(…,'auto')` at 1000×700, 1,000 positions per model: plate
+  (1,060 tris) mean 0.23 / p95 0.39 ms; assembly (872 tris) 0.29 / 0.42;
+  duplex-35-sprocket (5,264 tris, 1,210 edges) **1.94 / 2.34, max 5.19 ms**. The edge
+  test dominates. Past 8 ms a pick makes hover back off for 4× that time (tested
+  with an injected clock; not exercised on a model that large).
+- Real-browser evidence (dev-only harness `tests/viewer_shell_harness/`: the
+  assembled viewer in an MCP Apps host page backed by the **real native service**,
+  real GPU, the Claude desktop in-app browser). Seen working: light and dark (live
+  switch through `host-context-changed`); widths 360, 560, 790 and a scaled 1280;
+  hover and click selection of faces and edges (edge pick returned
+  `edge-18`, 30 mm; face pick Area 1,060.365 mm²); the selection bar and Details;
+  Scene card and Parts tab; Models, Export, Visual inspection (clip toggled),
+  Motion and Source popovers; Esc closing with focus returned to the dock icon;
+  the compact Tools button; a real STEP export through the job service (path shown
+  in the request-text card); read-only artifact review (STEP) with Source,
+  `{kind:"mesh_group", entity_id:"artifact-1"}` and Export hidden; cube face
+  click to Top; real wheel zoom; double-click-to-fit. The harness caught a real
+  bug the mocks could not: edge lines were invisible with the first light palette.
+
+Limits, stated plainly:
+
+- **Not verified in real ChatGPT or Claude Desktop hosts**; the host-context
+  `theme` field is read defensively and the OS fallback is kept. The Tauri window
+  was not built (`desktop/build.rs` lists `shell.js`; `cargo` was not run).
+  Windows/Linux not run.
+- Right-drag, middle-drag, Shift+drag, Space and the digit keys are covered by
+  tests with synthetic events only; they were not driven with a real mouse. The
+  Colors, Review notes, Saved views, Exact section, Measure and Sequences popovers
+  use the same mechanism as the ones seen but were not individually opened; keyboard-only
+  traversal and screen-reader behavior were not exercised. Width 900 was not
+  viewed directly.
+- The offline `cad_view` viewer (`src/viewer.cpp`) is a separate page and was not
+  restyled. Single selection only; no perspective projection; no multi-touch.
+- Compact-mode Tools list scrolls under a height cap rather than reflowing.
+
+Decisions: `shell.js` is the only new asset (the asset list is hard-coded in four
+places; all list it). `tests/export_ui_tests.mjs` anchors its end marker on the
+statement after the export handler because the previously-anchoring mode-toggle
+loop was removed; the sliced handler text is byte-identical to the previous commit.
+Popover wrappers are separate from panels because `app.js` toggles each panel's
+`hidden` on every update. Uncommitted browser mockups live in `.superpowers/` (not
+ignored).
+
+Next: sub-project B (contextual edit toolbar: direct fillet/chamfer with live
+`cad_preview`, hole placement, agent handoff for the rest; the selection bar keeps a
+slot for it) and C (persistent face selectors plus a native face push/pull feature,
+so Extrude becomes direct). Perspective projection and multi-select are separate.
+
 ## Combined implementation acceptance — 2026-10-08
 
 All seventeen software increments in COMPOSITION_FABRICATION_REVIEW.md are now
