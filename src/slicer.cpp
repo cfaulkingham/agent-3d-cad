@@ -225,7 +225,10 @@ Json run_slice(const fs::path& workspace,const Json& record,const Json& args,con
   for(const auto& entry:fs::recursive_directory_iterator(stage.path)) {
     if(entry.is_symlink()||(!entry.is_regular_file()&&!entry.is_directory())||names.size()>4096)throw Error("limit_exceeded","Invalid slicer package entry");
     if(entry.is_regular_file()) {
-      names.push_back(path_to_utf8(entry.path().lexically_relative(stage.path)));
+      // Package ledgers use portable UTF-8 paths, independent of the native
+      // filesystem separator used by the slicer's execution paths.
+      const auto relative=entry.path().lexically_relative(stage.path).generic_u8string();
+      names.emplace_back(reinterpret_cast<const char*>(relative.data()),relative.size());
       if(entry.path().extension()==".gcode")++gcode_files;
     }
   }

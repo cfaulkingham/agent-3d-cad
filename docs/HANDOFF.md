@@ -28,9 +28,17 @@ the comparison without changing its assertions. The original script reproduces
 the exact CI failure under CMake 3.31.6; the repaired complete package workflow
 passes under both CMake 3.31.6 and 4.3 with empty PATH and cleared loader overrides.
 
+The original Windows lane subsequently passed native tests but failed the
+independent schema fixture's slicing-package inventory check. Slicer run manifests
+used native backslashes for recursively discovered nested paths. The writer now
+uses generic UTF-8 paths with forward slashes; native execution/output paths
+keep their existing OS representation. The native slicer verifier now rejects
+backslashes and explicitly requires nested profile/reviewed-plan/G-code entries.
+The independent Python inventory assertion is unchanged.
+
 Executed macOS arm64 validation:
 
-- Warning-free `cmake --build build-app-protocol --parallel 3` and **54/54 CTest
+- At `c4f029d`, warning-free `cmake --build build-app-protocol --parallel 3` and **54/54 CTest
   suites passed in 204.56 s**, including **135 artifact** and **79 G-code** checks.
   New regressions cover decimal syntax, locale independence, signed/fractional
   G-code words, overflow, underflow, signed zero and representable subnormals.
@@ -43,9 +51,17 @@ Executed macOS arm64 validation:
 - Complete relocated bundle smoke passed with each CMake version above;
   `git diff --check` passed. Logs are `ci-fix-*` in `build-app-protocol` and
   `build-ci-macos15/ci-fix-build.log`.
+- After the Windows manifest repair, the warning-free rebuild and **304 native
+  slicer checks** passed in 17.19 s, along with **883 schema checks across 28
+  tools**, **3,268 MCP SDK checks** and CMake 3.31.6 relocated bundle smoke.
+  A concurrent local schema run hit a motion-job deadline; an isolated rerun
+  passed with unchanged assertions. Logs are `ci-fix-slicer-*`.
 
-The repair is prepared on `codex/fix-ci-macos15-parsing` for a draft PR and new
-five-platform CI validation. Check that run before merging. Earlier public
+The repair is in [draft PR #4](https://github.com/cfaulkingham/agent-3d-cad/pull/4)
+on `codex/fix-ci-macos15-parsing`. [PR run 37834814433](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/37834814433)
+at `c4f029d` passed both macOS and both Linux lanes; Windows reproduced the
+manifest inventory failure. A new five-platform run must validate the Windows
+repair before merging. Earlier public
 release/host-installation gates remain as recorded in RELEASE_1_0.md.
 
 ## Combined implementation acceptance — 2026-10-08

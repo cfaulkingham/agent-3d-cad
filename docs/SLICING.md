@@ -107,7 +107,8 @@ The run returns `action`, source identity, `directory`, manifest `path`,
 `physical_print_started: false`. The package retains source, actual mesh, three
 profiles, complete reviewed plan, version/slice stdout/stderr, slicer logs,
 effective settings, review and execution evidence. Its manifest hashes every
-published regular file except itself with portable relative paths. It records
+published regular file except itself with portable relative UTF-8 paths using
+forward slashes on every platform. It records
 `printer_approval: not_evaluated`.
 
 ## Containment and failure
