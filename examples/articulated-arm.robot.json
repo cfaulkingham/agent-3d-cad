@@ -1,0 +1,13 @@
+{
+  "document_id": "articulated_arm",
+  "revision": 1,
+  "robot": {
+    "format": "urdf",
+    "joint_properties": [
+      {"mate_id": "hinge", "coordinate": "angle_deg", "effort": 5, "velocity": 0.2},
+      {"mate_id": "rail", "coordinate": "travel_mm", "effort": 5, "velocity": 0.02},
+      {"mate_id": "spindle_joint", "coordinate": "angle_deg", "effort": 5, "velocity": 0.2},
+      {"mate_id": "spindle_joint", "coordinate": "travel_mm", "effort": 5, "velocity": 0.02}
+    ]
+  }
+}

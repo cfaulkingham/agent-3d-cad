@@ -18,7 +18,7 @@
     $('clear-selection').hidden = !s; $('reference-details').hidden = !s;
     $('selection-badge').textContent = s ? `Selected ${s.reference.kind}` : 'Whole model';
     $('selection-name').textContent = s ? `${s.reference.kind === 'edge' ? 'Edge' : 'Face'} · ${s.geometry.curve_kind || s.geometry.surface_kind || s.reference.entity_id}` : 'Model overview';
-    $('selection-help').textContent = s ? 'Ask your agent to use this selection. Copy request includes its precise face or edge reference.' : 'Select a face or edge, then ask your connected agent to edit it.';
+    $('selection-help').textContent = v.payload?.draft ? 'Save or reset this pose to select geometry. You can send the whole preview to your agent.' : s ? 'Ask your agent to use this selection. Copy request includes its precise face or edge reference.' : 'Select a face or edge, then ask your connected agent to edit it.';
     $('reference').textContent = s ? JSON.stringify(s.reference, null, 2) : '';
     let rows = [];
     if (s) {
@@ -31,7 +31,7 @@
       rows.push(['Feature', s.reference.feature_id], ['Revision', s.reference.revision]);
     } else if (summary) {
       rows = [['Volume', `${fmt(summary.volume_mm3)} mm³`], ['Surface area', `${fmt(summary.area_mm2)} mm²`], ['Solids', summary.solid_count], ['Faces / edges', `${summary.face_count} / ${summary.edge_count}`]];
-      if (summary.assembly) rows.unshift(['Parts', summary.assembly.parts.length], ['Rigid mates', summary.assembly.mates.length]);
+      if (summary.assembly) rows.unshift(['Parts', summary.assembly.parts.length], ['Mates', summary.assembly.mates.length]);
     }
     facts($('measurements'), rows);
   }
@@ -76,14 +76,58 @@
       row.append(name, toggle, isolate); $('parts-list').append(row);
     }
   }
+  let motionKey = '';
+  function motionControls(v) {
+    const motion = v.payload?.summary?.assembly?.motion, ready = v.status === 'ready' && !sending;
+    const key = JSON.stringify([v.payload?.evaluation_id, ready, v.saving, v.status, v.motion_error]);
+    if (key === motionKey) return; motionKey = key;
+    $('motion-panel').hidden = !motion?.dofs?.length;
+    $('motion-values').replaceChildren(); $('motion-poses').replaceChildren();
+    if (!motion?.dofs?.length) return;
+    const draft = !!v.payload.draft;
+    $('motion-status').textContent = v.motion_error || (v.saving ? 'Saving pose…' : v.status === 'loading' ? 'Evaluating pose…' : draft ? 'Unsaved pose · Save to keep it' : 'Saved pose');
+    $('motion-save').disabled = !ready || !draft;
+    $('motion-name').disabled = !ready || !draft;
+    $('motion-reset').disabled = (v.saving && v.status !== 'error') || (!draft && v.status === 'ready');
+    const option = document.createElement('option'); option.value = ''; option.textContent = 'Choose a saved pose…'; $('motion-poses').append(option);
+    for (const id of motion.poses) { const item = document.createElement('option'); item.value = id; item.textContent = id; $('motion-poses').append(item); }
+    $('motion-poses').disabled = !ready || !motion.poses.length;
+    for (const dof of motion.dofs) {
+      const row = document.createElement('div'), label = document.createElement('label'), input = document.createElement('input');
+      row.className = 'joint-control'; label.textContent = `${dof.mate_id} · ${dof.unit}`;
+      input.type = 'number'; input.min = dof.minimum; input.max = dof.maximum; input.step = 'any'; input.value = dof.value;
+      input.setAttribute('aria-label', `${dof.mate_id} ${dof.coordinate}`); input.disabled = !ready || dof.driven;
+      label.append(input); row.append(label);
+      if (dof.driven) {
+        const note = document.createElement('span'); note.className = 'muted'; note.textContent = `Driven by ${dof.coupling_id}`; row.append(note);
+      } else {
+        const slider = document.createElement('input'); slider.type = 'range'; slider.min = dof.minimum; slider.max = dof.maximum;
+        slider.step = 'any'; slider.value = dof.value; slider.disabled = !ready || dof.minimum === dof.maximum;
+        slider.setAttribute('aria-label', `Adjust ${dof.mate_id} ${dof.coordinate}`);
+        slider.oninput = () => { input.value = slider.value; };
+        const preview = raw => {
+          const value = Number(raw);
+          if (raw === '' || !Number.isFinite(value) || value < dof.minimum || value > dof.maximum) {
+            $('motion-status').textContent = `Choose a value from ${fmt(dof.minimum)} to ${fmt(dof.maximum)} ${dof.unit}.`; return;
+          }
+          if (value === dof.value) return;
+          const values = motion.dofs.filter(item => !item.driven).map(item => ({ mate_id: item.mate_id, coordinate: item.coordinate,
+            value: item.mate_id === dof.mate_id && item.coordinate === dof.coordinate ? value : item.value }));
+          state.previewValues(values).catch(error => { $('motion-status').textContent = error.message; });
+        };
+        slider.onchange = () => preview(slider.value); input.onchange = () => preview(input.value); row.append(slider);
+      }
+      $('motion-values').append(row);
+    }
+  }
   function update(v) {
     const ready = v.status === 'ready' && !!v.payload;
-    $('export-model').disabled = !ready || exporting;
+    $('export-model').disabled = !ready || exporting || !!v.payload?.draft;
     $('connection').textContent = ({ connecting: 'Connecting', loading: 'Updating', ready: 'Live', empty: 'Connected', error: 'Needs attention' })[v.status] || v.status;
     $('connection').className = `connection${ready ? ' ready' : ''}`;
     const displayed = v.payload || v;
     $('document-title').textContent = displayed.document_id || 'Your workspace';
-    $('revision').textContent = displayed.revision ? `Revision ${displayed.revision} · mm` : 'Editable native CAD';
+    $('revision').textContent = displayed.revision ? `${displayed.draft ? 'Preview of revision' : 'Revision'} ${displayed.revision} · mm` : 'Editable native CAD';
     $('loading').hidden = !['connecting', 'loading'].includes(v.status);
     $('empty-state').hidden = !!v.payload || !['empty', 'connecting'].includes(v.status);
     const graphicsReady = !!v.payload && drawnEvaluation === v.payload.evaluation_id;
@@ -93,7 +137,7 @@
     $('include-capture').disabled = !ready || sending || !graphicsReady;
     if (!graphicsReady) $('include-capture').checked = false;
     $('prompt').disabled = sending;
-    $('update-status').textContent = ready ? 'Following saved revisions' : v.error || (v.status === 'empty' ? 'Choose a model or ask your agent to create one' : 'Preparing current revision');
+    $('update-status').textContent = ready ? (v.payload.draft ? 'Unsaved pose · Save or reset to select geometry and export' : 'Following saved revisions') : v.error || (v.status === 'empty' ? 'Choose a model or ask your agent to create one' : 'Preparing current revision');
     if (v.error || rendererError) fail(Error(v.error || rendererError));
     else if (v.status !== 'error') $('view-error').hidden = true;
     if (v.payload !== rendered && v.payload) {
@@ -108,7 +152,8 @@
     }
     if (!v.payload) { modelTree(null); rendered = null; drawnEvaluation = null; }
     partControls(v);
-    $('loading-text').textContent = v.payload ? 'Updating… Previous revision shown' : 'Building current revision…';
+    motionControls(v);
+    $('loading-text').textContent = v.saving ? 'Saving pose…' : v.payload ? 'Updating… Previous geometry shown' : 'Building current revision…';
     if (v.context_error) status(v.context_error);
     try { renderer?.setHiddenParts(v.hidden_part_ids || []); renderer?.setSelection(v.selection?.reference || null); } catch (error) { fail(error); }
     inspect(v);
@@ -118,6 +163,9 @@
     for (const button of $('documents').querySelectorAll('button')) button.setAttribute('aria-current', String(button.dataset.document === v.document_id));
   }
   const state = new CadLiveState(bridge, update);
+  $('motion-poses').onchange = () => { if ($('motion-poses').value) state.previewPose($('motion-poses').value).catch(error => { $('motion-status').textContent = error.message; }); };
+  $('motion-reset').onclick = () => state.resetMotion().catch(error => { $('motion-status').textContent = error.message; });
+  $('motion-save').onclick = () => state.saveMotion($('motion-name').value.trim()).then(() => { $('motion-name').value = ''; }).catch(error => { $('motion-status').textContent = error.message; });
   for (const id of ['show-all-parts', 'restore-parts']) $(id).onclick = () => state.showAll().catch(error => status(error.message));
   function saveSoon() {
     clearTimeout(contextTimer);
@@ -128,7 +176,7 @@
   try {
     renderer = new CadRenderer($('viewport'), {
       onPick(selection, detail) {
-        if (state.value.status !== 'ready') { renderer?.setSelection(null); return; }
+        if (state.value.status !== 'ready' || state.value.payload?.draft) { renderer?.setSelection(null); return; }
         if (selection && ['document_id', 'revision', 'evaluation_id', 'feature_id'].some(key => selection.reference[key] !== state.value.payload?.[key])) {
           renderer?.setSelection(null); status('That selection belongs to a previous model view. Wait for the current view.'); return;
         }
@@ -171,7 +219,7 @@
   $('project-search').oninput = () => { for (const button of $('documents').querySelectorAll('button')) button.hidden = !button.dataset.document.toLowerCase().includes($('project-search').value.toLowerCase()); };
   $('open-workspace').onclick = () => bridge.desktop?.openWorkspace().catch(error => status(error.message));
   $('export-model').onclick = async () => {
-    if (!state.value.payload || exporting) return;
+    if (state.value.status !== 'ready' || !state.value.payload || state.value.payload.draft || exporting) return;
     const { document_id, revision } = state.value.payload, format = $('export-format').value;
     exporting = true; update(state.value); status(`Preparing ${format.toUpperCase()} for revision ${revision}…`);
     try {

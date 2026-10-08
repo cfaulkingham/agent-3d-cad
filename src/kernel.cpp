@@ -17,6 +17,9 @@
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BezierCurve.hxx>
+#include <Geom_TrimmedCurve.hxx>
+#include <GeomAPI_Interpolate.hxx>
+#include <GC_MakeArcOfCircle.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <GC_MakeSegment2d.hxx>
 #include <BRepLib.hxx>
@@ -26,7 +29,9 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
+#include <BRepAlgoAPI_Check.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Shell.hxx>
@@ -112,6 +117,7 @@ struct FeatureGeometry {
   Json provenance;
   std::vector<AssemblyPart> parts;
   Json mates = Json::array();
+  Json motion;
   std::vector<std::string> face_parts, edge_parts;
   explicit FeatureGeometry(const TopoDS_Shape& value) : shape(value) {
     TopExp::MapShapes(shape, TopAbs_FACE, faces);
@@ -357,6 +363,9 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
                                const std::map<std::string,FeatureGeometry>& sources,
                                Json& history,bool& history_truncated) {
   const auto& parts=feature.at("parts");
+  const auto motion=assembly_motion(feature,parameters);
+  std::map<std::string,Json> coordinates;
+  for (const auto& dof:motion.at("dofs")) coordinates[text_field(dof,"mate_id")][text_field(dof,"coordinate")]=dof.at("value");
   std::size_t replicated_solids=0,replicated_faces=0;
   for (const auto& part:parts) {
     const auto& source=sources.at(text_field(part,"input"));
@@ -381,14 +390,20 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
         const auto parent=transforms.find(text_field(mate,"parent"));
         if (parent==transforms.end()) continue;
         try {
-          gp_Trsf offset,rotation;
+          gp_Trsf offset,rotation,travel;
           if (mate.contains("offset")) {
             const auto delta=vector3(mate.at("offset"),parameters);
             offset.SetTranslation(gp_Vec(delta[0],delta[1],delta[2]));
           }
-          if (mate.contains("angle_deg")) rotation.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),
-            scalar(mate.at("angle_deg"),parameters,"deg")*std::numbers::pi/180);
-          transforms.emplace(id,parent->second*local_frame(mate.at("parent_frame"),parameters)*offset*rotation*
+          const auto mate_id=text_field(mate,"id");
+          const auto found=coordinates.find(mate_id);
+          const auto value=[&](const char* key,const char* unit) {
+            if (found!=coordinates.end() && found->second.contains(key)) return found->second.at(key).get<double>();
+            return scalar(mate.value(key,Json(0)),parameters,unit);
+          };
+          rotation.SetRotation(gp_Ax1(gp_Pnt(0,0,0),gp_Dir(0,0,1)),value("angle_deg","deg")*std::numbers::pi/180);
+          travel.SetTranslation(gp_Vec(0,0,value("travel_mm","mm")));
+          transforms.emplace(id,parent->second*local_frame(mate.at("parent_frame"),parameters)*offset*rotation*travel*
             local_frame(mate.at("child_frame"),parameters).Inverted());
         } catch (const Standard_Failure& e) {
           throw occt_error(e,{{"part_id",id},{"mate_id",mate.at("id")}});
@@ -418,6 +433,7 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
   }
   check_shape(compound);
   FeatureGeometry result(compound); result.parts=std::move(resolved);
+  if (!motion.at("dofs").empty()) result.motion=motion;
   result.face_parts.resize(result.faces.Extent()+1); result.edge_parts.resize(result.edges.Extent()+1);
   for (std::size_t p=0;p<result.parts.size();++p) {
     const auto& part=result.parts[p];
@@ -453,11 +469,87 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   if (feature.at("type")=="import_step") result["content_sha256"]=feature.at("sha256");
   return result;
 }
+struct CurveWire {
+  TopoDS_Wire wire;
+  gp_Pnt start;
+  gp_Vec tangent;
+};
+CurveWire curve_wire(const Json& segments,const Json& parameters,const gp_Ax2* plane=nullptr,bool closed=false) {
+  const auto point=[&](const Json& value) {
+    if (!plane) return parameter_point(value,parameters);
+    return plane->Location().Translated(gp_Vec(plane->XDirection())*scalar(value[0],parameters)+
+      gp_Vec(plane->YDirection())*scalar(value[1],parameters));
+  };
+  const auto tangent=[&](const Json& value) {
+    if (plane) return gp_Vec(plane->XDirection())*scalar(value[0],parameters,"dimensionless")+
+      gp_Vec(plane->YDirection())*scalar(value[1],parameters,"dimensionless");
+    const auto v=vector3(value,parameters,"dimensionless");return gp_Vec(v[0],v[1],v[2]);
+  };
+  BRepBuilderAPI_MakeWire builder;
+  CurveWire result;gp_Pnt previous;
+  for (std::size_t i=0;i<segments.size();++i) {
+    try {
+      const auto& segment=segments[i];const auto type=text_field(segment,"type");
+      TopoDS_Edge edge;gp_Pnt first,last;gp_Vec derivative;
+      if (type=="line") {
+        first=point(segment.at("start"));last=point(segment.at("end"));derivative=gp_Vec(first,last);
+        if (derivative.Magnitude()<1e-7) throw Error("invalid_shape","Curve contains a zero-length line");
+        edge=BRepBuilderAPI_MakeEdge(first,last);
+      } else {
+        occ::handle<Geom_Curve> curve;
+        if (type=="arc") {
+          GC_MakeArcOfCircle arc(point(segment.at("start")),point(segment.at("mid")),point(segment.at("end")));
+          if (!arc.IsDone()) throw Error("invalid_shape","Arc needs three distinct non-collinear points");
+          curve=arc.Value();
+        } else {
+          const auto& points=segment.at("points");
+          if (type=="bezier") {
+            NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(points.size()));
+            for (std::size_t j=0;j<points.size();++j) poles.SetValue(static_cast<int>(j+1),point(points[j]));
+            curve=new Geom_BezierCurve(poles);
+          } else {
+            occ::handle<NCollection_HArray1<gp_Pnt>> data=new NCollection_HArray1<gp_Pnt>(1,static_cast<int>(points.size()));
+            for (std::size_t j=0;j<points.size();++j) {
+              const auto p=point(points[j]);
+              for (std::size_t k=0;k<j;++k) if (p.Distance(data->Value(static_cast<int>(k+1)))<1e-7)
+                throw Error("invalid_shape","Spline interpolation points must be distinct; periodic closure is implicit");
+              data->SetValue(static_cast<int>(j+1),p);
+            }
+            GeomAPI_Interpolate interpolation(data,segment.value("periodic",false),1e-7);
+            if (segment.contains("start_tangent")) interpolation.Load(tangent(segment.at("start_tangent")),tangent(segment.at("end_tangent")));
+            interpolation.Perform();
+            if (!interpolation.IsDone()) throw Error("kernel_failure","Spline interpolation failed");
+            curve=interpolation.Curve();
+          }
+        }
+        curve->D1(curve->FirstParameter(),first,derivative);last=curve->Value(curve->LastParameter());
+        if (derivative.Magnitude()<1e-12) throw Error("invalid_shape","Curve has an undefined start tangent");
+        gp_Pnt endpoint;gp_Vec end_tangent;curve->D1(curve->LastParameter(),endpoint,end_tangent);
+        if (end_tangent.Magnitude()<1e-12) throw Error("invalid_shape","Curve has an undefined end tangent");
+        BRepBuilderAPI_MakeEdge make(curve);
+        if (!make.IsDone()) throw Error("kernel_failure","Curve edge construction failed");
+        edge=make.Edge();
+      }
+      if (i && first.Distance(previous)>1e-7) throw Error("invalid_shape","Curve segments must connect in their authored order within 1e-7 mm");
+      if (!i) {result.start=first;result.tangent=derivative;}
+      previous=last;builder.Add(edge);
+      if (!builder.IsDone()) throw Error("invalid_shape","Curve segments do not form a connected wire");
+    } catch (const Error& e) {auto details=e.details;details["segment_index"]=i;throw Error(e.code,e.what(),details);}
+    catch (const Standard_Failure& e) {throw occt_error(e,{{"segment_index",i}});}
+  }
+  if (closed && previous.Distance(result.start)>1e-7) throw Error("invalid_shape","Profile wire must close explicitly within 1e-7 mm");
+  result.wire=builder.Wire();
+  BRepAlgoAPI_Check check(result.wire,false,true);
+  if (check.HasErrors() || !check.IsValid()) throw Error("invalid_shape","Curve wire self-intersects or contains invalid geometry");
+  return result;
+}
 TopoDS_Face sketch_face(const Json& profile, const Json& parameters, const gp_Ax2& plane) {
   const auto kind = text_field(profile,"type");
   TopoDS_Wire wire;
   if (kind == "circle") {
     wire = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(gp_Circ(plane,scalar(profile.at("radius"),parameters))).Edge());
+  } else if (kind=="wire") {
+    wire=curve_wire(profile.at("segments"),parameters,&plane,true).wire;
   } else {
     std::vector<std::array<double,2>> points;
     if (kind == "rectangle") {
@@ -486,10 +578,47 @@ TopoDS_Face sketch_face(const Json& profile, const Json& parameters, const gp_Ax
   }
   BRepBuilderAPI_MakeFace face(gp_Pln(plane),wire);
   if (!face.IsDone()) throw Error("kernel_failure","Sketch face construction failed");
+  if (profile.contains("holes")) {
+    const auto area_of=[](const TopoDS_Shape& shape) {GProp_GProps p;BRepGProp::SurfaceProperties(shape,p);return p.Mass();};
+    const auto overlap_area=[&](const TopoDS_Shape& a,const TopoDS_Shape& b) {
+      BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> arguments,tools;
+      arguments.Append(a);tools.Append(b);common.SetArguments(arguments);common.SetTools(tools);
+      common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();
+      if (!common.IsDone() || common.HasErrors()) throw Error("kernel_failure","Profile interior containment check failed");
+      return area_of(common.Shape());
+    };
+    const auto outer=face.Face();std::vector<TopoDS_Face> interiors;
+    for (std::size_t i=0;i<profile.at("holes").size();++i) {
+      try {
+        const auto interior=curve_wire(profile.at("holes")[i],parameters,&plane,true).wire;
+        BRepBuilderAPI_MakeFace make(gp_Pln(plane),interior);
+        if (!make.IsDone() || !BRepCheck_Analyzer(make.Face()).IsValid()) throw Error("invalid_shape","Invalid profile interior boundary");
+        const auto hole=make.Face();const double hole_area=area_of(hole);
+        if (!(hole_area>1e-10) || std::abs(overlap_area(outer,hole)-hole_area)>std::max(1e-9,hole_area*1e-9))
+          throw Error("invalid_shape","Profile interior boundary must be inside the outer boundary");
+        const auto separated=[&](const TopoDS_Face& other) {
+          BRepExtrema_DistShapeShape distance(BRepTools::OuterWire(other),BRepTools::OuterWire(hole));
+          if (!distance.IsDone() || distance.Value()<=1e-7) throw Error("invalid_shape","Profile boundaries must not touch or intersect");
+        };
+        separated(outer);
+        for (const auto& prior:interiors) {
+          separated(prior);
+          if (overlap_area(prior,hole)>1e-9) throw Error("invalid_shape","Profile interiors must not overlap or contain one another");
+        }
+        // MakeFace normalizes the outer wire's orientation, so author winding
+        // does not change which side of an explicit interior is removed.
+        face.Add(TopoDS::Wire(BRepTools::OuterWire(hole).Reversed()));interiors.push_back(hole);
+      } catch (const Error& e) {auto details=e.details;details["hole_index"]=i;throw Error(e.code,e.what(),details);}
+    }
+  }
   GProp_GProps area;
   BRepGProp::SurfaceProperties(face.Face(),area);
   if (!BRepCheck_Analyzer(face.Face()).IsValid() || !std::isfinite(area.Mass()) || area.Mass() <= 0)
     throw Error("invalid_shape","Sketch must be a valid simple profile with positive area");
+  if (kind=="wire") {
+    BRepAlgoAPI_Check check(face.Face(),false,true);
+    if (check.HasErrors() || !check.IsValid()) throw Error("invalid_shape","Curved profile has self-interference");
+  }
   return face.Face();
 }
 TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp_Pnt& origin,bool left_handed) {
@@ -587,7 +716,11 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       } else if (type == "loft") {
         BRepOffsetAPI_ThruSections operation(true,feature.value("ruled",false));
         operation.SetMutableInput(false);
-        for (const auto& section : feature.at("sections")) operation.AddWire(BRepTools::OuterWire(TopoDS::Face(shapes.at(section.get<std::string>()))));
+        for (const auto& section : feature.at("sections")) {
+          const auto& source=shapes.at(section.get<std::string>());
+          if (count(source,TopAbs_WIRE)!=1) throw Error("invalid_model","Loft sections must have one boundary; loft outer and inner profiles separately and subtract explicitly",{{"source_feature_id",section}});
+          operation.AddWire(BRepTools::OuterWire(TopoDS::Face(source)));
+        }
         operation.CheckCompatibility(true);
         operation.Build();
         if (!operation.IsDone()) throw Error("kernel_failure","Loft failed");
@@ -600,20 +733,14 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
       } else if (type == "sweep") {
         const auto input = text_field(feature,"input");
         const auto& path = feature.at("path");
-        const auto start = parameter_point(path[0],parameters);
-        const auto next = parameter_point(path[1],parameters);
-        if (start.Distance(planes.at(input).Location()) > 1e-7 || start.Distance(next) < 1e-7 || std::abs(gp_Dir(gp_Vec(start,next)).Dot(planes.at(input).Direction())) < 1-1e-9)
-          throw Error("invalid_model","Sweep path must start at the sketch origin perpendicular to its plane");
-        BRepBuilderAPI_MakePolygon spine;
-        gp_Pnt previous;
-        bool first = true;
-        for (const auto& value : path) {
-          const auto p=parameter_point(value,parameters);
-          if (!first && p.Distance(previous)<1e-7) throw Error("invalid_model","Sweep path contains a zero-length segment");
-          spine.Add(p); previous=p; first=false;
+        Json segments=path.is_object()?path.at("segments"):Json::array();
+        if (path.is_array()) for (std::size_t i=1;i<path.size();++i)
+          segments.push_back({{"type","line"},{"start",path[i-1]},{"end",path[i]}});
+        const auto spine=curve_wire(segments,parameters);
+        if (spine.start.Distance(planes.at(input).Location()) > 1e-7 || std::abs(gp_Dir(spine.tangent).Dot(planes.at(input).Direction())) < 1-1e-9) {
+          throw Error("invalid_model","Sweep path must start at the sketch origin with a tangent perpendicular to its plane");
         }
-        if (!spine.IsDone()) throw Error("kernel_failure","Sweep path construction failed");
-        BRepOffsetAPI_MakePipe operation(spine.Wire(),shapes.at(input));
+        BRepOffsetAPI_MakePipe operation(spine.wire,shapes.at(input));
         operation.Build();
         if (!operation.IsDone()) throw Error("kernel_failure","Sweep failed");
         shape=operation.Shape();
@@ -628,17 +755,23 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
         shape=operation.Shape();
         const auto input=text_field(feature,"input");
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
-      } else if (type == "pattern") {
+      } else if (type == "pattern" || type == "circular_pattern") {
         BRep_Builder builder;
         TopoDS_Compound compound; builder.MakeCompound(compound);
-        const auto delta=vector3(feature.at("step"),parameters);
+        const auto delta=type=="pattern"?vector3(feature.at("step"),parameters):std::array<double,3>{0,0,0};
         const auto input=text_field(feature,"input");
         const auto copies=feature.at("count").get<int>();
         const auto& source=impl_->features.at(input);
         replication_budget(static_cast<std::size_t>(count(source.shape,TopAbs_SOLID))*copies,static_cast<std::size_t>(source.faces.Extent())*copies);
         std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> instances;
         for (int i=0; i<copies; ++i) {
-          gp_Trsf transform; transform.SetTranslation(gp_Vec(delta[0]*i,delta[1]*i,delta[2]*i));
+          gp_Trsf transform;
+          if (type=="pattern") transform.SetTranslation(gp_Vec(delta[0]*i,delta[1]*i,delta[2]*i));
+          else {
+            const auto& axis=feature.at("axis");
+            transform.SetRotation(gp_Ax1(parameter_point(axis.at("origin"),parameters),parameter_direction(axis.at("direction"),parameters)),
+              scalar(feature.at("angle_deg"),parameters,"deg")*i*std::numbers::pi/180);
+          }
           auto operation=std::make_unique<BRepBuilderAPI_Transform>(shapes.at(input),transform,true);
           if (!operation->IsDone()) throw Error("kernel_failure","Pattern instance failed");
           builder.Add(compound,operation->Shape());
@@ -717,11 +850,10 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           const auto input=text_field(feature,key);
           record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
-      } else if (type == "fillet") {
+      } else if (type == "fillet" || type == "chamfer") {
         const auto input=text_field(feature,"input");
         const auto& source=impl_->features.at(input);
         BRepBuilderAPI_Copy copy(source.shape);
-        BRepFilletAPI_MakeFillet operation(copy.Shape());
         // Select and describe edges in the input feature's own evaluation, the
         // IDs topology(input) reports; the copy is reached only via its history.
         const auto& edges=source.edges;
@@ -743,11 +875,14 @@ BuiltModel::BuiltModel(const Json& model) : impl_(std::make_unique<Impl>()) {
           const auto code = selected.empty() ? "selection_missing" : selected.size() > expected ? "selection_ambiguous" : "selection_count_mismatch";
           throw Error(code, "Geometric selector did not match its expected edge count", {{"source_feature_id", feature.at("input")}, {"expected_count", expected}, {"actual_count", selected.size()}, {"matches", matched}, {"candidates", candidates}, {"candidates_truncated", edges.Extent() > 64}});
         }
-        for (const auto i : selected) operation.Add(scalar(feature.at("radius"), parameters), TopoDS::Edge(copy.ModifiedShape(edges(i))));
-        operation.Build();
-        if (!operation.IsDone()) throw Error("kernel_failure", "Fillet failed; try a smaller radius or change the input geometry");
-        shape = operation.Shape();
-        record_history(operation,source,input,shape,history,history_truncated,&copy);
+        const auto finish=[&](auto& operation,const char* dimension) {
+          for (const auto i:selected) operation.Add(scalar(feature.at(dimension),parameters),TopoDS::Edge(copy.ModifiedShape(edges(i))));
+          operation.Build();
+          if (!operation.IsDone()) throw Error("kernel_failure",type+" failed; change its dimension or the input geometry");
+          shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
+        };
+        if (type=="fillet") {BRepFilletAPI_MakeFillet operation(copy.Shape());finish(operation,"radius");}
+        else {BRepFilletAPI_MakeChamfer operation(copy.Shape());finish(operation,"distance");}
       }
       if (type != "sketch") check_shape(shape);
       shapes.emplace(id, shape);
@@ -840,6 +975,7 @@ Json BuiltModel::summary(const std::string& feature_id) const {
       {"edge_count", count(shape, TopAbs_EDGE)}};
     if (!geometry.parts.empty()) {
       result["assembly"]={{"parts",Json::array()},{"mates",geometry.mates}};
+      if (!geometry.motion.is_null()) result["assembly"]["motion"]=geometry.motion;
       for (const auto& part:geometry.parts) {
         GProp_GProps mass; BRepGProp::VolumeProperties(part.shape,mass);
         result["assembly"]["parts"].push_back({{"id",part.id},{"input",part.input},{"transform",matrix(part.transform)},
@@ -1414,7 +1550,53 @@ void check_drawing_totals(const Json& requested_views, const Json& view_budgets,
     throw Error("limit_exceeded","Drawing exceeds its entity or point limit",{{"entity_limit",drawing_entity_limit},{"point_limit",drawing_point_limit}});
 }
 
-void BuiltModel::export_file(const std::filesystem::path& path, const std::string& format) const {
+Json BuiltModel::robot_frames(const Json& model,const std::string& feature_id) const {
+  const auto id=feature_id.empty()?impl_->output:feature_id;
+  const auto& geometry=impl_->feature(id);
+  if(geometry.parts.empty()) throw Error("invalid_argument","Robot export requires an assembly",{{"feature_id",id}});
+  const Json* assembly=nullptr;
+  for(const auto& feature:model.at("features")) if(feature.at("id")==id) assembly=&feature;
+  if(!assembly || assembly->at("type")!="assembly") throw Error("invalid_argument","Robot export requires an assembly",{{"feature_id",id}});
+  const auto& parameters=model.at("parameters");
+  std::map<std::string,const Json*> incoming;
+  if(assembly->contains("mates")) for(const auto& mate:assembly->at("mates")) incoming[text_field(mate,"child")]=&mate;
+  std::map<std::string,gp_Trsf> world;
+  Json result={{"feature_id",id},{"links",Json::array()},{"joints",Json::array()},{"motion",assembly_motion(*assembly,parameters)}};
+  try {
+    for(const auto& part:geometry.parts) {
+      const auto frame=incoming.contains(part.id)?local_frame(incoming.at(part.id)->at("child_frame"),parameters):gp_Trsf{};
+      world[part.id]=part.transform*frame;
+      result["links"].push_back({{"name","part_"+part.id},{"part_id",part.id},{"input",part.input},
+        {"world",matrix(world.at(part.id))},{"mesh_origin",matrix(frame.Inverted())}});
+    }
+    for(const auto& part:geometry.parts) {
+      if(!incoming.contains(part.id)) {
+        result["joints"].push_back({{"name","root_"+part.id},{"type","fixed"},{"parent","world"},{"child","part_"+part.id},{"origin",matrix(world.at(part.id))}});
+        continue;
+      }
+      const auto& mate=*incoming.at(part.id);const auto mid=text_field(mate,"id"),type=text_field(mate,"type"),parent=text_field(mate,"parent");
+      auto origin=world.at(parent).Inverted()*world.at(part.id);
+      auto joint=[&](const std::string& suffix,const std::string& kind,const std::string& p,const std::string& c,const gp_Trsf& placement,const std::string& coordinate) {
+        Json item={{"name","mate_"+mid+suffix},{"type",kind},{"parent",p},{"child",c},{"origin",matrix(placement)},{"mate_id",mid}};
+        if(!coordinate.empty()) item["coordinate"]=coordinate;
+        result["joints"].push_back(std::move(item));
+      };
+      if(type=="cylindrical") {
+        double travel=0;
+        for(const auto& dof:geometry.motion.at("dofs")) if(dof.at("mate_id")==mid && dof.at("coordinate")=="travel_mm") travel=dof.at("value");
+        gp_Trsf shift;shift.SetTranslation(gp_Vec(0,0,travel));
+        const auto carrier=world.at(part.id)*shift.Inverted();const auto name="carrier_"+mid;
+        result["links"].push_back({{"name",name},{"carrier_for",mid},{"world",matrix(carrier)}});
+        joint("_angle","revolute","part_"+parent,name,world.at(parent).Inverted()*carrier,"angle_deg");
+        joint("_travel","prismatic",name,"part_"+part.id,shift,"travel_mm");
+      } else joint(type=="revolute"?"_angle":type=="slider"?"_travel":"_fixed",type=="slider"?"prismatic":type=="rigid"?"fixed":"revolute",
+        "part_"+parent,"part_"+part.id,origin,type=="revolute"?"angle_deg":type=="slider"?"travel_mm":"");
+    }
+    return result;
+  } catch(const Standard_Failure& e) {throw occt_error(e,{{"feature_id",id}});}
+}
+
+void BuiltModel::export_file(const std::filesystem::path& path, const std::string& format,const std::string& feature_id) const {
   try {
     // STEP accepts UTF-8 paths. STL's filename overload opens a narrow standard
     // stream, so use its stream overload with a native filesystem path below.
@@ -1428,10 +1610,10 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       export_operations.set(ShapeProcess::SplitCommonVertex);
       export_operations.set(ShapeProcess::DirectFaces);
       writer.SetShapeProcessFlags(export_operations);
-      if (writer.Transfer(impl_->shape, STEPControl_AsIs) != IFSelect_RetDone || writer.Write(filename.c_str()) != IFSelect_RetDone)
+      if (writer.Transfer(impl_->feature(feature_id).shape, STEPControl_AsIs) != IFSelect_RetDone || writer.Write(filename.c_str()) != IFSelect_RetDone)
         throw Error("export_failed", "STEP writer failed");
     } else if (format == "stl") {
-      BRepBuilderAPI_Copy copy(impl_->shape);
+      BRepBuilderAPI_Copy copy(impl_->feature(feature_id).shape);
       BRepMesh_IncrementalMesh mesh(copy.Shape(), 0.1, false, 0.5, false);
       if (!mesh.IsDone()) throw Error("export_failed", "Tessellation failed");
       StlAPI_Writer writer;

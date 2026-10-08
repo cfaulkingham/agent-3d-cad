@@ -7,6 +7,7 @@
 #include "agentcad/live.hpp"
 #include "agentcad/drawing.hpp"
 #include "agentcad/bom.hpp"
+#include "agentcad/robot.hpp"
 #include <fstream>
 #include <random>
 #include <set>
@@ -87,8 +88,11 @@ Json tool_definitions() {
     return Json{{"name",name},{"description",description},{"inputSchema",input},{"outputSchema",output},
       {"annotations",{{"readOnlyHint",read_only},{"destructiveHint",false},{"openWorldHint",false}}}};
   };
+  auto preview_output=object(identity,{"schema_version","document_id","revision","kernel_version","evaluation_id","feature_id","draft","selection_lifetime","summary"});
+  preview_output["properties"]["draft"]={{"const",true}};
+  preview_output["oneOf"]=Json::array({Json{{"required",{"path","data_path"}}},Json{{"required",{"mesh","topology"}}}});
   Json tools=Json::array({
-    tool("cad_create","Build editable parts or an assembly with rigid placements and frame mates, and commit revision 1. Optional request_id deduplicates retries.",
+    tool("cad_create","Build editable parts or an assembly with rigid or articulated frame mates, and commit revision 1. Optional request_id deduplicates retries.",
       {{"document_id",id},{"model",{{"$ref","#/$defs/model"}}},{"request_id",id}}, {"document_id","model"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_read","Read saved editable intent. Omit revision to read HEAD.",
@@ -110,6 +114,14 @@ Json tool_definitions() {
       {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}}},{"document_id","revision","format"},
       object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}}},
         {"document_id","revision","format","path","bytes","units"}),false),
+    tool("cad_robot_export","Export a committed assembly as URDF with paired SRDF, or SDF 1.12, plus local STL meshes and a frame/coordinate ledger. Exported zero reproduces the saved pose; limits, named poses and couplings are converted to SI. Requires explicit effort/velocity for every moving coordinate. SDF additionally requires inertials for every part and cylindrical carrier. No physical properties or planning configuration are inferred.",
+      {{"document_id",id},{"revision",revision},{"feature_id",id},{"robot",robot_options_schema()}},{"document_id","revision","robot"},
+      object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},
+        {"format",{{"enum",{"urdf","srdf","sdf"}}}},{"path",text},{"directory",text},{"manifest_path",text},
+        {"artifacts",array(object({{"format",{{"enum",{"urdf","srdf","sdf","stl","json"}}}},{"path",text},
+          {"bytes",{{"type","integer"},{"minimum",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}},
+          {"format","path","bytes","sha256"}),67)}},
+        {"document_id","revision","kernel_version","feature_id","format","path","directory","manifest_path","artifacts"}),false),
     tool("cad_bom","Export a committed assembly bill of materials as JSON and CSV. Group named part instances by source feature, preserve explicit metadata and item numbers, and never infer material.",
       {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
@@ -140,8 +152,8 @@ Json tool_definitions() {
       {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
       object(identity,{"schema_version","document_id","revision","evaluation_id","feature_id","draft","summary","path","data_path"}),false),
     tool("cad_preview","Build edits without committing. Returns a draft viewer; draft picks cannot be used as committed references.",
-      {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"feature_id",id}},
-      {"document_id","expected_revision","operations"},object(identity,{"schema_version","document_id","revision","evaluation_id","feature_id","draft","summary","path","data_path"}),true),
+      {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"feature_id",id},{"kind",{{"enum",{"view","mesh"}}}}},
+      {"document_id","expected_revision","operations"},preview_output,true),
     tool("cad_resolve_selection","Resolve a saved evaluation pick. Reject stale revisions, draft picks and mismatched evaluations. Persistent selectors are geometric rules, never pick tokens.",
       reference_properties,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"},
       object({{"reference",reference},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},{"selector",{{"$ref","#/$defs/selector"}}}},{"reference","geometry"}),true),
@@ -157,7 +169,7 @@ Json tool_definitions() {
   });
   const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},
     {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array());
-  const std::set<std::string> job_tools={"cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  const std::set<std::string> job_tools={"cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   for(const auto& definition:tools) {
     const auto name=definition.at("name").get<std::string>();if(!job_tools.contains(name))continue;
@@ -183,7 +195,7 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
-  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
+  static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_export","cad_robot_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
   if(!known.contains(tool)) throw Error("unknown_tool","Unknown tool: "+tool);
   if(tool=="cad_create") fields(args,{"document_id","model"},{"request_id"});
   else if(tool=="cad_read") fields(args,{"document_id"},{"revision"});
@@ -191,11 +203,12 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_restore") fields(args,{"document_id","expected_revision","source_revision"},{"request_id"});
   else if(tool=="cad_import") fields(args,{"document_id","path"},{"request_id"});
   else if(tool=="cad_export") fields(args,{"document_id","revision","format"});
+  else if(tool=="cad_robot_export") {fields(args,{"document_id","revision","robot"},{"feature_id"});validate_robot_options(args.at("robot"));}
   else if(tool=="cad_bom") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_drawing") fields(args,{"document_id","revision"},{"drawing"});
   else if(tool=="cad_query") fields(args,{"document_id","revision"},{"kind","feature_id"});
   else if(tool=="cad_view") fields(args,{"document_id","revision"},{"feature_id"});
-  else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id"});
+  else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id","kind"});
   else if(tool=="cad_compare") fields(args,{"document_id","from_revision","to_revision"});
   else fields(args,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
   identifier(text_field(args,"document_id"));
@@ -320,10 +333,41 @@ Json Service::execute(const std::string& tool,const Json& args) {
     const auto expected=revision_number(args.at("expected_revision"));const auto record=store_.read(id);
     if(record.at("revision")!=expected) throw Error("revision_conflict","Preview base revision changed",{{"expected_revision",expected},{"current_revision",record.at("revision")}});
     const auto candidate=apply_operations(record.at("model"),args.at("operations"));
+    const auto kind=args.value("kind",std::string("view"));
+    if(kind!="view" && kind!="mesh") throw Error("invalid_argument","Preview kind must be view or mesh");
     Json request={{"kind","view"}};if(args.contains("feature_id"))request["feature_id"]=args.at("feature_id");
-    return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,true);
+    return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,kind=="view");
   }
   const auto revision=revision_number(args.at("revision"));const auto record=store_.read(id,revision);
+  if(tool=="cad_robot_export") {
+    const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
+    const auto exports=store_.root()/"exports";directory(exports);
+    const auto stage=temporary_directory(exports),destination=exports/(id+"-r"+std::to_string(revision)+"-robot-"+evaluation_id());
+    try {
+      auto generated=evaluate_model(store_.root(),record.at("model"),{{"kind","robot"},{"feature_id",feature},{"robot",args.at("robot")},{"path",path_to_utf8(stage)}}).at("robot");
+      const Json identity={{"document_id",id},{"revision",revision},{"kernel_version",kernel_version()},{"feature_id",feature}};
+      generated["ledger"]["source"]=identity;generated["ledger"]["source"]["model_sha256"]=sha256(record.at("model").dump());
+      write_artifact(stage/"robot.json",generated.at("ledger").dump(2)+"\n");
+      std::vector<std::string> files={"robot.json"};
+      for(const auto& [name,content]:generated.at("files").items()) {write_artifact(stage/path_from_utf8(name),content.get<std::string>());files.push_back(name);}
+      for(const auto& item:generated.at("mesh_sources")) files.push_back(text_field(item,"path"));
+      auto result=identity;result["format"]=args.at("robot").at("format");result["directory"]=path_to_utf8(destination);
+      result["path"]=path_to_utf8(destination/path_from_utf8(text_field(generated,"path")));result["manifest_path"]=path_to_utf8(destination/"manifest.json");result["artifacts"]=Json::array();
+      auto manifest=identity;manifest["schema_version"]=1;manifest["format"]=result.at("format");manifest["path"]=generated.at("path");manifest["artifacts"]=Json::array();
+      std::uintmax_t total=0;
+      for(const auto& file:files) {
+        check_job_cancelled();const auto path=stage/path_from_utf8(file);const auto bytes=fs::file_size(path);total+=bytes;
+        if(bytes==0 || bytes>64*1024*1024 || total>256*1024*1024) throw Error("limit_exceeded","Robot bundle exceeds its 64 MiB file or 256 MiB total limit");
+        const auto extension=path_to_utf8(path.extension()).substr(1);
+        Json artifact={{"format",extension},{"path",file},{"bytes",bytes},{"sha256",sha256(read_text(path,64*1024*1024))}};
+        manifest["artifacts"].push_back(artifact);artifact["path"]=path_to_utf8(destination/path_from_utf8(file));result["artifacts"].push_back(artifact);
+      }
+      write_artifact(stage/"manifest.json",manifest.dump(2)+"\n");
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();fs::rename(stage,destination);
+      return result;
+    } catch(const Error& error) {std::error_code ignored;fs::remove_all(stage,ignored);auto details=error.details;details["feature_id"]=feature;throw Error(error.code,error.what(),details);}
+    catch(...) {std::error_code ignored;fs::remove_all(stage,ignored);throw;}
+  }
   if(tool=="cad_bom") {
     const auto bom=build_bom(record.at("model"),args.value("feature_id",std::string()));
     const Json identity={{"document_id",id},{"revision",revision},{"kernel_version",record.at("kernel_version")},{"units","mm"}};

@@ -174,6 +174,10 @@ async def smoke(executable, workspace):
         require(json.loads(Path(assembly_done["result"]["recipe_path"]).read_text())["drawing"] == assembly_recipe["drawing"],
                 "SDK exploded recipe did not round trip")
         aid = assembly_args["document_id"]
+        robot = await call(client, definitions, "cad_robot_export", {
+            "document_id": aid, "revision": 1, "robot": {"format": "urdf", "joint_properties": []}})
+        require(Path(robot["path"]).is_file() and Path(robot["directory"], "model.srdf").is_file(),
+                "SDK robot export omitted paired URDF/SRDF")
         bom_job = await call(client, definitions, "cad_job", {
             "action": "submit", "request_id": "sdk_assembly_bom", "tool": "cad_bom",
             "arguments": {"document_id": aid, "revision": 1}})

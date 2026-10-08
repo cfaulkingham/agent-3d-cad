@@ -1,0 +1,37 @@
+{
+  "document_id": "curved_plate",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"thickness": 5, "crown": 25, "bevel": 0.5},
+    "features": [
+      {
+        "id": "outline", "type": "sketch",
+        "workplane": {"origin": [0, 0, 0], "normal": [0, 0, 1], "x_direction": [1, 0, 0]},
+        "profile": {
+          "type": "wire",
+          "segments": [
+            {"type": "line", "start": [0, 0], "end": [40, 0]},
+            {"type": "line", "start": [40, 0], "end": [40, 15]},
+            {"type": "bezier", "points": [[40, 15], [30, {"parameter": "crown"}], [10, {"parameter": "crown"}], [0, 15]]},
+            {"type": "line", "start": [0, 15], "end": [0, 0]}
+          ],
+          "holes": [[
+            {"type": "arc", "start": [17, 8], "mid": [20, 11], "end": [23, 8]},
+            {"type": "arc", "start": [23, 8], "mid": [20, 5], "end": [17, 8]}
+          ]]
+        }
+      },
+      {"id": "plate", "type": "extrude", "input": "outline", "distance": {"parameter": "thickness"}},
+      {
+        "id": "corner_bevel", "type": "chamfer", "input": "plate", "distance": {"parameter": "bevel"},
+        "edges": {
+          "type": "geometric", "feature_id": "plate", "curve_kind": "line", "expected_count": 1,
+          "direction": {"vector": [0, 0, 1], "tolerance": 0.000001},
+          "center": {"point": [0, 0, {"expression": {"op": "multiply", "args": [{"parameter": "thickness"}, 0.5], "unit": "mm"}}], "tolerance": 0.000001}
+        }
+      }
+    ],
+    "output": "corner_bevel"
+  }
+}

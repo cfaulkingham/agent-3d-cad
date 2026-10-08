@@ -384,7 +384,7 @@ void tests() {
   failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");
-  require(defs.at("feature").at("oneOf").size()==15,"modeling and assembly schemas discoverable");
+  require(defs.at("feature").at("oneOf").size()==17,"modeling, chamfer, circular pattern and assembly schemas discoverable");
   thread_tests();
 }
 }

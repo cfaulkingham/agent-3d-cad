@@ -197,6 +197,20 @@ actual two-host installation/rendering, accessible exports, architecture selecti
 publisher signing and public distribution are unfinished acceptance gates.
 Tauri and other CLI hosts are deferred. Passing CI does not authorize a 1.0 tag.
 
+## Modeling flexibility and moving mechanisms (authorized 2026-10-07)
+
+The full increment and acceptance evidence are tracked in `MODELING_MOTION.md`
+and `HANDOFF.md`. Modeling adds exact line/arc/Bezier/interpolating-spline
+profiles and 3D sweep paths, explicit interior profiles, selective symmetric
+chamfers and circular patterns. Motion adds articulated mates and limits,
+couplings, named poses, embedded viewer controls and robot-description handoff.
+Articulated mates, couplings, named poses and embedded preview/reset/save now have
+local native, schema/MCP and browser evidence recorded in HANDOFF. Native
+URDF/SRDF/SDF exports include meshes, explicit physical inputs and a frame ledger;
+independent XML/FK tests compare multiple poses against native geometry.
+See `ROBOT_EXPORT.md` for consumer-validation limits.
+Keep source edits atomic, exact geometry native and historical revisions intact.
+
 ## Later, only when driven by actual workflows
 
 Geometry/projection caching is implemented: bounded, checksummed exact feature
@@ -205,7 +219,7 @@ evaluation identity, corruption/deletion fallback, and coordinator publication.
 Native regression tests and a reproducible threaded-part benchmark are provided;
 executed local results are recorded in HANDOFF.md. No public cache API is needed.
 
-Further work: nested assemblies, general mate constraint solving, kinematics,
+Further work beyond the authorized motion increment: nested assemblies, general mate constraint solving,
 hierarchical BOMs, full drafting/GD&T, multi-sheet drawings, manufacturing
 checks, distributed execution, remote collaborative editing, and additional
 authoring frontends. Python/build123d API parity remains outside the product.

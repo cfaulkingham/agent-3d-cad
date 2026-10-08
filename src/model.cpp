@@ -17,6 +17,19 @@ Json model_definitions() {
   const Json scalar_ref = {{"$ref", "#/$defs/scalar"}};
   const Json vector_ref = {{"$ref", "#/$defs/vector3"}};
   const Json feature_ref = {{"$ref", "#/$defs/feature"}};
+  const auto curve_schema = [&](int dimensions) {
+    const Json point={{"type","array"},{"items",scalar_ref},{"minItems",dimensions},{"maxItems",dimensions}};
+    const auto points=[&](int minimum,int maximum) {return Json{{"type","array"},{"items",point},{"minItems",minimum},{"maxItems",maximum}};};
+    return Json{{"oneOf",Json::array({
+      object({{"type",{{"const","line"}}},{"start",point},{"end",point}},{"type","start","end"}),
+      object({{"type",{{"const","arc"}}},{"start",point},{"mid",point},{"end",point}},{"type","start","mid","end"}),
+      object({{"type",{{"const","bezier"}}},{"points",points(2,26)}},{"type","points"}),
+      object({{"type",{{"const","spline"}}},{"points",points(2,64)},{"periodic",{{"type","boolean"}}},
+        {"start_tangent",point},{"end_tangent",point}},{"type","points"})
+    })}};
+  };
+  const Json segments2={{"type","array"},{"items",curve_schema(2)},{"minItems",1},{"maxItems",64}};
+  const Json segments3={{"type","array"},{"items",curve_schema(3)},{"minItems",1},{"maxItems",64}};
   const Json selector = object({
     {"type", {{"const", "geometric"}}}, {"feature_id", id},
     {"curve_kind", {{"enum", {"line", "circle", "ellipse", "hyperbola", "parabola", "bezier", "bspline", "offset", "other"}}}},
@@ -30,13 +43,16 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "cylinder"}}}, {"radius", scalar_ref}, {"height", scalar_ref}, {"origin", vector_ref}}, {"id", "type", "radius", "height"}),
     object({{"id",id},{"type",{{"const","external_thread"}}},{"major_diameter",scalar_ref},{"pitch",scalar_ref},{"length",scalar_ref},{"origin",vector_ref},{"handedness",{{"enum",{"right","left"}}}}}, {"id","type","major_diameter","pitch","length"}),
     object({{"id", id}, {"type", {{"enum", {"cut", "fuse"}}}}, {"left", id}, {"right", id}}, {"id", "type", "left", "right"}),
-    object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"})
+    object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"}),
+    object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
   const Json profile_schema = {{"oneOf", Json::array({
     object({{"type",{{"const","rectangle"}}},{"width",scalar_ref},{"height",scalar_ref}}, {"type","width","height"}),
     object({{"type",{{"const","circle"}}},{"radius",scalar_ref}}, {"type","radius"}),
-    object({{"type",{{"const","polygon"}}},{"points",{{"type","array"},{"minItems",3},{"maxItems",128},{"items",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}}}}}, {"type","points"})
+    object({{"type",{{"const","polygon"}}},{"points",{{"type","array"},{"minItems",3},{"maxItems",128},{"items",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}}}}}, {"type","points"}),
+    object({{"type",{{"const","wire"}}},{"segments",segments2},
+      {"holes",{{"type","array"},{"items",segments2},{"maxItems",16}}}},{"type","segments"})
   })}};
   const Json axis_schema = object({{"origin",vector_ref},{"direction",vector_ref}}, {"origin","direction"});
   const Json rotation_schema = object({{"origin",vector_ref},{"axis",vector_ref},{"angle_deg",scalar_ref}}, {"origin","axis","angle_deg"});
@@ -44,22 +60,44 @@ Json model_definitions() {
   const auto bom_text=[](int maximum) {return Json{{"type","string"},{"maxLength",maximum},{"not",{{"pattern","[^ -~]"}}}};};
   const Json bom_item_schema=object({{"input",id},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
     {"part_number",bom_text(64)},{"description",bom_text(120)},{"material",bom_text(64)}},{"input"});
-  const Json mate_schema = object({{"id",id},{"type",{{"const","rigid"}}},{"parent",id},{"child",id},
-    {"parent_frame",workplane_schema},{"child_frame",workplane_schema},{"offset",vector_ref},{"angle_deg",scalar_ref}},
-    {"id","type","parent","child","parent_frame","child_frame"});
+  Json mate_variants=Json::array();
+  for (const auto* type:{"rigid","revolute","slider","cylindrical"}) {
+    Json properties={{"id",id},{"type",{{"const",type}}},{"parent",id},{"child",id},
+      {"parent_frame",workplane_schema},{"child_frame",workplane_schema},{"offset",vector_ref},{"angle_deg",scalar_ref}};
+    Json required={"id","type","parent","child","parent_frame","child_frame"};
+    const Json limits={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}};
+    if (std::string(type)=="revolute" || std::string(type)=="cylindrical") {properties["angle_limits_deg"]=limits;required.push_back("angle_limits_deg");}
+    if (std::string(type)=="slider" || std::string(type)=="cylindrical") {properties["travel_mm"]=scalar_ref;properties["travel_limits_mm"]=limits;required.push_back("travel_limits_mm");}
+    mate_variants.push_back(object(properties,required));
+  }
+  const Json mate_schema={{"oneOf",mate_variants}};
+  const Json coordinate={{"enum",{"angle_deg","travel_mm"}}};
+  const Json motion_ref=object({{"mate_id",id},{"coordinate",coordinate}},{"mate_id","coordinate"});
+  const Json coupling_schema=object({{"id",id},{"source",motion_ref},{"target",motion_ref},{"ratio",scalar_ref},{"offset",scalar_ref}},
+    {"id","source","target","ratio"});
+  const Json pose_value=object({{"mate_id",id},{"coordinate",coordinate},{"value",scalar_ref}},{"mate_id","coordinate","value"});
+  const Json pose_schema=object({{"id",id},{"values",{{"type","array"},{"items",pose_value},{"maxItems",126}}}},{"id","values"});
   const Json part_schema = object({{"id",id},{"input",id},{"placement",placement_schema}}, {"id","input"});
   features.push_back(object({{"id",id},{"type",{{"const","sketch"}}},{"workplane",workplane_schema},{"profile",profile_schema}}, {"id","type","workplane","profile"}));
   features.push_back(object({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar_ref}}, {"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"}));
-  features.push_back(object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},{"path",{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",64}}}}, {"id","type","input","path"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},{"path",{{"oneOf",Json::array({
+    Json{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",64}},
+    object({{"type",{{"const","wire"}}},{"segments",segments3}},{"type","segments"})
+  })}}}}, {"id","type","input","path"}));
   features.push_back(object({{"id",id},{"type",{{"enum",{"transform","instance"}}}},{"input",id},{"translation",vector_ref},{"rotation",rotation_schema}}, {"id","type","input"}));
   features.push_back(object({{"id",id},{"type",{{"const","pattern"}}},{"input",id},{"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"step",vector_ref}}, {"id","type","input","count","step"}));
+  features.push_back(object({{"id",id},{"type",{{"const","circular_pattern"}}},{"input",id},
+    {"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"axis",axis_schema},{"angle_deg",scalar_ref}},
+    {"id","type","input","count","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","hole"}}},{"input",id},{"origin",vector_ref},{"axis",vector_ref},{"radius",scalar_ref},{"depth",scalar_ref}}, {"id","type","input","origin","axis","radius","depth"}));
   features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1},{"maxLength",524288}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"id","type","content","sha256"}));
   features.push_back(object({{"id",id},{"type",{{"const","assembly"}}},
     {"parts",{{"type","array"},{"items",part_schema},{"minItems",1},{"maxItems",64}}},
     {"mates",{{"type","array"},{"items",mate_schema},{"maxItems",63}}},
+    {"couplings",{{"type","array"},{"items",coupling_schema},{"maxItems",126}}},
+    {"poses",{{"type","array"},{"items",pose_schema},{"maxItems",64}}},
     {"bom",{{"type","array"},{"items",bom_item_schema},{"maxItems",64}}}}, {"id","type","parts"}));
   const Json expression = object({{"expression", object({
     {"op",{{"enum",{"add","subtract","multiply","divide"}}}},
@@ -75,12 +113,19 @@ Json model_definitions() {
     object({{"op",{{"const","set_part_placement"}}},{"assembly_id",id},{"part_id",id},{"placement",placement_schema}}, {"op","assembly_id","part_id","placement"}),
     object({{"op",{{"const","set_mate"}}},{"assembly_id",id},{"mate",mate_schema}}, {"op","assembly_id","mate"}),
     object({{"op",{{"const","remove_mate"}}},{"assembly_id",id},{"mate_id",id}}, {"op","assembly_id","mate_id"}),
+    object({{"op",{{"const","set_joint_value"}}},{"assembly_id",id},{"mate_id",id},{"coordinate",coordinate},{"value",scalar_ref}}, {"op","assembly_id","mate_id","coordinate","value"}),
+    object({{"op",{{"const","set_coupling"}}},{"assembly_id",id},{"coupling",coupling_schema}}, {"op","assembly_id","coupling"}),
+    object({{"op",{{"const","remove_coupling"}}},{"assembly_id",id},{"coupling_id",id}}, {"op","assembly_id","coupling_id"}),
+    object({{"op",{{"const","set_pose"}}},{"assembly_id",id},{"pose",pose_schema}}, {"op","assembly_id","pose"}),
+    object({{"op",{{"const","remove_pose"}}},{"assembly_id",id},{"pose_id",id}}, {"op","assembly_id","pose_id"}),
+    object({{"op",{{"const","apply_pose"}}},{"assembly_id",id},{"pose_id",id}}, {"op","assembly_id","pose_id"}),
     object({{"op",{{"const","set_bom_item"}}},{"assembly_id",id},{"item",bom_item_schema}}, {"op","assembly_id","item"}),
     object({{"op",{{"const","remove_bom_item"}}},{"assembly_id",id},{"input",id}}, {"op","assembly_id","input"})
   });
   Json definitions = {
     {"selector", selector},
     {"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},
+    {"coupling",coupling_schema},{"pose",pose_schema},
     {"scalar", {{"oneOf", Json::array({numeric, object({{"parameter", id}}, {"parameter"}), expression})}}},
     {"vector3", {{"type", "array"}, {"items", scalar_ref}, {"minItems", 3}, {"maxItems", 3}}},
     {"feature", {{"oneOf", features}}},
@@ -101,11 +146,17 @@ Json model_definitions() {
   const Json nonnegative = {{"type","number"},{"minimum",0}};
   const Json point_output = {{"type","array"},{"items",real},{"minItems",3},{"maxItems",3}};
   const Json bounds_output = object({{"min",point_output},{"max",point_output}}, {"min","max"});
+  definitions["motion"] = object({
+    {"dofs",{{"type","array"},{"maxItems",126},{"items",object({{"mate_id",id},{"coordinate",coordinate},
+      {"unit",{{"enum",{"deg","mm"}}}},{"value",real},{"minimum",real},{"maximum",real},{"driven",{{"type","boolean"}}},{"coupling_id",id}},
+      {"mate_id","coordinate","unit","value","minimum","maximum","driven"})}}},
+    {"poses",{{"type","array"},{"items",id},{"maxItems",64}}}},{"dofs","poses"});
   definitions["assembly_summary"] = object({
     {"parts",{{"type","array"},{"minItems",1},{"maxItems",64},{"items",object({
       {"id",id},{"input",id},{"transform",{{"type","array"},{"items",real},{"minItems",16},{"maxItems",16}}},
       {"bounds_mm",bounds_output},{"volume_mm3",nonnegative}}, {"id","input","transform","bounds_mm","volume_mm3"})}}},
-    {"mates",{{"type","array"},{"maxItems",63},{"items",object({{"id",id},{"type",{{"const","rigid"}}},{"parent",id},{"child",id}}, {"id","type","parent","child"})}}}
+    {"mates",{{"type","array"},{"maxItems",63},{"items",object({{"id",id},{"type",{{"enum",{"rigid","revolute","slider","cylindrical"}}}},{"parent",id},{"child",id}}, {"id","type","parent","child"})}}},
+    {"motion",{{"$ref","#/$defs/motion"}}}
   }, {"parts","mates"});
   const Json face_id = {{"type","string"},{"pattern","^face-[1-9][0-9]*$"}};
   const Json edge_id = {{"type","string"},{"pattern","^edge-[1-9][0-9]*$"}};
@@ -226,7 +277,7 @@ void validate_selector(const Json& selector, const Json& parameters, const std::
   if (text_field(selector, "type") != "geometric")
     throw Error("invalid_model", "Only geometric design references can be saved; evaluated selections cannot be persisted");
   if (text_field(selector, "feature_id") != input)
-    throw Error("invalid_model", "Selector feature_id must equal the fillet input");
+    throw Error("invalid_model", "Selector feature_id must equal the edge-operation input");
   static const std::set<std::string> kinds = {"line", "circle", "ellipse", "hyperbola", "parabola", "bezier", "bspline", "offset", "other"};
   if (!kinds.contains(text_field(selector, "curve_kind")))
     throw Error("invalid_model", "Unsupported selector curve_kind");
@@ -285,8 +336,52 @@ void placement(const Json& value, const Json& parameters) {
     scalar(rotation.at("angle_deg"), parameters, "deg");
   }
 }
+void curve_segments(const Json& segments,const Json& parameters,std::size_t dimensions) {
+  if (!segments.is_array() || segments.empty() || segments.size()>64)
+    throw Error("invalid_model","A curve wire needs 1 to 64 ordered segments");
+  const auto point=[&](const Json& value,const std::string& unit="mm") {
+    if (!value.is_array() || value.size()!=dimensions)
+      throw Error("invalid_model","Curve point/vector has the wrong coordinate count");
+    double squared=0;
+    for (const auto& component:value) {const double v=scalar(component,parameters,unit);squared+=v*v;}
+    return squared;
+  };
+  for (std::size_t i=0;i<segments.size();++i) {
+    try {
+      const auto& segment=segments[i]; const auto type=text_field(segment,"type");
+      if (type=="line" || type=="arc") {
+        if (type=="line") fields(segment,{"type","start","end"});
+        else {fields(segment,{"type","start","mid","end"});point(segment.at("mid"));}
+        point(segment.at("start"));point(segment.at("end"));
+      } else if (type=="bezier" || type=="spline") {
+        if (type=="bezier") fields(segment,{"type","points"});
+        else fields(segment,{"type","points"},{"periodic","start_tangent","end_tangent"});
+        const auto& points=segment.at("points");
+        const auto maximum=type=="bezier"?26u:64u;
+        if (!points.is_array() || points.size()<2 || points.size()>maximum)
+          throw Error("invalid_model","Curve point count is outside its supported bounds",{{"maximum",maximum}});
+        for (const auto& p:points) point(p);
+        if (type=="spline") {
+          if (segment.contains("periodic") && !segment.at("periodic").is_boolean())
+            throw Error("invalid_model","Spline periodic must be boolean");
+          const bool periodic=segment.value("periodic",false);
+          if (periodic && points.size()<3) throw Error("invalid_model","A periodic spline needs at least three distinct points");
+          if (segment.contains("start_tangent")!=segment.contains("end_tangent"))
+            throw Error("invalid_model","Spline endpoint tangents must be supplied together");
+          if (segment.contains("start_tangent")) {
+            if (periodic) throw Error("invalid_model","Periodic splines cannot have endpoint tangents");
+            if (point(segment.at("start_tangent"),"dimensionless")<1e-24 || point(segment.at("end_tangent"),"dimensionless")<1e-24)
+              throw Error("invalid_model","Spline endpoint tangents must be nonzero");
+          }
+        }
+      } else throw Error("invalid_model","Unsupported curve segment: "+type);
+    } catch (const Error& e) {
+      auto details=e.details;details["segment_index"]=i;throw Error(e.code,e.what(),details);
+    }
+  }
+}
 void assembly(const Json& feature, const Json& parameters, const std::map<std::string,std::string>& types) {
-  fields(feature, {"id", "type", "parts"}, {"mates","bom"});
+  fields(feature, {"id", "type", "parts"}, {"mates","bom","couplings","poses"});
   const auto& parts = feature.at("parts");
   if (!parts.is_array() || parts.empty() || parts.size() > 64)
     throw Error("invalid_model", "An assembly needs 1 to 64 parts");
@@ -329,7 +424,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
       }
     }
   }
-  if (!feature.contains("mates")) return;
+  if (!feature.contains("mates")) {assembly_motion(feature,parameters);return;}
   const auto& mates = feature.at("mates");
   if (!mates.is_array() || mates.size() > 63) throw Error("invalid_model", "An assembly permits at most 63 mates");
   std::set<std::string> mate_ids;
@@ -337,14 +432,18 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
   for (const auto& mate : mates) {
     const auto mate_id = text_field(mate,"id");
     try {
-      fields(mate, {"id","type","parent","child","parent_frame","child_frame"}, {"offset","angle_deg"});
+      const auto type=text_field(mate,"type");
+      if (type=="rigid") fields(mate, {"id","type","parent","child","parent_frame","child_frame"}, {"offset","angle_deg"});
+      else if (type=="revolute") fields(mate,{"id","type","parent","child","parent_frame","child_frame","angle_limits_deg"},{"offset","angle_deg"});
+      else if (type=="slider") fields(mate,{"id","type","parent","child","parent_frame","child_frame","travel_limits_mm"},{"offset","angle_deg","travel_mm"});
+      else if (type=="cylindrical") fields(mate,{"id","type","parent","child","parent_frame","child_frame","angle_limits_deg","travel_limits_mm"},{"offset","angle_deg","travel_mm"});
+      else throw Error("invalid_model","Mate type must be rigid, revolute, slider or cylindrical");
       model_identifier(mate_id);
       if (!mate_ids.insert(mate_id).second) throw Error("invalid_model", "Duplicate assembly mate: " + mate_id);
-      if (text_field(mate,"type") != "rigid") throw Error("invalid_model", "Only rigid assembly mates are supported");
       const auto parent=text_field(mate,"parent"), child=text_field(mate,"child");
       if (!part_ids.contains(parent) || !part_ids.contains(child)) throw Error("invalid_model", "Mate must name existing assembly parts");
       if (parent == child) throw Error("invalid_model", "A part cannot mate to itself");
-      if (!parents.emplace(child,parent).second) throw Error("invalid_model", "A part permits only one incoming rigid mate", {{"part_id",child}});
+      if (!parents.emplace(child,parent).second) throw Error("invalid_model", "A part permits only one incoming mate", {{"part_id",child}});
       if (placed.contains(child)) throw Error("invalid_model", "A mated child cannot have an explicit placement", {{"part_id",child}});
       workplane(mate.at("parent_frame"),parameters);
       workplane(mate.at("child_frame"),parameters);
@@ -363,6 +462,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
       current=parents.at(current);
     }
   }
+  assembly_motion(feature,parameters);
 }
 }
 
@@ -420,12 +520,13 @@ void validate_model(const Json& model) {
     } else if (type == "cut" || type == "fuse") {
       fields(feature, {"id", "type", "left", "right"});
       dependency("left"); dependency("right");
-    } else if (type == "fillet") {
-      fields(feature, {"id", "type", "input", "radius", "edges"});
-      dependency("input"); positive(feature.at("radius"));
+    } else if (type == "fillet" || type == "chamfer") {
+      const auto dimension=type=="fillet"?"radius":"distance";
+      fields(feature, {"id", "type", "input", dimension, "edges"});
+      dependency("input"); positive(feature.at(dimension));
       const auto& edges = feature.at("edges");
       if (edges.is_string()) {
-        if (edges != "all") throw Error("invalid_model", "Fillet edges must be all or a geometric selector");
+        if (edges != "all") throw Error("invalid_model", "Edges must be all or a geometric selector");
       } else validate_selector(edges, parameters, text_field(feature, "input"));
     } else if (type == "sketch") {
       fields(feature, {"id", "type", "workplane", "profile"});
@@ -445,6 +546,17 @@ void validate_model(const Json& model) {
         for (const auto& point : points) {
           if (!point.is_array() || point.size() != 2) throw Error("invalid_model", "Polygon points require two coordinates");
           scalar(point[0], parameters); scalar(point[1], parameters);
+        }
+      } else if (kind=="wire") {
+        fields(profile,{"type","segments"},{"holes"});
+        curve_segments(profile.at("segments"),parameters,2);
+        if (profile.contains("holes")) {
+          const auto& holes=profile.at("holes");
+          if (!holes.is_array() || holes.size()>16) throw Error("invalid_model","A profile permits at most 16 interior boundaries");
+          for (std::size_t i=0;i<holes.size();++i) {
+            try {curve_segments(holes[i],parameters,2);}
+            catch (const Error& e) {auto details=e.details;details["hole_index"]=i;throw Error(e.code,e.what(),details);}
+          }
         }
       } else throw Error("invalid_model", "Unsupported sketch profile");
     } else if (type == "extrude") {
@@ -470,8 +582,14 @@ void validate_model(const Json& model) {
     } else if (type == "sweep") {
       fields(feature, {"id", "type", "input", "path"}); sketch_dependency(text_field(feature,"input"));
       const auto& path = feature.at("path");
-      if (!path.is_array() || path.size() < 2 || path.size() > 64) throw Error("invalid_model", "A sweep path needs 2 to 64 points");
-      for (const auto& p : path) vector3(p,parameters);
+      if (path.is_object()) {
+        fields(path,{"type","segments"});
+        if (text_field(path,"type")!="wire") throw Error("invalid_model","A curved sweep path must have type wire");
+        curve_segments(path.at("segments"),parameters,3);
+      } else {
+        if (!path.is_array() || path.size() < 2 || path.size() > 64) throw Error("invalid_model", "A sweep path needs 2 to 64 points");
+        for (const auto& p : path) vector3(p,parameters);
+      }
     } else if (type == "transform" || type == "instance") {
       fields(feature, {"id", "type", "input"}, {"translation", "rotation"}); dependency("input");
       if (types.at(text_field(feature,"input")) == "sketch") throw Error("invalid_model", "Transform and instance currently require solid inputs");
@@ -482,13 +600,22 @@ void validate_model(const Json& model) {
         vector3(rotation.at("origin"),parameters); unit_vector(rotation.at("axis"),parameters);
         scalar(rotation.at("angle_deg"),parameters,"deg");
       }
-    } else if (type == "pattern") {
-      fields(feature, {"id", "type", "input", "count", "step"}); dependency("input");
+    } else if (type == "pattern" || type == "circular_pattern") {
+      if (type=="pattern") fields(feature, {"id", "type", "input", "count", "step"});
+      else fields(feature,{"id","type","input","count","axis","angle_deg"});
+      dependency("input");
       if (types.at(text_field(feature,"input")) == "sketch") throw Error("invalid_model", "Patterns currently require solid inputs");
       if (!feature.at("count").is_number_integer() || feature.at("count") < 2 || feature.at("count") > 64)
         throw Error("invalid_model", "Pattern count must be an integer from 2 to 64");
-      const auto step = vector3(feature.at("step"),parameters);
-      if (std::hypot(step[0],step[1],step[2]) < 1e-5) throw Error("invalid_model", "Pattern step must be nonzero");
+      if (type=="pattern") {
+        const auto step = vector3(feature.at("step"),parameters);
+        if (std::hypot(step[0],step[1],step[2]) < 1e-5) throw Error("invalid_model", "Pattern step must be nonzero");
+      } else {
+        axis(feature.at("axis"),parameters,"direction");
+        const auto angle=scalar(feature.at("angle_deg"),parameters,"deg");
+        if (std::abs(angle)<1e-5 || std::abs(angle)>=360 || std::abs(angle)*(feature.at("count").get<int>()-1)>=360-1e-9)
+          throw Error("invalid_model","Circular pattern angle is the signed step; instances must span less than 360 degrees");
+      }
     } else if (type == "hole") {
       fields(feature, {"id", "type", "input", "origin", "axis", "radius", "depth"}); dependency("input");
       vector3(feature.at("origin"),parameters); unit_vector(feature.at("axis"),parameters);
@@ -537,6 +664,22 @@ Json& member_array(Json& feature, const char* key, const std::string& assembly_i
   if (!result.is_array()) throw Error("invalid_model", std::string("Assembly ") + key + " must be an array", {{"feature_id", assembly_id}});
   return result;
 }
+Json& find_assembly(Json& features,const std::string& id) {
+  for (auto& feature:features) if (named(feature,"id",id) && named(feature,"type","assembly")) return feature;
+  throw Error("invalid_argument","assembly_id must name an assembly feature",{{"feature_id",id}});
+}
+void set_joint_coordinate(Json& feature,const Json& edit) {
+  const auto id=text_field(edit,"mate_id"),coordinate=text_field(edit,"coordinate");
+  auto& mates=member_array(feature,"mates",text_field(feature,"id"),false);
+  for (auto& mate:mates) if (named(mate,"id",id)) {
+    const auto type=text_field(mate,"type");
+    if (!((coordinate=="angle_deg" && (type=="revolute" || type=="cylindrical")) ||
+          (coordinate=="travel_mm" && (type=="slider" || type=="cylindrical"))))
+      throw Error("invalid_argument","Coordinate does not belong to this moving mate",{{"mate_id",id},{"coordinate",coordinate}});
+    mate[coordinate]=edit.at("value");return;
+  }
+  throw Error("invalid_argument","Unknown moving mate: "+id,{{"mate_id",id}});
+}
 }
 
 Json apply_operations(const Json& model, const Json& operations) {
@@ -574,6 +717,33 @@ Json apply_operations(const Json& model, const Json& operations) {
     } else if (op == "set_output") {
       fields(operation, {"op", "feature_id"});
       candidate["output"] = text_field(operation, "feature_id");
+    } else if (op=="set_joint_value" || op=="apply_pose" || op=="set_pose" || op=="remove_pose" || op=="set_coupling" || op=="remove_coupling") {
+      if (op=="set_joint_value") fields(operation,{"op","assembly_id","mate_id","coordinate","value"});
+      else if (op=="apply_pose" || op=="remove_pose") fields(operation,{"op","assembly_id","pose_id"});
+      else if (op=="set_pose") fields(operation,{"op","assembly_id","pose"});
+      else if (op=="set_coupling") fields(operation,{"op","assembly_id","coupling"});
+      else fields(operation,{"op","assembly_id","coupling_id"});
+      const auto assembly_id=text_field(operation,"assembly_id");auto& feature=find_assembly(features,assembly_id);
+      if (op=="set_joint_value") set_joint_coordinate(feature,operation);
+      else if (op=="apply_pose") {
+        const auto id=text_field(operation,"pose_id");auto& poses=member_array(feature,"poses",assembly_id,false);
+        const Json* selected=nullptr;
+        for (const auto& pose:poses) if (named(pose,"id",id)) {selected=&pose;break;}
+        if (!selected) throw Error("invalid_argument","Unknown named pose: "+id,{{"feature_id",assembly_id},{"pose_id",id}});
+        if (!selected->contains("values") || !selected->at("values").is_array()) throw Error("invalid_model","Pose values must be an array");
+        for (const auto& value:selected->at("values")) set_joint_coordinate(feature,value);
+      } else {
+        const bool pose=op=="set_pose" || op=="remove_pose",remove=op=="remove_pose" || op=="remove_coupling";
+        const auto key=pose?"pose":"coupling",id_key=pose?"pose_id":"coupling_id",array_key=pose?"poses":"couplings";
+        const auto id=remove?text_field(operation,id_key):text_field(operation.at(key),"id");
+        auto& items=member_array(feature,array_key,assembly_id,true);auto found=items.end();
+        for (auto it=items.begin();it!=items.end();++it) if (named(*it,"id",id)) {found=it;break;}
+        if (remove) {
+          if (found==items.end()) throw Error("invalid_argument",std::string("Unknown ")+key+": "+id,{{"feature_id",assembly_id},{id_key,id}});
+          items.erase(found);
+        } else if (found==items.end()) items.push_back(operation.at(key));
+        else *found=operation.at(key);
+      }
     } else if (op == "set_part_placement" || op == "set_mate" || op == "remove_mate" || op == "set_bom_item" || op == "remove_bom_item") {
       if (op == "set_part_placement") fields(operation, {"op","assembly_id","part_id","placement"});
       else if (op == "set_mate") fields(operation, {"op","assembly_id","mate"});

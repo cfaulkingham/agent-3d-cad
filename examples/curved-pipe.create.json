@@ -1,0 +1,27 @@
+{
+  "document_id": "curved_pipe",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {"radius": 1, "rise": 20},
+    "features": [
+      {
+        "id": "section", "type": "sketch",
+        "workplane": {"origin": [0, 0, 0], "normal": [0, 0, 1], "x_direction": [1, 0, 0]},
+        "profile": {"type": "circle", "radius": {"parameter": "radius"}}
+      },
+      {
+        "id": "tube", "type": "sweep", "input": "section",
+        "path": {"type": "wire", "segments": [
+          {"type": "spline", "points": [[0, 0, 0], [5, 0, 15], [20, 0, {"parameter": "rise"}]],
+           "start_tangent": [0, 0, 1], "end_tangent": [1, 0, 0]}
+        ]}
+      },
+      {
+        "id": "bundle", "type": "circular_pattern", "input": "tube", "count": 4,
+        "axis": {"origin": [-5, 0, 0], "direction": [0, 0, 1]}, "angle_deg": 90
+      }
+    ],
+    "output": "bundle"
+  }
+}

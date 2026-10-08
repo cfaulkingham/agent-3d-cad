@@ -69,16 +69,18 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `external_thread` | `major_diameter`, `pitch`, `length` | +Z; optional `origin`, `handedness` (`right` default or `left`) |
 | `cut`, `fuse` | `left`, `right` | Earlier solid features |
 | `fillet` | `input`, `radius`, `edges` | `edges` is `"all"` or a geometric selector |
+| `chamfer` | `input`, `distance`, `edges` | Symmetric chamfer; same edge selector contract as fillet |
 | `sketch` | `workplane`, `profile` | Numeric profile; no constraint solver |
 | `extrude` | `input`, `distance` | Sketch along workplane normal; signed distance |
 | `revolve` | `input`, `axis`, `angle_deg` | Sketch; angle in (0,360] |
 | `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
-| `sweep` | `input`, `path` | Sketch swept along 2–64 world-coordinate points |
+| `sweep` | `input`, `path` | Sketch swept along 2–64 world-coordinate points or an exact curve wire |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
 | `pattern` | `input`, `count`, `step` | 2–64 translated copies including original; replication budget below |
+| `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | 2–64 rotated copies; signed angular step, including original |
 | `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
 | `import_step` | `content`, `sha256` | Embedded STEP text ≤512 KiB with matching SHA-256 |
-| `assembly` | `parts` | 1–64 named instances of earlier solid features; optional acyclic rigid `mates` and source-keyed `bom` metadata |
+| `assembly` | `parts` | 1–64 named instances of earlier solid features; optional acyclic rigid/articulated `mates`, `couplings`, `poses`, and source-keyed `bom` metadata |
 
 `workplane` requires `origin`, `normal`, `x_direction`; directions must be nonzero
 and perpendicular. A profile is `{"type":"rectangle","width":20,"height":10}`,
@@ -89,6 +91,12 @@ An axis object has `origin` and `direction`. A rotation has `origin`, `axis`,
 not assemblies or fused unions. Boolean fusion is explicit. Imported STEP is an
 opaque solid feature, not recovered source design intent. Saved content makes
 imports independent of their original file path.
+
+Circular patterns rotate each copy by `index * angle_deg` around the supplied
+world axis. The signed step must have magnitude at least 0.00001 degrees, and
+`abs(angle_deg) * (count - 1)` must be less than 360 degrees (with 1e-9 degree
+boundary slack), preventing a duplicate full-turn endpoint. For a complete
+four-copy ring use count 4 and step 90, not 120. Copies remain separate solids.
 
 Patterns and assemblies replicate their inputs, and a pattern may take another
 pattern as input. Each such feature has a per-feature replication budget,
@@ -113,7 +121,26 @@ Nested assembly inputs and solid operations consuming assemblies are rejected;
 edit source parts before assembling them. Full semantics and examples are in
 [ASSEMBLIES.md](ASSEMBLIES.md).
 
-A sweep starts at its sketch origin with the first path segment perpendicular to
+Moving mates share the same parent/child datum frames. `revolute` requires
+`angle_limits_deg: [minimum,maximum]`; `slider` requires `travel_limits_mm`;
+`cylindrical` requires both. `angle_deg` and `travel_mm` default to zero and must
+remain within their respective limits. A slider's optional `angle_deg` is fixed
+alignment, not a moving coordinate. Limits and coordinates accept parameters
+and expressions with degrees or mm units. Rotation and axial travel are about
+and along the parent datum's +Z, after its local `offset` translation.
+
+Assembly `couplings` are at most 126 `{id,source,target,ratio,offset?}` entries.
+Source/target are `{mate_id,coordinate}`, with `coordinate: angle_deg|travel_mm`.
+The target equals `source * ratio + offset`; the nonzero ratio is a numeric
+coordinate multiplier (degrees or mm as named), and offset uses target units.
+Each target has one driver, cannot also have an authored coordinate value, and
+coupling cycles fail. Up to 64 named `poses` use `{id,values}` where each value is
+`{mate_id,coordinate,value}`. Every independent coordinate must appear exactly
+once; driven coordinates must be omitted. All named poses, including their
+derived coupled coordinates, are validated against limits when the model is
+validated. See `examples/articulated-arm.create.json`.
+
+A sweep starts at its sketch origin with the initial path tangent perpendicular to
 the sketch plane. Invalid/self-intersecting profiles and failed sweeps fail
 explicitly. STEP readers normalize source units to document millimeters.
 A hole whose cylinder misses its input, stops short of it, or only touches it
@@ -124,6 +151,44 @@ hole in a very large body is accepted.
 Every STEP transfer root must transfer: a file where any root fails is rejected
 with `kernel_failure` and `transferred_roots`/`total_roots` details, never
 imported partially.
+
+### Exact curve profiles and sweep paths
+
+A sketch may use `profile: {type:"wire", segments:[...], holes:[[...], ...]}`.
+Each ordered segment uses workplane-local 2D coordinates. `holes` is optional;
+each entry is an explicit closed interior wire. Author winding does not decide
+whether an interior is removed. Interiors must be strictly contained, disjoint,
+non-nested, and separated from other boundaries by more than 1e-7 mm.
+
+A sweep may use `path: {type:"wire", segments:[...]}` with world-coordinate 3D
+points. Existing array-valued polyline paths remain supported. Segment forms:
+
+| Type | Fields | Meaning |
+|---|---|---|
+| `line` | `start`, `end` | Exact straight segment |
+| `arc` | `start`, `mid`, `end` | Exact circular arc through three distinct non-collinear points |
+| `bezier` | `points` | 2–26 control poles; first and last are the endpoints |
+| `spline` | `points` | Native interpolating B-spline through 2–64 distinct points |
+
+Splines optionally set `periodic: true` with at least three points; closure is
+implicit, so do not repeat the first point. Open splines may specify both
+`start_tangent` and `end_tangent`, nonzero dimensionless vectors in the same
+coordinate frame as the points. OCCT scales tangent magnitudes to the point
+spacing; the vectors constrain direction. Endpoint tangents and periodicity
+cannot be combined. All coordinates accept parameters and bounded expressions.
+
+Wires permit 1–64 segments and profiles at most 16 interior wires. Segments must
+connect in authored order within 1e-7 mm; profiles must also close. No automatic
+closing segment, reordering, polygon approximation or repair is performed.
+Zero-length/undefined-tangent geometry, crossings and self-interference fail
+with feature context and, where available, `segment_index` or `hole_index`.
+
+Curved profiles can be extruded, revolved, lofted and swept. Loft currently
+requires one boundary per section: for a hollow loft, construct outer and inner
+lofts separately and subtract explicitly. Interior loops are never discarded.
+Curved sweeps require their initial tangent to align with either direction of
+the sketch normal and may fail for excessive curvature or self-intersection.
+See `examples/curved-plate.create.json` and `examples/curved-pipe.create.json`.
 These checks (no-effect holes, partial STEP imports and the replication budget)
 apply whenever a model is evaluated, including revisions committed by earlier
 builds. A stored revision that relied on the old leniency is still preserved
@@ -210,10 +275,11 @@ integers. See runtime schemas for exact closed field definitions.
 | `cad_import` | `path`, optional `request_id` | New document with immutable embedded STEP feature |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
 | `cad_export` | `revision`, `format` (`step`/`stl`) | Artifact path, bytes, units and identity |
+| `cad_robot_export` | `revision`, `robot: {format, joint_properties, inertials?}`, optional `feature_id` | URDF+SRDF or SDF 1.12 directory with STL meshes, SI joint coordinates, frame ledger and hash manifest; explicit physical inputs required; see [robot contract](ROBOT_EXPORT.md) |
 | `cad_bom` | `revision`, optional assembly `feature_id` (defaults output) | Source-grouped BOM with instance quantities, JSON/CSV artifacts and manifest path |
 | `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned layouts, sections, measured dimensions, tolerances, optional BOM/balloons and saved recipe/manifest paths |
 | `cad_view` | `revision`, optional `feature_id` | Offline HTML path, .view.json path, summary and evaluation identity |
-| `cad_preview` | `expected_revision`, `operations`, optional `feature_id` | Draft view artifacts; no commit |
+| `cad_preview` | `expected_revision`, `operations`, optional `feature_id`, `kind` | Draft HTML/data artifacts (`kind: view`, default) or full draft mesh/topology (`kind: mesh`); no commit |
 | `cad_resolve_selection` | Remaining evaluated pick fields | Measurements and available persistent selector |
 | `cad_compare` | `from_revision`, `to_revision` | Parameter/feature changes and volume/area deltas |
 | `cad_job` | Job action fields below; no document_id at top level | Durable job status/result |
@@ -228,7 +294,11 @@ integers. See runtime schemas for exact closed field definitions.
 `remove_feature(id)`, `set_output(feature_id)`,
 `set_part_placement(assembly_id,part_id,placement)`,
 `set_mate(assembly_id,mate)`, `remove_mate(assembly_id,mate_id)`,
-`set_bom_item(assembly_id,item)`, and `remove_bom_item(assembly_id,input)`.
+`set_bom_item(assembly_id,item)`, `remove_bom_item(assembly_id,input)`,
+`set_joint_value(assembly_id,mate_id,coordinate,value)`,
+`set_coupling(assembly_id,coupling)`, `remove_coupling(assembly_id,coupling_id)`,
+`set_pose(assembly_id,pose)`, `remove_pose(assembly_id,pose_id)`, and
+`apply_pose(assembly_id,pose_id)`.
 `set_mate` upserts a complete mate by its ID; removal requires an existing mate.
 Placement replaces the complete root placement. Detaching a child and choosing
 its placement can be combined in either order. Validate the final batch graph.
@@ -236,6 +306,13 @@ A valid unchanged batch still creates a revision. Restore never rewinds HEAD.
 An error raised while applying one operation carries `details.operation_index`
 (zero-based). A feature added or replaced by a batch must be an object with a
 string `id` when it is applied, otherwise the batch fails with `invalid_model`.
+
+Coupling and pose setters upsert complete entries by ID; removals require an
+existing entry. `apply_pose` copies the stored independent values, retaining
+their scalar expressions. `set_joint_value` changes only a declared moving
+coordinate, not a slider's fixed alignment. To make an authored coordinate
+coupled, use `set_mate` to omit its own value and `set_coupling` in one batch.
+The final document, including all stored poses, must remain valid.
 
 `cad_import` embeds the file's bytes unchanged in a JSON string, so the file must
 be valid UTF-8 (ISO 10303-21 files are normally ASCII and encode other text with
@@ -341,7 +418,7 @@ view. Show can initialize a view, but does not cause a host to mount an app;
 call open once when a UI is needed. Show on the same failed document explicitly
 retries its evaluation. Ordinary committed edits need no additional show call.
 
-The app polls `cad_viewer` with one of three closed actions:
+The app uses `cad_viewer` with these closed actions:
 
 - `sync`: `view_id`, optional `known_evaluation_id`. Returns `state` (`empty`,
   `loading`, `ready`, `error`), document/revision, and `changed`. Ready state also
@@ -363,6 +440,31 @@ The app polls `cad_viewer` with one of three closed actions:
   Prompt is bounded to 8,192 UTF-8 bytes. Selection resolution and a final locked
   HEAD/evaluation recheck precede publication. Null clears selection. Omitted
   camera/prompt fields retain prior values only within the same evaluation.
+- `motion_preview`: `view_id`, `evaluation_id`, and either `pose_id` or
+  `values: [{mate_id,coordinate,value},...]`. Numeric values must specify every
+  independent coordinate exactly once. The displayed feature must be an
+  articulated assembly. Validates the candidate, then schedules a bounded native
+  draft mesh job; never commits HEAD. A new pose invalidates transfers and picks
+  from the previous pose even when the base revision is unchanged.
+- `motion_reset`: `view_id`, `evaluation_id`. Discards the preview and returns
+  to saved geometry. Also accepts the evaluation that started the current preview
+  so reset remains usable while its mesh is being built or transferred. An older
+  view/document or changed HEAD still fails. Reset does not cancel an in-flight
+  save; wait for its outcome. Obsolete preview jobs cannot publish into the view.
+- `motion_save`: `view_id`, `evaluation_id`, optional `pose_id`. Requires a
+  displayed draft. Schedules the existing `cad_apply` path with its base revision
+  and preview operations; optional pose ID also upserts the named independent
+  values. Successful publication creates a normal revision. Failed saves preserve
+  HEAD. Mutations are never retried automatically after an uncertain response.
+
+All motion actions return sync status; subsequent `sync` polls finish the job.
+Sync includes `saving`, and ready evaluations include `draft`. Ready drafts and
+`cad_context` also carry `preview_operations` (`set_joint_value` or `apply_pose`)
+so the agent can interpret the displayed pose. Draft context requires null
+selection; native selection resolution rejects draft picks. Camera and part
+visibility persist across poses. A new committed HEAD retires any preview of the
+previous revision. The embedded UI disables geometry selection and export during
+a draft, and offers reset, explicit save and optional named-pose creation.
 
 `hidden_part_ids` is a view-level array of at most 64 unique IDs from the
 currently displayed assembly. `[]` shows all parts; omitting the field retains

@@ -313,6 +313,79 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         assert not Draft202012Validator(tools["cad_drawing"]["inputSchema"]).is_valid(
             {"document_id": aid, "revision": 1, "drawing": bad})
         checks += 1
+    # New curves remain editable native documents on every process invocation;
+    # validate the actual service's input/output schemas, including curve mesh
+    # and drawing publication, not just JSON shapes in isolation.
+    for name in ["curved-plate", "curved-pipe"]:
+        example = json.loads((source / "examples" / f"{name}.create.json").read_text())
+        created_curve = call("cad_create", example)
+        cid = created_curve["document_id"]
+        call("cad_query", {"document_id": cid, "revision": 1, "kind": "mesh"})
+        call("cad_export", {"document_id": cid, "revision": 1, "format": "step"})
+        parameter, value = ("crown", 30) if name == "curved-plate" else ("rise", 25)
+        edits = [{"op": "set_parameter", "name": parameter, "value": value}]
+        call("cad_preview", {"document_id": cid, "expected_revision": 1, "operations": edits})
+        call("cad_apply", {"document_id": cid, "expected_revision": 1, "operations": edits})
+        assert call("cad_read", {"document_id": cid, "revision": 1})["model"] == example["model"]
+        checks += 1
+        if name == "curved-plate":
+            call("cad_drawing", {"document_id": cid, "revision": 2,
+                "drawing": {"views": [{"id": "top", "orientation": "top"}]}})
+    mechanism = json.loads((source / "examples/articulated-arm.create.json").read_text())
+    mid = mechanism["document_id"]
+    call("cad_create", mechanism)
+    robot_args = json.loads((source / "examples/articulated-arm.robot.json").read_text())
+    call("cad_robot_export", robot_args)
+    robot_args["robot"]["format"] = "srdf"
+    call("cad_robot_export", robot_args)
+    robot_args["robot"]["format"] = "sdf"
+    robot_args["robot"]["inertials"] = [{"link": name, "mass_kg": .1,
+        "center_of_mass_m": [0,0,0], "inertia_kg_m2": [.00002,.00003,.00004,0,0,0]}
+        for name in ["part_ground","part_lever","part_slide","part_spindle","carrier_spindle_joint"]]
+    call("cad_robot_export", robot_args)
+    for bad in [{"format":"urdf"}, {"format":"dae","joint_properties":[]},
+                {"format":"urdf","joint_properties":[{"mate_id":"hinge","coordinate":"angle_deg","effort":-1,"velocity":1}]}]:
+        assert not Draft202012Validator(tools["cad_robot_export"]["inputSchema"]).is_valid({"document_id":mid,"revision":1,"robot":bad})
+        checks += 1
+    edits = [{"op": "apply_pose", "assembly_id": "mechanism", "pose_id": "extended"}]
+    preview = call("cad_preview", {"document_id": mid, "expected_revision": 1, "operations": edits, "kind": "mesh"})
+    assert preview["draft"] and "mesh" in preview and "path" not in preview
+    incomplete = {k:v for k,v in preview.items() if k not in ["mesh","topology"]}
+    assert not Draft202012Validator(tools["cad_preview"]["outputSchema"]).is_valid(incomplete)
+    assert not Draft202012Validator(tools["cad_preview"]["outputSchema"]).is_valid(dict(preview, draft=False))
+    checks += 2
+    call("cad_open", {"document_id": mid, "view_id": "motion_schema"})
+
+    def motion_ready(revision):
+        deadline = time.monotonic() + 45
+        while time.monotonic() < deadline:
+            shown = call("cad_viewer", {"action": "sync", "view_id": "motion_schema"})
+            if shown["state"] == "ready" and shown["revision"] == revision:
+                return shown
+            assert shown["state"] == "loading", shown
+            time.sleep(.02)
+        raise AssertionError("Motion view did not become ready")
+
+    shown = motion_ready(1)
+    call("cad_viewer", {"action": "motion_preview", "view_id": "motion_schema", "evaluation_id": shown["evaluation_id"], "pose_id": "extended"})
+    shown = motion_ready(1)
+    context = call("cad_viewer", {"action": "context", "view_id": "motion_schema", "evaluation_id": shown["evaluation_id"], "selection": None})
+    assert context["draft"] and not context["stale"] and context["preview_operations"] == edits
+    call("cad_context", {"view_id": "motion_schema"})
+    call("cad_viewer", {"action": "motion_reset", "view_id": "motion_schema", "evaluation_id": shown["evaluation_id"]})
+    shown = motion_ready(1)
+    values = [{"mate_id": "hinge", "coordinate": "angle_deg", "value": 60}, {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": 10}]
+    call("cad_viewer", {"action": "motion_preview", "view_id": "motion_schema", "evaluation_id": shown["evaluation_id"], "values": values})
+    shown = motion_ready(1)
+    call("cad_viewer", {"action": "motion_save", "view_id": "motion_schema", "evaluation_id": shown["evaluation_id"], "pose_id": "inspection"})
+    shown = motion_ready(2)
+    assert not shown["draft"] and "inspection" in shown["summary"]["assembly"]["motion"]["poses"]
+    call("cad_query", {"document_id": mid, "revision": 2, "kind": "mesh"})
+    for fmt in ["step", "stl"]:
+        call("cad_export", {"document_id": mid, "revision": 2, "format": fmt})
+    call("cad_drawing", {"document_id": mid, "revision": 2, "drawing": {"views": [{"id": "top", "orientation": "top"}]}})
+    assert call("cad_read", {"document_id": mid, "revision": 1})["model"] == mechanism["model"]
+    checks += 4
     frames = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "schema-conformance", "version": "1"}}},
         {"jsonrpc": "2.0", "method": "notifications/initialized"},

@@ -2,6 +2,7 @@
 #include "agentcad/hash.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/service.hpp"
+#include "agentcad/robot.hpp"
 #include "agentcad/drawing.hpp"
 #include "agentcad/cache.hpp"
 #include "agentcad/model.hpp"
@@ -825,7 +826,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
 #endif
     WorkerWatchdog watchdog(limits);
     const auto& request = payload.at("request");
-    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity"});
+    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot"});
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
@@ -909,6 +910,12 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
     if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"));
+    else if(kind=="robot") {
+      auto description=robot_description(payload.at("model"),geometry().robot_frames(payload.at("model"),feature),request.at("robot"));
+      const auto path=path_from_utf8(text_field(request,"path"));directory(path/"meshes");
+      for(const auto& source:description.at("mesh_sources")) geometry().export_file(path/path_from_utf8(text_field(source,"path")),"stl",text_field(source,"feature_id"));
+      result["robot"]=std::move(description);
+    }
     else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing" && kind != "projection") throw Error("invalid_argument", "Unknown geometry worker request");
     // A coordinator that projected views ahead of this worker also supplies the model
     // summary and publishes the geometry entry, so this worker need not rebuild it.
@@ -975,7 +982,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_query" && tool != "cad_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_query" && tool != "cad_export" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

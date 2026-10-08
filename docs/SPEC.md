@@ -27,6 +27,15 @@ placement, mates, and exploded drawings. M6 adds one-level assembly features wit
 named source-part instances, deterministic rigid datum mates, and view-specific
 drawing explosions. See `ASSEMBLIES.md` for the current contract and limitations.
 
+Modeling/motion extension (2026-10-07): the user authorized richer native
+modeling and moving mechanisms. Exact curve profiles and paths, symmetric
+chamfers and circular patterns are implemented locally, along with articulated
+mates, coupled motion, named poses and native live preview/reset/save controls.
+Native URDF/SRDF/SDF export preserves frames, coordinates and couplings with
+explicit physical inputs. `ROBOT_EXPORT.md` describes the handoff and validation
+limits. `MODELING_MOTION.md`
+records the full completion contract; `PROTOCOL.md` defines implemented inputs.
+
 Desktop/install extension (2026-10-07): the user requested simple client setup,
 versioned platform artifacts, a standalone CLI viewer, exports and old-project
 access. A Tauri shell reuses the existing renderer and communicates only with the
@@ -288,8 +297,8 @@ assemblies/joints, DXF/PDF drawings, remote multi-tenant hosting, arbitrary
 scripts, Python API compatibility, or automatic conversion of old scripts.
 These may be added according to user workflows after the editable core works.
 The current protocol supersedes these historical exclusions for M3 modeling,
-M5 drawings and M6 assemblies. General sketch/assembly constraint solving,
-kinematics, nested assemblies and remote hosting remain outside the implemented
+M5 drawings, M6 assemblies and the modeling/motion extension. General
+sketch/assembly constraint solving, dynamics, nested assemblies and remote hosting remain outside the implemented
 scope.
 
 ## 10. Completion evidence

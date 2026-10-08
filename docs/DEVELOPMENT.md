@@ -77,6 +77,13 @@ materials; quantities count instances. `cad_bom` exports revision-qualified
 JSON/CSV. Drawing `bom: true` adds the table and optional visible-surface balloons.
 See `examples/assembly-bom.drawing.json` for an assembled/exploded sheet.
 
+For moving assemblies, `examples/articulated-arm.create.json` exercises revolute,
+slider and cylindrical mates, coupled coordinates and named poses. The embedded
+Motion panel previews, resets and saves poses. `examples/articulated-arm.robot.json`
+exports URDF with paired SRDF and source meshes; its physical limits are illustrative
+test values. [Robot export](ROBOT_EXPORT.md) documents SI coordinate conversion,
+SDF inertial requirements and consumer-validation limits.
+
 Repeated queries, exports and drawings automatically reuse exact geometry and
 projected drawing views in a bounded workspace cache. Drawing layout, dimensions,
 tolerances and formats can change without repeating projection. Model edits or
@@ -121,7 +128,7 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-Nineteen application tools expose create/read/apply/restore/import, query/export/BOM/drawing,
+Twenty application tools expose create/read/apply/restore/import, query/export/BOM/drawing/robot handoff,
 view/preview/selection resolution, comparison, jobs, model discovery and live
 view context. `cad_open` attaches the bundled MCP App resource; `cad_viewer` is an
 app-only transport tool. This is a local stdio service with no HTTP endpoint.

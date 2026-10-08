@@ -118,6 +118,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_smoke.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/robot_export_test.py $exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Installer and client configuration checks
         run: |
           $exe = Join-Path $PWD 'build/agent-3d-cad'

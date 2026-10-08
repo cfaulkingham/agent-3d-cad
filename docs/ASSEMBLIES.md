@@ -3,7 +3,7 @@
 An `assembly` feature groups independently editable source features into named
 part instances. Each part keeps its own exact solid geometry and placement;
 assembly construction does not fuse touching or overlapping parts. The saved
-document remains the editable source for parts, placements, and rigid mates.
+document remains the editable source for parts, placements, mates and motion.
 See [HANDOFF.md](HANDOFF.md) for executed validation evidence.
 
 ```json
@@ -78,8 +78,57 @@ The offset is measured in the parent datum frame. Rotation is about that frame's
 offset and angle, the two datum frames coincide, including their normal
 directions. To oppose normals, explicitly reverse the child frame normal and
 choose a perpendicular X direction. This deterministic relation fixes all six
-relative degrees of freedom. It is not a contact solver, interference check,
-revolute joint, or motion simulation, and no gap or fit allowance is inferred.
+relative degrees of freedom. No contact, interference, gap or fit is inferred.
+
+## Moving mates and named poses
+
+`revolute`, `slider` and `cylindrical` mates use the same explicit parent and
+child frames. A revolute mate adds `angle_limits_deg: [min,max]`; a slider adds
+`travel_limits_mm: [min,max]`; a cylindrical mate requires both. Coordinates
+are `angle_deg` and/or `travel_mm`, defaulting to zero when independent. Limits
+are inclusive and may be parameterized. A slider's optional `angle_deg` is
+constant alignment; its only degree of freedom is travel.
+
+The full forward transform is:
+
+```text
+parent_world * parent_frame * translate(offset) * rotate_Z(angle_deg)
+             * translate_Z(travel_mm) * inverse(child_frame)
+```
+
+Rigid/revolute mates have zero travel. Rotation and travel use the parent
+datum's +Z. This is deterministic forward kinematics for an acyclic graph,
+without collision, contact, inverse kinematics or dynamics solving.
+
+A linear coupling is `{id,source,target,ratio,offset?}`. Source and target each
+name `{mate_id,coordinate}`. Target = source × ratio + offset. Ratios multiply
+the numeric coordinates in their named units; offsets use target units. The
+target must omit its own coordinate value. One driver per target is allowed;
+drivers can form acyclic chains. All independent and derived values must obey
+their joint limits. Changing a driver outside the feasible range fails instead
+of clamping a coupled member or silently changing the requested pose.
+
+A named pose is `{id,values:[{mate_id,coordinate,value},...]}`. It specifies
+every independent coordinate exactly once; coupled coordinates are derived.
+Every stored pose is validated, including poses that are not currently active.
+`set_pose`, `remove_pose` and `apply_pose` edit these through ordinary semantic
+operations. `set_joint_value` sets one independent degree of freedom; coupling
+set/remove operations edit complete relations. `apply_pose` retains the stored
+scalar expressions. Changes can be batched with mate and parameter edits.
+
+`examples/articulated-arm.create.json` demonstrates all three moving mate kinds,
+a rotation-to-travel coupling, a rotational gear ratio and two named poses.
+It is a kinematic demonstration; it does not assert manufacturable clearances.
+Query summaries add `assembly.motion` with named pose IDs and ordered `dofs`:
+mate ID, coordinate, units, evaluated value, limits, driven flag and coupling ID.
+Committed mesh, STEP, STL and drawing geometry use the evaluated native pose.
+
+The embedded Motion panel previews a joint change or named pose without
+committing. It shows derived coordinates read-only. Save pose writes a normal
+revision; an optional pose name also adds or replaces its preset. Reset returns
+to the saved pose. Draft geometry is visible and can be discussed with the
+agent, but geometry selection and exports require a saved pose. A concurrent
+committed edit retires an older preview rather than overwriting the new HEAD.
 
 ## Editing and inspection
 
@@ -208,8 +257,9 @@ part IDs; removed IDs are pruned and switching documents resets it. The
 Measurements, BOM quantities, STEP/STL and drawings continue to use the complete
 saved assembly. The standalone offline viewer does not have these controls.
 
-The current scope is one-level assemblies, fixed placements, deterministic rigid
-datum mates, source-grouped BOMs, live part visibility and exploded drawings with
-part balloons.
-Kinematics, general constraint solving, nested assemblies, collision checking and
-automatic physical fit are future work.
+The current scope is one-level assemblies, rigid and articulated datum mates,
+linear couplings, named poses, native preview/reset/save controls, source-grouped
+BOMs, live part visibility and exploded drawings with part balloons.
+`cad_robot_export` provides a [URDF/SRDF/SDF handoff](ROBOT_EXPORT.md) with explicit
+physical inputs and preserved native poses. General constraint solving, nested
+assemblies, collision checking and automatic physical fit remain unsupported.

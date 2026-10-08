@@ -323,7 +323,7 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==19,"legacy, drawing, BOM and five live tools remain published");
+  require(definitions.size()==20,"legacy, drawing, BOM, robot export and five live tools remain published");
   for(const auto& tool:definitions) {
     if(tool.at("name")=="cad_open")require(tool.at("_meta").at("ui").at("resourceUri")==viewer_app_uri,"open tool advertises MCP App resource");
     if(tool.at("name")=="cad_show")require(!tool.contains("_meta"),"show updates existing view without opening another app");

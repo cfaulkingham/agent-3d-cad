@@ -135,6 +135,21 @@ evaluation superseded during transfer. While waiting, the last rendered solid
 remains visible and old picks are disabled. Persistent failures stay explicit.
 Polling recovery never automatically resends a Quick Edit request.
 
+## Mechanism motion
+
+Articulated assemblies expose a Motion panel with independent joint controls,
+read-only driven coordinates, named poses, Reset, and Save pose. Editing a
+coordinate asks a native worker for draft geometry. The saved revision stays
+unchanged until Save; an optional name saves the independent values as a preset
+in that same atomic revision. Reset restores the saved geometry. A concurrent
+external revision retires the draft and refreshes to the new HEAD.
+
+Draft context carries `draft: true` and `preview_operations` so the agent can
+identify the exact unsaved pose. Draft picks and exports are disabled. Camera
+and part visibility persist across pose changes; superseded workers cannot
+replace a newer preview or reset. Requests are serialized and lost replies are
+reconciled by polling rather than automatically repeating a save.
+
 ## Disk retention
 
 Each displayed revision is evaluated once into `views/<view_id>/evaluations/`

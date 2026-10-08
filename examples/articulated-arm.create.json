@@ -1,0 +1,41 @@
+{
+  "document_id": "articulated_arm",
+  "model": {
+    "schema_version": 1, "units": "mm", "parameters": {"arm_angle": 30},
+    "features": [
+      {"id": "base", "type": "box", "size": [60, 35, 8]},
+      {"id": "arm", "type": "box", "size": [55, 12, 8]},
+      {"id": "carriage", "type": "box", "size": [14, 16, 12]},
+      {"id": "shaft", "type": "box", "size": [5, 8, 18]},
+      {"id": "mechanism", "type": "assembly",
+       "parts": [{"id": "ground", "input": "base"}, {"id": "lever", "input": "arm"},
+                 {"id": "slide", "input": "carriage"}, {"id": "spindle", "input": "shaft"}],
+       "mates": [
+         {"id": "hinge", "type": "revolute", "parent": "ground", "child": "lever",
+          "angle_deg": {"parameter": "arm_angle"}, "angle_limits_deg": [0, 100],
+          "parent_frame": {"origin": [30, 17.5, 8], "normal": [0, 0, 1], "x_direction": [1, 0, 0]},
+          "child_frame": {"origin": [0, 6, 0], "normal": [0, 0, 1], "x_direction": [1, 0, 0]}},
+         {"id": "rail", "type": "slider", "parent": "lever", "child": "slide", "travel_limits_mm": [0, 10],
+          "parent_frame": {"origin": [30, 6, 8], "normal": [1, 0, 0], "x_direction": [0, 1, 0]},
+          "child_frame": {"origin": [7, 8, 0], "normal": [1, 0, 0], "x_direction": [0, 1, 0]}},
+         {"id": "spindle_joint", "type": "cylindrical", "parent": "ground", "child": "spindle",
+          "angle_limits_deg": [-50, 0], "travel_mm": 6, "travel_limits_mm": [0, 20],
+          "parent_frame": {"origin": [10, 17.5, 8], "normal": [0, 0, 1], "x_direction": [1, 0, 0]},
+          "child_frame": {"origin": [2.5, 4, 0], "normal": [0, 0, 1], "x_direction": [1, 0, 0]}}
+       ],
+       "couplings": [
+         {"id": "feed", "source": {"mate_id": "hinge", "coordinate": "angle_deg"},
+          "target": {"mate_id": "rail", "coordinate": "travel_mm"}, "ratio": 0.1},
+         {"id": "gear", "source": {"mate_id": "hinge", "coordinate": "angle_deg"},
+          "target": {"mate_id": "spindle_joint", "coordinate": "angle_deg"}, "ratio": -0.5}
+       ],
+       "poses": [
+         {"id": "folded", "values": [{"mate_id": "hinge", "coordinate": "angle_deg", "value": 0},
+                                      {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": 0}]},
+         {"id": "extended", "values": [{"mate_id": "hinge", "coordinate": "angle_deg", "value": 90},
+                                        {"mate_id": "spindle_joint", "coordinate": "travel_mm", "value": 15}]}
+       ]}
+    ],
+    "output": "mechanism"
+  }
+}

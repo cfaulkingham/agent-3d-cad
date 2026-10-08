@@ -53,7 +53,7 @@ void validation_tests() {
   error("invalid_model",[&]{validate_model(changed);},"assembly");
   changed=source; changed["features"][1]["mates"].push_back(mate());
   error("invalid_model",[&]{validate_model(changed);},"assembly");
-  changed=source; changed["features"][1]["mates"][0]["type"]="revolute";
+  changed=source; changed["features"][1]["mates"][0]["type"]="spherical";
   error("invalid_model",[&]{validate_model(changed);},"assembly");
   changed=source; changed["features"][1]["parts"][0].erase("placement");
   changed["features"][1]["parts"].push_back({{"id","third"},{"input","block"}});

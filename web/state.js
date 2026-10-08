@@ -7,14 +7,14 @@
     constructor(bridge, changed = () => {}) {
       this.bridge = bridge; this.changed = changed; this.epoch = 0; this.busy = false; this.closed = false;
       this.contextQueue = Promise.resolve(); this.deliveryQueue = Promise.resolve(); this.contextVersion = 0; this.timer = null;
-      this.visibilityVersion = 0; this.visibilitySaved = 0; this.snapshotVersions = new WeakMap();
-      this.value = { view_id: null, status: 'connecting', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], visibility_unsaved: false };
+      this.visibilityVersion = 0; this.visibilitySaved = 0; this.snapshotVersions = new WeakMap(); this.motionBusy = false;
+      this.value = { view_id: null, status: 'connecting', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], visibility_unsaved: false, saving: false, motion_error: null, preview_operations: null };
     }
     update(values) { Object.assign(this.value, values); this.changed(this.value); }
     attach(view_id) {
       if (typeof view_id !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(view_id)) throw Error('Invalid CAD view identity.');
       if (this.value.view_id === view_id) return;
-      this.epoch++; this.clearVisibility(); this.update({ view_id, status: 'loading', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [] });
+      this.epoch++; this.clearVisibility(); this.update({ view_id, status: 'loading', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], saving: false, motion_error: null, preview_operations: null });
     }
     clearVisibility() { this.visibilitySaved = ++this.visibilityVersion; this.value.visibility_unsaved = false; }
     partIds(payload = this.value.payload) { return (payload?.summary?.assembly?.parts || []).map(part => part.id); }
@@ -41,9 +41,33 @@
       return this.setHiddenParts(this.partIds().filter(part => part !== id));
     }
     showAll() { return this.setHiddenParts([]); }
+    async motion(action, fields = {}) {
+      const v = this.value;
+      if (this.motionBusy || !v.payload || (action !== 'motion_reset' && v.status !== 'ready')) throw Error('Wait for the current pose to finish loading.');
+      if (v.saving && v.status !== 'error') throw Error('Wait for the pose save to finish.');
+      const args = { action, view_id: v.view_id, evaluation_id: v.payload.evaluation_id, ...copy(fields) };
+      this.motionBusy = true; this.epoch++; this.contextVersion++;
+      const epoch = this.epoch;
+      this.update({ status: 'loading', selection: null, error: null, motion_error: null, saving: action === 'motion_save' });
+      try {
+        // Never retry a mutation after an uncertain acknowledgment. Sync reads
+        // persisted view state and reconciles a request that did succeed.
+        await this.bridge.tool('cad_viewer', args);
+      } catch (error) {
+        if (epoch === this.epoch && !this.closed) this.update({ motion_error: error.message });
+        throw error;
+      } finally {
+        this.motionBusy = false;
+        if (epoch === this.epoch && !this.closed) await this.pollOnce();
+      }
+    }
+    previewValues(values) { return this.motion('motion_preview', { values }); }
+    previewPose(pose_id) { return this.motion('motion_preview', { pose_id }); }
+    resetMotion() { return this.motion('motion_reset'); }
+    saveMotion(pose_id = '') { return this.motion('motion_save', pose_id ? { pose_id } : {}); }
     invalidate() { this.epoch++; this.contextVersion++; this.update({ status: 'loading', selection: null, error: null }); }
     async pollOnce() {
-      if (this.busy || this.closed || !this.value.view_id) return;
+      if (this.busy || this.motionBusy || this.closed || !this.value.view_id) return;
       this.busy = true;
       const epoch = this.epoch, view = this.value.view_id, visibilityVersion = this.visibilityVersion;
       const pendingVisibility = this.visibilitySaved !== visibilityVersion;
@@ -58,14 +82,15 @@
           if (retarget) this.clearVisibility();
           // Keep the last solid visible while building, but disable interaction with its old references.
           this.update({ status: state.state, selection: null, error: state.state === 'loading' && retryablePoll(state.error?.code) ? null : state.error?.message || null,
-            document_id: state.document_id, revision: state.revision,
-            ...(retarget ? { payload: null, model: null, camera: null, hidden_part_ids: [] } : {}) });
+            document_id: state.document_id, revision: state.revision, saving: !!state.saving,
+            ...(retarget ? { payload: null, model: null, camera: null, hidden_part_ids: [], preview_operations: null, motion_error: null } : {}) });
           return;
         }
         if (state.evaluation_id === this.value.payload?.evaluation_id) {
           const hidden = mayUseSavedVisibility() ? this.partIds().filter(id => (state.hidden_part_ids || []).includes(id)) : this.value.hidden_part_ids;
           if (JSON.stringify(hidden) !== JSON.stringify(this.value.hidden_part_ids)) this.clearVisibility();
-          this.update({ status: 'ready', error: null, hidden_part_ids: hidden, selection: this.visibleSelection(this.value.selection, hidden) }); return;
+          this.update({ status: 'ready', error: null, saving: false, preview_operations: state.preview_operations || null,
+            hidden_part_ids: hidden, selection: this.value.payload.draft ? null : this.visibleSelection(this.value.selection, hidden) }); return;
         }
         const retarget = this.value.payload && this.value.payload.document_id !== state.document_id;
         if (retarget) this.clearVisibility();
@@ -85,7 +110,7 @@
         }
         const payload = JSON.parse(chunks.join(''));
         if (payload.evaluation_id !== state.evaluation_id || payload.document_id !== state.document_id ||
-            payload.revision !== state.revision || payload.draft) throw Error('CAD mesh identity does not match the displayed revision.');
+            payload.revision !== state.revision || !!payload.draft !== !!state.draft) throw Error('CAD mesh identity does not match the displayed revision.');
         // A revision may commit during transfer. Do not briefly expose those outdated picks.
         const confirmed = await this.bridge.tool('cad_viewer', { action: 'sync', view_id: view, known_evaluation_id: state.evaluation_id });
         if (!current()) return;
@@ -100,7 +125,7 @@
           // describes the current display even when the saved pick is stale.
           savedHidden = saved.hidden_part_ids || null;
           if (saved.stale || saved.document_id !== payload.document_id || saved.evaluation_id !== payload.evaluation_id) saved = null;
-          if (saved?.selection) {
+          if (saved?.selection && !payload.draft) {
             const ref = saved.selection, geometry = payload.topology[ref.kind === 'face' ? 'faces' : 'edges']?.find(item => item.id === ref.entity_id);
             if (geometry && ref.document_id === payload.document_id && ref.revision === payload.revision && ref.evaluation_id === payload.evaluation_id && ref.feature_id === payload.feature_id)
               selection = { reference: ref, geometry };
@@ -108,6 +133,7 @@
         }
         const hidden = this.partIds(payload).filter(id => (sameDocument && !mayUseSavedVisibility() ? this.value.hidden_part_ids : (savedHidden || confirmed.hidden_part_ids || [])).includes(id));
         this.update({ status: 'ready', payload, selection: this.visibleSelection(selection, hidden), model: state.model, error: null, context_error: null, hidden_part_ids: hidden,
+          saving: false, preview_operations: confirmed.preview_operations || state.preview_operations || null,
           document_id: payload.document_id, revision: payload.revision,
           camera: sameDocument ? this.value.camera : (saved?.camera || null) });
         // Host context is optional and may acknowledge slowly. It must not hold up HEAD polling.
@@ -131,7 +157,8 @@
       const v = this.value, p = v.payload;
       if (v.status !== 'ready' || !p) throw Error('Wait for the current revision to finish loading.');
       const snapshot = copy({ view_id: v.view_id, document_id: p.document_id, revision: p.revision,
-        evaluation_id: p.evaluation_id, feature_id: p.feature_id, selection: v.selection?.reference || null,
+        evaluation_id: p.evaluation_id, feature_id: p.feature_id, selection: p.draft ? null : v.selection?.reference || null,
+        ...(p.draft ? { draft: true, preview_operations: v.preview_operations } : {}),
         hidden_part_ids: v.hidden_part_ids, ...(v.camera ? { camera: v.camera } : {}), prompt });
       this.snapshotVersions.set(snapshot, this.visibilityVersion); return snapshot;
     }
@@ -151,7 +178,8 @@
     }
     static promptText(snapshot, workspace) {
       const { prompt, ...context } = snapshot;
-      return `${prompt || 'Inspect the selected CAD geometry.'}\n\n${workspace ? `CAD workspace: ${JSON.stringify(workspace)}\n` : ''}CAD view context (millimeters):\n${JSON.stringify(context, null, 2)}\nRead this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.`;
+      const guidance = snapshot.draft ? 'This is an unsaved motion preview at the stated base revision. preview_operations describe the displayed pose; no geometry pick is a committed reference. Read the document and use expected_revision when saving edits.' : 'Read this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.';
+      return `${prompt || 'Inspect the selected CAD geometry.'}\n\n${workspace ? `CAD workspace: ${JSON.stringify(workspace)}\n` : ''}CAD view context (millimeters):\n${JSON.stringify(context, null, 2)}\n${guidance}`;
     }
     async publishContext() {
       const snapshot = this.snapshot(), version = ++this.contextVersion;

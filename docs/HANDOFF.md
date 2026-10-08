@@ -7,6 +7,90 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Modeling flexibility and moving mechanisms — implemented and locally verified, 2026-10-07
+
+This increment adds native symmetric chamfers, exact mixed
+line/arc/Bezier/interpolating-spline profiles with holes, exact curved sweep
+paths, and circular patterns. Curves retain exact geometry; disconnected,
+degenerate and self-intersecting wires fail rather than becoming polygons.
+The two new curved-model examples also pass schema/create/preview/edit/export
+checks. Lofting a profile with inner wires is explicitly unsupported.
+
+Articulated assembly mates now include revolute, slider and cylindrical types,
+explicit limits, linear acyclic coordinate couplings and complete named poses.
+Joint/pose operations use ordinary atomic edits; failed motion leaves HEAD and
+history intact. Native forward kinematics applies parent/child datum frames,
+offset, rotation and axial travel. Assemblies remain one level deep and have
+single-parent acyclic mate graphs, without collision or dynamics solving.
+
+The embedded Motion panel previews exact native geometry, shows driven
+coordinates, applies named poses, resets and saves an ordinary revision (with an
+optional preset name). Draft context includes its preview operations; draft or
+superseded picks are rejected. Pending reset/save/external-revision races preserve
+camera/visibility and prevent late workers replacing newer state. Preview output
+schemas require either the complete HTML/data pair or native mesh/topology.
+
+Native `cad_robot_export` produces paired URDF/SRDF or SDF 1.12, source STL
+meshes, an explicit frame/coordinate/physical-data ledger and a portable hash
+manifest. Exported zero reproduces the saved pose; limits, named poses and
+couplings are converted to SI, including mixed angular/linear couplings.
+Cylindrical joints preserve both coordinates through an explicit carrier link.
+Effort/velocity are required caller data; SDF requires all part/carrier inertials.
+No physical properties, controller, IK chain or disabled collision pairs are
+invented. Exports publish complete directories after native worker success and
+cancellation checking, leaving source/history unchanged. See `ROBOT_EXPORT.md`.
+
+Executed locally on macOS arm64:
+
+- Full **35/35 CTest suites passed (119.08 s)**, including motion transaction
+  cancellation and independently parsed robot XML/FK. Log:
+  `build-app-protocol/modeling-motion-robot-ctest.log`.
+- Final preview-schema changes and expanded motion output checks: **4/4 suites
+  passed (14.02 s)** (`motion`, `app_protocol`, `robot_export`, `live_mcp_flow`).
+  The motion executable passed **269 checks**, including posed STEP readback,
+  binary STL bounds and drawing dimensions. Logs: `modeling-motion-final.log`
+  and `motion-final.log` in that build directory.
+- Final independent robot run passed **928 XML/FK/artifact checks**, including
+  relocated URDF/SRDF/SDF bundles, offset/rotated frames, named/sample poses,
+  inertia/COM serialization, invalid physical inputs and historical async export.
+  `final-robot.log` records the run; polling contributes to the check count.
+- **406 schema checks across 20 tools**, **902 official MCP SDK 2.3.0 checks**,
+  bundled-skill validation and `git diff --check` passed. Logs: `final-schema.log`
+  and `final-sdk.log`; SDK polling counts vary by run.
+- Relocated `bundle-check` passed with empty PATH, including curved STEP exports,
+  motion preview/save/history and native URDF/SRDF/SDF generation. The workflow
+  now runs independent robot validation on every native CI lane; these new
+  sources have not yet been run on those remote platforms.
+
+Observed in a real browser iframe host over the native stdio service: independent
+joint changes update driven values and geometry; Reset restores the saved pose;
+named poses save as revisions 2 and 3; reload retains revision 3, `final_review`
+and hidden-part state. This is local embedded-view evidence, not an installed
+ChatGPT/Claude-host claim. Evidence/workspace:
+`build/motion-demo/final-browser-evidence.json` and `browser-workspace/`.
+
+The installed external CAD Viewer could not start: its package lacks the
+`agent:start` command required by its skill. `gz`, ROS `check_urdf`, MoveIt and
+a dynamics simulator are unavailable, so no external consumer/simulation
+certification is claimed. A reviewable URDF/SRDF bundle and ledger are under
+`build/robot-demo/workspace/exports/`; `build/robot-demo/urdf-result.json` names
+the exact files. The sample effort/velocity values are illustrative test data.
+
+`MODELING_MOTION.md` records the requirement-by-requirement evidence audit. The
+feature increment is complete locally; next work is the separate 1.0 host and
+distribution acceptance below, plus cross-platform CI for this increment. No
+version, release or installed host configuration was changed. On 2026-10-08,
+the owner authorized committing and pushing this increment to `main`.
+
+Completion audit rechecked the current implementation, test assertions and
+actual log files against every requirement in `MODELING_MOTION.md`. The native
+build is up to date; the executable and all twelve files recorded in
+`build/robot-demo/verification.json` match their recorded SHA-256 hashes. All
+four web assets match the observed browser evidence, and all seven artifacts in
+the review robot bundle match its manifest. The final relocated bundle log
+confirms successful completion. No additional implementation gap was found
+within this feature contract; the platform/consumer limitations above remain.
+
 ## 1.0 narrowed to local desktop plugins — 2026-10-07
 
 The owner chose ChatGPT desktop and Claude Desktop for 1.0, with CAD staying

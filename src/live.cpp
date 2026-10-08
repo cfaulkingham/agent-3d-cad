@@ -52,6 +52,13 @@ Json snapshot(const fs::path& root, const std::string& id) {
 bool same_view(const Json& a, const Json& b) {
   return a.at("generation") == b.at("generation") && a.at("document_id") == b.at("document_id");
 }
+bool current_pose(const Json& state) {
+  if (!state.contains("display")) return false;
+  const auto& display=state.at("display");
+  if (!state.contains("motion")) return !display.value("draft",false);
+  const auto& motion=state.at("motion");
+  return !motion.value("saving",false) && display.value("motion_id",Json())==motion.at("id");
+}
 std::set<std::string> display_part_ids(const Json& state) {
   std::set<std::string> ids;
   if (state.contains("display") && state.at("display").at("summary").contains("assembly"))
@@ -77,7 +84,8 @@ void prune_hidden_parts(Json& state) {
 }
 Json sync_status(const Json& state, const Json& revision, const std::string& status) {
   return {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
-    {"revision",revision},{"state",status},{"changed",false}};
+    {"revision",revision},{"state",status},{"changed",false},
+    {"saving",state.contains("motion") && state.at("motion").value("saving",false)}};
 }
 Json ready_status(const Json& state, const Json& record, const Json& arguments) {
   const auto& display = state.at("display");
@@ -85,6 +93,8 @@ Json ready_status(const Json& state, const Json& record, const Json& arguments) 
   result["evaluation_id"] = display.at("evaluation_id");
   result["summary"] = display.at("summary");
   result["feature_id"] = display.at("feature_id");
+  result["draft"] = display.value("draft",false);
+  if (result.at("draft")==true) result["preview_operations"]=state.at("motion").at("operations");
   result["hidden_part_ids"] = state.value("hidden_part_ids",Json::array());
   const bool changed = arguments.value("known_evaluation_id",std::string{}) != display.at("evaluation_id").get<std::string>();
   result["changed"] = changed;
@@ -217,6 +227,8 @@ Json context_result(Store& store, const Json& state) {
   if (state.contains("display")) {
     result["revision"] = state.at("display").at("revision");
     result["evaluation_id"] = state.at("display").at("evaluation_id");
+    result["draft"] = state.at("display").value("draft",false);
+    if (result.at("draft")==true && current_pose(state)) result["preview_operations"]=state.at("motion").at("operations");
   }
   if (!state.at("context").is_null()) result.update(state.at("context"));
   // Visibility describes the current display, even when the saved pick belongs
@@ -224,12 +236,12 @@ Json context_result(Store& store, const Json& state) {
   result["hidden_part_ids"]=state.value("hidden_part_ids",Json::array());
   result["stale"] = (!result.at("revision").is_null() && result.at("revision") != result.at("head_revision")) ||
     (!result.at("evaluation_id").is_null() && (!state.contains("display") ||
-      result.at("evaluation_id") != state.at("display").at("evaluation_id")));
+      result.at("evaluation_id") != state.at("display").at("evaluation_id") || !current_pose(state)));
   return result;
 }
-void check_display(Store& store, const Json& state, const std::string& evaluation) {
+void check_display(Store& store, const Json& state, const std::string& evaluation, bool allow_pending=false) {
   if (state.at("document_id").is_null() || !state.contains("display") ||
-      state.at("display").at("evaluation_id") != evaluation)
+      state.at("display").at("evaluation_id") != evaluation || (!allow_pending && !current_pose(state)))
     throw Error("stale_selection","Evaluation is no longer displayed in this view; synchronize first");
   const auto head = store.read(state.at("document_id").get<std::string>());
   if (head.at("revision") != state.at("display").at("revision"))
@@ -247,14 +259,21 @@ Json synchronize(Store& store, const Json& arguments) {
     const auto document = state.at("document_id").get<std::string>();
     const auto record = store.read(document);
     const auto revision = record.at("revision");
-    if (state.contains("display") && state.at("display").at("revision") == revision) {
+    if (state.contains("motion") && state.at("motion").at("revision")!=revision) {
+      DocumentLock publication(store.root(),document); WorkspaceLock lock(path);
+      auto current=read_state(path);
+      if (!same_view(current,state) || store.read(document).at("revision")!=revision) continue;
+      current.erase("motion");current.erase("pending");current.erase("failure");
+      current["generation"]=nonce();save_state(path,current);continue;
+    }
+    if (current_pose(state) && state.at("display").at("revision") == revision) {
       // Retargeting between the initial snapshot and this result cannot publish
       // an evaluation belonging to the view's former document.
       DocumentLock publication(store.root(),document);
       WorkspaceLock lock(path);
       const auto current = read_state(path);
       if (!same_view(current,state) || store.read(document).at("revision") != revision) continue;
-      if (current.contains("display") && current.at("display").at("revision") == revision)
+      if (current_pose(current) && current.at("display").at("revision") == revision)
         return ready_status(current,record,arguments);
       continue;
     }
@@ -276,8 +295,17 @@ Json synchronize(Store& store, const Json& arguments) {
     try {
       // This call only submits/inspects a process job. Neither the view lock nor
       // a document publication lock is held while entering the job dispatcher.
+      std::string tool="cad_query";Json request={{"document_id",document},{"revision",revision},{"kind","mesh"}};
+      if (state.contains("motion")) {
+        const auto& motion=state.at("motion");const bool saving=motion.value("saving",false);
+        tool=saving?"cad_apply":"cad_preview";
+        request={{"document_id",document},{"expected_revision",revision},
+          {"operations",motion.at(saving?"save_operations":"operations")}};
+        if (saving) request["request_id"]=state.at("pending").at("job_id");
+        else {request["kind"]="mesh";request["feature_id"]=motion.at("assembly_id");}
+      }
       job = dispatch_job(store.root(),{{"action","submit"},{"request_id",state.at("pending").at("job_id")},
-        {"tool","cad_query"},{"arguments",{{"document_id",document},{"revision",revision},{"kind","mesh"}}}});
+        {"tool",tool},{"arguments",request}});
     } catch (const Error& e) {
       auto result = sync_status(state,revision,(e.code == "workspace_busy" || e.code == "queue_full") ? "loading" : "error");
       result["error"] = e.json(); return result;
@@ -292,9 +320,13 @@ Json synchronize(Store& store, const Json& arguments) {
       current["failure"] = {{"revision",revision},{"error",error}}; save_state(path,current);
       auto result = sync_status(current,revision,"error"); result["error"] = error; return result;
     }
+    // A successful save is already committed by Service. The next iteration
+    // observes HEAD, retires the draft, and schedules its committed evaluation.
+    if (state.contains("motion") && state.at("motion").value("saving",false)) continue;
     const auto& evaluation = job.at("result");
-    if (evaluation.at("document_id") != document || evaluation.at("revision") != revision || evaluation.at("draft") != false)
-      throw Error("storage_error","View job result does not match the requested committed revision");
+    const bool draft=state.contains("motion");
+    if (evaluation.at("document_id") != document || evaluation.at("revision") != revision || evaluation.at("draft") != draft)
+      throw Error("storage_error","View job result does not match the requested revision and draft state");
     const auto eid = text_field(evaluation,"evaluation_id"); identifier(eid);
     const auto directory_path = path / "evaluations"; directory(directory_path);
     write_frozen(directory_path / (eid + ".json"),evaluation);
@@ -312,10 +344,12 @@ Json synchronize(Store& store, const Json& arguments) {
       }
       // A display in the same generation is an older revision of this document,
       // so its metadata is superseded and its frozen copy is no longer readable.
-      if (current.contains("display") && current.at("display").at("evaluation_id") != eid && current.at("display").at("revision") != revision)
+      if (current.contains("display") && current.at("display").at("evaluation_id") != eid &&
+          (current.at("display").at("revision") != revision || current.at("display").value("draft",false)))
         remove_quietly(store.root() / "evaluations" / (current.at("display").at("evaluation_id").get<std::string>() + ".json"));
       current["display"] = {{"document_id",document},{"revision",revision},{"evaluation_id",eid},
-        {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")}};
+        {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")},{"draft",draft}};
+      if (draft) current["display"]["motion_id"]=current.at("motion").at("id");
       prune_hidden_parts(current);
       current.erase("pending"); current.erase("failure"); save_state(path,current);
       prune_frozen(path,eid);
@@ -364,6 +398,7 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
     for (const auto* key : {"camera","prompt"}) if (state.at("context").contains(key)) context[key] = state.at("context").at(key);
   }
   if (!arguments.at("selection").is_null()) {
+    if (state.at("display").value("draft",false)) throw Error("stale_selection","Save or reset a motion preview before selecting geometry");
     const auto& pick = arguments.at("selection");
     fields(pick,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
     for (const auto* key : {"document_id","revision","evaluation_id","feature_id"})
@@ -402,6 +437,71 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
     current["context"] = context; save_state(path,current); state = std::move(current);
   }
   return context_result(store,state);
+}
+Json motion_action(Store& store,const Json& arguments) {
+  const auto id=view_id(arguments),action=text_field(arguments,"action"),eid=text_field(arguments,"evaluation_id");identifier(eid);
+  const auto initial=snapshot(store.root(),id);
+  if (initial.at("document_id").is_null()) throw Error("invalid_argument","Open an articulated assembly first");
+  const auto document=initial.at("document_id").get<std::string>();const auto path=view_path(store.root(),id);
+  {
+    DocumentLock publication(store.root(),document);WorkspaceLock lock(path);
+    auto state=read_state(path);
+    if (!same_view(state,initial)) throw Error("stale_selection","The view changed before the motion request");
+    const bool reset_source=action=="motion_reset" && state.contains("motion") && state.at("motion").value("source_evaluation_id",Json())==eid;
+    check_display(store,state,reset_source?text_field(state.at("display"),"evaluation_id"):eid,action=="motion_reset");
+    if (state.contains("motion") && state.at("motion").value("saving",false) && !state.contains("failure"))
+      throw Error("invalid_argument","Wait for the pose save to finish");
+    const auto record=store.read(document);const auto assembly_id=text_field(state.at("display"),"feature_id");
+    const auto& model=record.at("model");const Json* assembly=nullptr;
+    for (const auto& feature:model.at("features")) if (feature.at("id")==assembly_id && feature.at("type")=="assembly") assembly=&feature;
+    if (!assembly) throw Error("invalid_argument","The displayed feature is not an articulated assembly");
+    const auto motion=assembly_motion(*assembly,model.at("parameters"));
+    if (motion.at("dofs").empty()) throw Error("invalid_argument","The displayed assembly has no moving coordinates");
+    if (action=="motion_reset") {
+      state.erase("motion");
+    } else if (action=="motion_save") {
+      if (!state.contains("motion") || !state.at("display").value("draft",false))
+        throw Error("invalid_argument","Preview a pose before saving it");
+      auto operations=state.at("motion").at("operations");
+      if (arguments.contains("pose_id")) {
+        const auto name=text_field(arguments,"pose_id");model_identifier(name);Json values=Json::array();
+        for (const auto& dof:state.at("display").at("summary").at("assembly").at("motion").at("dofs"))
+          if (!dof.at("driven").get<bool>()) values.push_back({{"mate_id",dof.at("mate_id")},{"coordinate",dof.at("coordinate")},{"value",dof.at("value")}});
+        operations.push_back({{"op","set_pose"},{"assembly_id",assembly_id},{"pose",{{"id",name},{"values",values}}}});
+      }
+      apply_operations(model,operations);
+      state["motion"]["saving"]=true;state["motion"]["save_operations"]=std::move(operations);
+    } else {
+      Json operations=Json::array();
+      if (arguments.contains("pose_id")) {
+        const auto pose=text_field(arguments,"pose_id");model_identifier(pose);
+        operations.push_back({{"op","apply_pose"},{"assembly_id",assembly_id},{"pose_id",pose}});
+      } else {
+        const auto& values=arguments.at("values");
+        if (!values.is_array() || values.empty() || values.size()>126) throw Error("invalid_argument","Supply every independent motion coordinate, at most 126 values");
+        std::set<std::string> expected,seen;
+        for (const auto& dof:motion.at("dofs")) if (!dof.at("driven").get<bool>()) expected.insert(text_field(dof,"mate_id")+"."+text_field(dof,"coordinate"));
+        for (const auto& value:values) {
+          fields(value,{"mate_id","coordinate","value"});number(value.at("value"));
+          const auto key=text_field(value,"mate_id")+"."+text_field(value,"coordinate");
+          if (!expected.contains(key) || !seen.insert(key).second) throw Error("invalid_argument","Preview values must name each independent coordinate exactly once");
+          auto operation=value;operation["op"]="set_joint_value";operation["assembly_id"]=assembly_id;operations.push_back(std::move(operation));
+        }
+        if (seen!=expected) throw Error("invalid_argument","Preview must include every independent coordinate");
+      }
+      apply_operations(model,operations); // Validate limits and couplings before changing view state.
+      state["motion"]={{"id","motion_"+sha256(nonce()).substr(0,48)},{"revision",record.at("revision")},
+        {"assembly_id",assembly_id},{"source_evaluation_id",eid},{"operations",std::move(operations)}};
+    }
+    // The generation makes any in-flight transfer/build from the former pose
+    // unable to publish, even when both poses share the same saved revision.
+    state["generation"]=nonce();state.erase("pending");state.erase("failure");
+    if (!state.at("context").is_null()) {
+      state["context"]["selection"]=nullptr;state["context"].erase("resolved_selection");
+    }
+    save_state(path,state);
+  }
+  return synchronize(store,{{"view_id",id}});
 }
 }
 
@@ -464,7 +564,17 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
     fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids"});
     return publish_context(service,store,arguments);
   }
-  throw Error("invalid_argument","Viewer action must be sync, mesh or context");
+  if (action=="motion_preview") {
+    fields(arguments,{"action","view_id","evaluation_id"},{"values","pose_id"});
+    if (arguments.contains("values")==arguments.contains("pose_id")) throw Error("invalid_argument","Preview requires either values or pose_id");
+    return motion_action(store,arguments);
+  }
+  if (action=="motion_reset" || action=="motion_save") {
+    if (action=="motion_save") fields(arguments,{"action","view_id","evaluation_id"},{"pose_id"});
+    else fields(arguments,{"action","view_id","evaluation_id"});
+    return motion_action(store,arguments);
+  }
+  throw Error("invalid_argument","Unknown viewer action");
 }
 
 Json live_tool_definitions() {
@@ -479,12 +589,22 @@ Json live_tool_definitions() {
     {"pan",{{"type","array"},{"items",numeric},{"minItems",2},{"maxItems",2}}}}, {"yaw","pitch","zoom","pan"});
   const Json prompt = {{"type","string"},{"maxLength",8192}};
   const Json hidden_parts={{"type","array"},{"items",id},{"maxItems",64},{"uniqueItems",true}};
+  // Preview context cannot carry arbitrary modeling edits. Keeping its two
+  // actual operation shapes here also avoids dragging the entire feature
+  // vocabulary into every standalone context schema.
+  const Json operations={{"type","array"},{"minItems",1},{"maxItems",126},{"items",{{"oneOf",Json::array({
+    object({{"op",{{"const","set_joint_value"}}},{"assembly_id",id},{"mate_id",id},
+      {"coordinate",{{"enum",{"angle_deg","travel_mm"}}}},{"value",numeric}},{"op","assembly_id","mate_id","coordinate","value"}),
+    object({{"op",{{"const","apply_pose"}}},{"assembly_id",id},{"pose_id",id}},{"op","assembly_id","pose_id"})})}}}};
+  const Json values={{"type","array"},{"minItems",1},{"maxItems",126},{"items",object({{"mate_id",id},
+    {"coordinate",{{"enum",{"angle_deg","travel_mm"}}}},{"value",numeric}},{"mate_id","coordinate","value"})}};
   const Json error = object({{"code",{{"type","string"}}},{"message",{{"type","string"}}},{"details",{{"type","object"}}}}, {"code","message","details"});
   const Json context = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},{"evaluation_id",nullable(id)},
     {"head_revision",nullable(revision)},{"stale",{{"type","boolean"}}},{"selection",nullable(pick)},
     {"resolved_selection",object({{"reference",pick},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},
       {"selector",{{"$ref","#/$defs/selector"}}}}, {"reference","geometry"})},
-    {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"updated_at_unix_ms",{{"type","integer"}}}},
+    {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"updated_at_unix_ms",{{"type","integer"}}},
+    {"draft",{{"type","boolean"}}},{"preview_operations",operations}},
     {"view_id","document_id","revision","evaluation_id","head_revision","stale","selection","hidden_part_ids"});
   const Json identity = object({{"view_id",id},{"document_id",nullable(id)},{"resource_uri",{{"const",viewer_app_uri}}}}, {"view_id","document_id","resource_uri"});
   const Json point = {{"type","array"},{"items",{{"type","number"}}},{"minItems",3},{"maxItems",3}};
@@ -495,7 +615,8 @@ Json live_tool_definitions() {
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
   const Json sync = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},
     {"state",{{"enum",{"empty","loading","ready","error"}}}},{"changed",{{"type","boolean"}}},{"evaluation_id",id},{"feature_id",id},
-    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"hidden_part_ids",hidden_parts}}, {"view_id","document_id","revision","state","changed"});
+    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"hidden_part_ids",hidden_parts},
+    {"draft",{{"type","boolean"}}},{"saving",{{"type","boolean"}}},{"preview_operations",operations}}, {"view_id","document_id","revision","state","changed"});
   const Json offset = {{"type","integer"},{"minimum",0},{"maximum",max_view_bytes}};
   const Json chunk = object({{"data",{{"type","string"},{"maxLength",chunk_bytes}}},{"offset",offset},{"next_offset",nullable(offset)},{"total_bytes",offset}},
     {"data","offset","next_offset","total_bytes"});
@@ -508,10 +629,14 @@ Json live_tool_definitions() {
     object({{"view_id",id},{"document_id",id}},Json::array()),identity,false);
   open["_meta"] = {{"ui",{{"resourceUri",viewer_app_uri}}}};
   open["_meta"]["openai/ui"] = {{"preferredModelDisplayMode","fullscreen"}};
-  auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks, hidden assembly parts and validated selection/camera/prompt context. Geometry is never edited through this tool.",
+  auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks, assembly visibility and validated context. Motion controls preview native poses, reset, or explicitly save through atomic revision-checked edits.",
     {{"type","object"},{"oneOf",Json::array({
       object({{"action",{{"const","sync"}}},{"view_id",id},{"known_evaluation_id",id}},{"action","view_id"}),
       object({{"action",{{"const","mesh"}}},{"view_id",id},{"evaluation_id",id},{"offset",offset}},{"action","view_id","evaluation_id"}),
+      object({{"action",{{"const","motion_preview"}}},{"view_id",id},{"evaluation_id",id},{"values",values}},{"action","view_id","evaluation_id","values"}),
+      object({{"action",{{"const","motion_preview"}}},{"view_id",id},{"evaluation_id",id},{"pose_id",id}},{"action","view_id","evaluation_id","pose_id"}),
+      object({{"action",{{"const","motion_reset"}}},{"view_id",id},{"evaluation_id",id}},{"action","view_id","evaluation_id"}),
+      object({{"action",{{"const","motion_save"}}},{"view_id",id},{"evaluation_id",id},{"pose_id",id}},{"action","view_id","evaluation_id"}),
       object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",nullable(pick)},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts}},
         {"action","view_id","evaluation_id","selection"})})}},
     {{"type","object"},{"oneOf",Json::array({sync,chunk,context})}},false);

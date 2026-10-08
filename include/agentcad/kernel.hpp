@@ -33,7 +33,10 @@ public:
   // Optional bounded exact orthographic projection snapshots are for native regression
   // diagnostics only; adapters never expose them as a tool/document contract.
   Json drawing(const Json& spec, Json* exact_projections = nullptr) const;
-  void export_file(const std::filesystem::path& path, const std::string& format) const;
+  void export_file(const std::filesystem::path& path, const std::string& format, const std::string& feature_id = "") const;
+  // Resolve robot link/joint frames from the same evaluated assembly and datum
+  // convention as the solids. Matrices are row-major with mm translations.
+  Json robot_frames(const Json& model, const std::string& feature_id = "") const;
 private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

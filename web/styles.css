@@ -10,3 +10,4 @@
 #export-format, #export-model { display: block; width: 100%; margin-bottom: 10px; }
 
 #recent-workspaces { width:100%; margin-bottom:10px; background:#18212b; color:inherit; border:1px solid #34404e; padding:8px; border-radius:6px; }
+.motion-panel{border-bottom:1px solid var(--border);padding-bottom:14px;margin-bottom:14px}.motion-panel>select,.motion-panel>input,.motion-panel>.primary{width:100%;margin:5px 0}.motion-panel input[type=text],.motion-panel input[type=number]{min-width:0;background:#11191d;color:inherit;border:1px solid var(--border);border-radius:5px;padding:5px}.motion-panel>label{font-size:11px}.joint-control{margin:12px 0}.joint-control>label{display:flex;align-items:center;gap:8px;justify-content:space-between}.joint-control input[type=number]{width:90px}.joint-control input[type=range]{width:100%;accent-color:var(--accent)}.joint-control>.muted{font-size:11px}

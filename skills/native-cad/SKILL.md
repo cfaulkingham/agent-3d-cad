@@ -16,6 +16,19 @@ Call `cad_open` once: the view follows saved revisions automatically. Use
 `cad_show` with that `view_id` when switching to a different document. View IDs
 are workspace-scoped; choose a distinct explicit ID for independent chats.
 
+Use `chamfer` with `input`, `distance` and `edges` for symmetric bevels. It uses
+the same geometric edge selector as fillet. For curved profiles, use a sketch
+`profile: {type: "wire", segments: [...]}` with ordered `line` (start/end),
+`arc` (start/mid/end), `bezier` (control points) or `spline` (interpolation
+points) segments in workplane-local 2D coordinates. Close boundaries explicitly;
+optional `holes` is an array of disjoint closed segment arrays. Sweep paths can
+use the same wire form in world 3D coordinates; the first tangent must follow
+the sketch normal. Open splines accept paired start/end tangent directions;
+periodic splines close implicitly without repeating their first point. Loft
+sections must have a single boundary. `circular_pattern` repeats an input about
+an `axis` with `count` and signed step `angle_deg`; four copies at 90 degrees
+form a full ring. Patterns keep distinct solids; fuse explicitly when needed.
+
 For an assembly, create source solid features, then an `assembly` feature with
 named `parts`: each part has `id`, earlier solid `input`, and optional `placement`
 with translation/rotation. Reusing an input creates distinct instances that
@@ -37,6 +50,26 @@ evaluated face/edge IDs remain temporary. Source parts are the geometry edit
 targets. See packaged ASSEMBLIES.md for the complete contract. Rigid mates do not
 infer contact, clearance, physical fit or motion.
 
+For mechanisms, use `revolute` with `angle_limits_deg`, `slider` with
+`travel_limits_mm`, or `cylindrical` with both pairs of limits. `angle_deg` and
+`travel_mm` rotate/translate about/along the parent datum's +Z; a slider's
+optional angle is fixed alignment. Limits and coordinates support parameters.
+Assembly `couplings` contain `{id,source,target,ratio,offset?}` where source and
+target name `{mate_id,coordinate}`; target = source × ratio + offset. Targets
+must omit their own coordinate value. One driver per target and no cycles.
+Named `poses: [{id,values:[{mate_id,coordinate,value},...]}]` specify every
+independent coordinate once, with no driven coordinates. All poses must obey
+limits. Use `set_joint_value`, `set_coupling`, `remove_coupling`, `set_pose`,
+`remove_pose`, or `apply_pose`, with `assembly_id`, in atomic edit batches.
+Motion is forward kinematics without collision or dynamics solving.
+
+The embedded Motion panel previews joints and named poses, resets, and explicitly
+saves a revision; an optional name saves its preset too. `cad_context` marks a
+displayed draft with `draft: true` and `preview_operations`. Read that base
+revision before editing. Draft picks cannot resolve committed geometry; draft
+exports require saving first. A concurrent committed edit retires an older
+preview. Part visibility and camera remain presentation state across poses.
+
 The live viewer's Parts controls hide/show individual instances, isolate one,
 or show all. `cad_context.hidden_part_ids` and Quick Edit record that presentation
 state. Hidden parts remain in the editable model, measurements, BOM and exports;
@@ -44,6 +77,19 @@ do not remove them from the design just because they are hidden in the viewport.
 Visibility follows surviving part IDs across revisions and resets on document
 switches. Hiding a selected part clears its pick. Offline views do not have these
 controls.
+
+For robot handoff, use `cad_robot_export(document_id,revision,robot,feature_id?)`.
+`robot.format` is `urdf`, `srdf` or `sdf`; URDF/SRDF always produce a paired set.
+Every moving coordinate needs explicit `joint_properties` with `mate_id`,
+`coordinate`, `effort` (N·m or N), and `velocity` (rad/s or m/s). Never infer these
+from travel limits. SDF requires `inertials` for all `part_<id>` links and each
+cylindrical `carrier_<mate_id>`: `mass_kg`, `center_of_mass_m` in the exported
+link frame, and `inertia_kg_m2` ordered `[ixx,iyy,izz,ixy,ixz,iyz]` about that COM.
+URDF may omit inertials for kinematic review. Exported zero is the saved CAD
+pose; `robot.json` records the offset/scale to native coordinates. Preserve the
+entire export directory so relative STL references resolve. Report missing
+consumer validation; exported meshes and mimic relationships do not establish
+collision-free operation, simulator compatibility or a MoveIt planning setup.
 
 For a bill of materials, use `cad_bom(document_id,revision,feature_id?)`. Rows
 group instances by source input; quantities are derived, including repeated
@@ -73,8 +119,9 @@ Faces can be measured and discussed, but current face picks are not fillet input
 Use `cad_apply` with `expected_revision` from the document read. Batch related
 operations atomically. Failed builds preserve the previous revision. If the user
 wants to review a candidate first, `cad_preview` creates a clearly labeled draft
-without committing; it remains an offline artifact rather than replacing the
-live committed view. Do not silently change a failed radius or omit a feature.
+without committing; its default output is an offline artifact. `kind: mesh`
+returns draft mesh/topology directly. The viewer's Motion panel separately
+coordinates live pose previews. Do not silently change a failed radius or omit a feature.
 Check measurements after the edit and report the saved revision. Leave the live
 viewer open; it retains its camera and clears outdated selections automatically.
 
