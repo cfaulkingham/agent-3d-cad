@@ -158,6 +158,48 @@
     const u=(x-width/2-c.pan[0]*size)/scale,v=(height/2+c.pan[1]*size-y)/scale;
     return {origin:b[0].map((n,i)=>n*u+b[1][i]*v-extent*b[2][i]),direction:b[2],far:extent*2};
   }
+  const STANDARD_VIEWS=Object.freeze({iso:[-.65,.6],top:[0,Math.PI/2],bottom:[0,-Math.PI/2],front:[0,0],back:[Math.PI,0],right:[-Math.PI/2,0],left:[Math.PI/2,0]});
+  const wrapAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
+  const easeOut=t=>1-Math.pow(1-Math.max(0,Math.min(1,t)),3);
+  function viewFromDirection(d) {
+    if(!Array.isArray(d)||d.length!==3||!d.every(Number.isFinite))fail('View direction must be three finite numbers.');
+    const n=Math.hypot(...d);if(!(n>0))fail('View direction must be nonzero.');
+    const c=d.map(v=>v/n),flat=Math.hypot(c[0],c[1]);
+    return {yaw:flat<1e-9?0:Math.atan2(-c[0],-c[1]),pitch:Math.asin(Math.max(-1,Math.min(1,c[2])))};
+  }
+  function lerpCamera(a,b,t) {
+    const k=Math.max(0,Math.min(1,t));
+    return {yaw:a.yaw+wrapAngle(b.yaw-a.yaw)*k,pitch:a.pitch+(b.pitch-a.pitch)*k,zoom:a.zoom*Math.pow(b.zoom/a.zoom,k),pan:[a.pan[0]+(b.pan[0]-a.pan[0])*k,a.pan[1]+(b.pan[1]-a.pan[1])*k]};
+  }
+  // Orthographic: keeping the world point under (x,y) fixed only moves the pan.
+  function zoomAbout(c,factor,x,y,width,height) {
+    const zoom=Math.max(.05,Math.min(50,c.zoom*factor)),k=zoom/c.zoom,size=Math.min(width,height);
+    return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[c.pan[0]*k+(x-width/2)/size*(1-k),c.pan[1]*k+(y-height/2)/size*(1-k)]};
+  }
+  function fitCamera(c,bounds,width,height) {
+    const b=basis(c),corners=[];
+    for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
+    const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
+    const zoom=Math.max(.05,Math.min(50,Math.min(width*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),height*.72/(Math.max(1e-12,high[1]-low[1])*.68*size))));
+    return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[-(low[0]+high[0])/2*.68*zoom,(low[1]+high[1])/2*.68*zoom]};
+  }
+  // Extent of one face or edge in normalized model units, padded so a straight
+  // edge or flat face still frames at a sensible zoom.
+  function entityBounds(model,kind,id) {
+    if(!model||!model.geometries[kind]?.has(id))return null;
+    const min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
+    const add=(values,i)=>{for(let k=0;k<3;k++){const v=values[i+k];if(v<min[k])min[k]=v;if(v>max[k])max[k]=v;}};
+    if(kind==='edge') {
+      const edge=model.edges.find(e=>e.id===id);if(!edge)return null;
+      for(let i=0;i<edge.points.length;i+=3)add(edge.points,i);
+    } else {
+      const owners=model.triangleFaces;
+      for(let t=0;t<model.indices.length/3;t++){if(owners[t]!==id)continue;for(let j=0;j<3;j++)add(model.positions,3*model.indices[3*t+j]);}
+    }
+    if(min[0]===Infinity)return null;
+    for(let k=0;k<3;k++){const pad=Math.max(0,.1-(max[k]-min[k]))/2;min[k]-=pad;max[k]+=pad;}
+    return {min,max};
+  }
   function vertex(positions,i) {return [positions[i*3],positions[i*3+1],positions[i*3+2]];}
   function expandBits(n) {n=(n|(n<<16))&0x030000FF;n=(n|(n<<8))&0x0300F00F;n=(n|(n<<4))&0x030C30C3;return (n|(n<<2))&0x09249249;}
   // A fixed-size Morton tree makes ray queries independent of screen size.
@@ -715,19 +757,11 @@
     setCamera(value){return this._checked(()=>{this.camera=camera(value);this._cameraChanged();});}
     getCamera(){return cloneCamera(this.camera);}
     reset(){return this._checked(()=>{
-      this.camera=cloneCamera(DEFAULT_CAMERA);const bounds=this.model?.bounds;
-      if(bounds){
-        const {width,height}=this._size(),b=basis(this.camera),corners=[];
-        for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
-        const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
-        const zoom=Math.min(width*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),height*.72/(Math.max(1e-12,high[1]-low[1])*.68*size));
-        this.camera.zoom=Math.max(.05,Math.min(50,zoom));
-        this.camera.pan=[-(low[0]+high[0])/2*.68*this.camera.zoom,(low[1]+high[1])/2*.68*this.camera.zoom];
-        this.camera=camera(this.camera);
-      }
+      const bounds=this.model?.bounds,home=cloneCamera(DEFAULT_CAMERA);
+      if(bounds){const {width,height}=this._size();this.camera=camera(fitCamera(home,bounds,width,height));}else this.camera=home;
       this._cameraChanged();
     });}
-    setView(view){return this._checked(()=>{const views={iso:[-.65,.6],top:[0,Math.PI/2],front:[0,0],right:[-Math.PI/2,0]};if(!Object.hasOwn(views,view))fail('Unknown camera view.');[this.camera.yaw,this.camera.pitch]=views[view];this._cameraChanged();});}
+    setView(view){return this._checked(()=>{if(!Object.hasOwn(STANDARD_VIEWS,view))fail('Unknown camera view.');[this.camera.yaw,this.camera.pitch]=STANDARD_VIEWS[view];this._cameraChanged();});}
     setSelection(reference){return this._checked(()=>{
       if(reference!==null&&this.model?.read_only) {
         const kind=reference.kind==='mesh_group'?'face':reference.kind==='curve'?'edge':null;
@@ -757,6 +791,6 @@
     });}
     destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources)this.gl.deleteProgram(this.resources.program);this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
   }
-  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds});
+  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds});
   globalThis.CadRenderer=CadRenderer;
 })();

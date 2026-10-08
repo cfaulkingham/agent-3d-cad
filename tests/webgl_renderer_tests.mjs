@@ -395,6 +395,58 @@ test('captured labels stay in the viewport without covering their numbered pin a
  const renderer=new Renderer(canvas);renderer.load(base);renderer.setCamera({...defaultCamera,pan:[.45,0]});renderer.setAnnotations([{...reviewNote(base),text:'Review the current revision housing near the viewport edge.'}]);flush();renderer.capture();
  const arc=draw.find(row=>row[0]==='arc'),box=draw.find(row=>row[0]==='fillRect');assert.ok(box[1]+box[3]<=arc[1]-arc[3]);assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]==='1'));renderer.destroy();
 });
+// ---- Shapr3D-style navigation math ----
+const M=Renderer.math;
+const near=(a,b,eps=1e-9)=>assert.ok(Math.abs(a-b)<=eps,`${a} != ${b}`);
+const plain=value=>JSON.parse(JSON.stringify(value));
+test('standard views look along the documented axes',()=>{
+  const look=name=>{const [yaw,pitch]=M.STANDARD_VIEWS[name];return plain(M.basis({yaw,pitch,zoom:1,pan:[0,0]})[2]).map(v=>Math.round(v*1e9)/1e9+0);};
+  assert.deepEqual(look('front'),[0,1,0]);assert.deepEqual(look('back'),[0,-1,0]);
+  assert.deepEqual(look('right'),[-1,0,0]);assert.deepEqual(look('left'),[1,0,0]);
+  assert.deepEqual(look('top'),[0,0,-1]);assert.deepEqual(look('bottom'),[0,0,1]);
+  assert.deepEqual(Object.keys(M.STANDARD_VIEWS).sort(),['back','bottom','front','iso','left','right','top']);
+});
+test('viewFromDirection reproduces the axis views and gives a true isometric corner',()=>{
+  for(const [name,d] of [['front',[0,-1,0]],['back',[0,1,0]],['right',[1,0,0]],['left',[-1,0,0]],['top',[0,0,1]],['bottom',[0,0,-1]]]){
+    const v=M.viewFromDirection(d),[yaw,pitch]=M.STANDARD_VIEWS[name];
+    near(Math.cos(v.yaw),Math.cos(yaw));near(Math.sin(v.yaw),Math.sin(yaw));near(v.pitch,pitch);
+  }
+  const corner=M.viewFromDirection([1,-1,1]);near(corner.yaw,-Math.PI/4);near(corner.pitch,Math.asin(1/Math.sqrt(3)));
+  assert.throws(()=>M.viewFromDirection([0,0,0]));
+  assert.throws(()=>M.viewFromDirection([1,NaN,0]));
+});
+test('lerpCamera hits both endpoints, takes the short way round and eases',()=>{
+  const a={yaw:3,pitch:0,zoom:1,pan:[0,0]},b={yaw:-3,pitch:.5,zoom:4,pan:[.2,-.2]};
+  assert.deepEqual(plain(M.lerpCamera(a,b,0)),a);
+  const end=M.lerpCamera(a,b,1);near(Math.cos(end.yaw),Math.cos(b.yaw));near(Math.sin(end.yaw),Math.sin(b.yaw));near(end.zoom,4);near(end.pitch,.5);
+  const mid=M.lerpCamera(a,b,.5);near(Math.abs(Math.cos(mid.yaw)),1,1e-2);near(mid.zoom,2);
+  near(M.easeOut(0),0);near(M.easeOut(1),1);assert.ok(M.easeOut(.5)>.5);
+});
+test('zoomAbout keeps the world point under the cursor fixed',()=>{
+  const c={yaw:.4,pitch:.7,zoom:1.3,pan:[.05,-.08]},p=[.12,-.2,.07],[x,y]=M.project(p,c,640,480);
+  for(const factor of [1.7,.4,3]){const z=M.zoomAbout(c,factor,x,y,640,480),[x2,y2]=M.project(p,z,640,480);near(x2,x,1e-7);near(y2,y,1e-7);near(z.zoom,Math.min(50,Math.max(.05,c.zoom*factor)),1e-12);}
+  assert.equal(M.zoomAbout({...c,zoom:49},10,100,100,640,480).zoom,50);
+});
+test('fitCamera frames bounds inside the viewport and centred',()=>{
+  const c={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]},bounds={min:[-.5,-.5,-.5],max:[.5,.5,.5]},f=M.fitCamera(c,bounds,640,480);
+  const corners=[];for(const x of [-.5,.5])for(const y of [-.5,.5])for(const z of [-.5,.5])corners.push(M.project([x,y,z],f,640,480));
+  for(const [x,y] of corners)assert.ok(x>0&&x<640&&y>0&&y<480);
+  near((Math.min(...corners.map(p=>p[0]))+Math.max(...corners.map(p=>p[0])))/2,320,1e-6);
+  near((Math.min(...corners.map(p=>p[1]))+Math.max(...corners.map(p=>p[1])))/2,240,1e-6);
+});
+test('entityBounds finds a face or edge extent and rejects unknown ids',()=>{
+  const model=prepare(evaluation([[-1,-1,0],[1,-1,0],[-1,1,0]],[[0,1,2]],['face-1'],[{id:'edge-1',points:[[-.8,-.4,0],[.2,-.4,0]]}]));
+  const face=M.entityBounds(model,'face','face-1'),edge=M.entityBounds(model,'edge','edge-1');
+  assert.ok(face.max[0]-face.min[0]>=.1);assert.ok(edge.max[0]-edge.min[0]>.2);
+  assert.equal(M.entityBounds(model,'face','nope'),null);assert.equal(M.entityBounds(model,'edge','nope'),null);
+});
+test('setView accepts the new names and reset still frames the model',()=>{
+  const {canvas}=mockCanvas(),r=new Renderer(canvas);r.load(base);
+  for(const name of ['iso','top','bottom','front','back','right','left'])r.setView(name);
+  near(Math.abs(r.getCamera().yaw),Math.PI/2);
+  assert.throws(()=>r.setView('diagonal'));r.reset();assert.ok(r.getCamera().zoom>0);r.destroy();
+});
+
 if(process.argv[2]) {
   const executable=path.resolve(process.argv[2]),workspace=fs.mkdtempSync(path.join(os.tmpdir(),'cad-webgl-'));
   try {
