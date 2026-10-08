@@ -149,6 +149,11 @@ fn executable() -> Result<PathBuf> {
     Ok(root.join(if cfg!(windows) {"bin/agent-3d-cad.exe"} else {"bin/agent-3d-cad"}))
 }
 fn main() {
+    // Packaging reads the compiled frontend without starting a webview or service.
+    if std::env::args().any(|arg| arg == "--print-viewer-html") {
+        print!("{}", include_str!("../ui/index.html"));
+        return;
+    }
     tauri::Builder::default().plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![initialize, call_tool, open_workspace, recent_workspaces, open_recent, export_model])
         .setup(|app| {

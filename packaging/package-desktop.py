@@ -3,6 +3,7 @@ import hashlib
 import json
 import platform
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,28 @@ for item in manifest['files']:
     file = (native / item['path']).resolve()
     if not file.is_relative_to(native) or sha(file) != item['sha256']:
         raise SystemExit(f"Native integrity failure: {item['path']}")
+
+# A current native bundle must never be paired with a stale standalone UI.
+# Compare the binary's compiled frontend with the same reviewed source snapshot
+# whose hash identifies the embedded MCP resource in native provenance.
+def text(path):
+    return path.read_bytes().decode('utf-8').replace('\r\n', '\n')
+viewer = text(repo / 'web/viewer.html')
+for token in set(re.findall(r'@VIEWER_([A-Z]+)@', viewer)):
+    extension = 'css' if token == 'STYLES' else 'js'
+    viewer = viewer.replace('@VIEWER_' + token + '@', text(repo / f'web/{token.lower()}.{extension}'))
+if hashlib.sha256(viewer.encode('utf-8')).hexdigest() != manifest.get('viewer_app_sha256'):
+    raise SystemExit('Native bundle viewer differs from current sources; rebuild the native service')
+start = viewer.index('<meta http-equiv="Content-Security-Policy"')
+end = viewer.index('>', start) + 1
+desktop_viewer = (viewer[:start] + viewer[end:]).encode('utf-8')
+try:
+    compiled = subprocess.run([str(binary), '--print-viewer-html'], capture_output=True, check=True, timeout=15).stdout
+except (OSError, subprocess.SubprocessError) as error:
+    raise SystemExit('Cannot verify desktop viewer; rebuild the standalone binary') from error
+if compiled != desktop_viewer:
+    raise SystemExit('Desktop and embedded viewers differ; rebuild the standalone binary from current sources')
+desktop_viewer_sha256 = hashlib.sha256(compiled).hexdigest()
 if destination.exists():
     raise SystemExit(f'Output already exists: {destination}')
 shutil.copytree(native, destination, symlinks=True)
@@ -79,7 +102,9 @@ for package in metadata['packages']:
 (notices / 'dependencies.json').write_text(json.dumps(index, indent=2) + '\n', encoding='utf-8')
 shutil.copy2(repo / 'desktop/Cargo.lock', notices / 'Cargo.lock')
 (notices / 'README.txt').write_text('Tauri desktop dependencies\n\nComplete original Cargo registry source archives, including their license and\ncopyright notices, are preserved in sources/. Each .crate is a gzip tar archive.\ndependencies.json records the declared license and archive hash; Cargo.lock pins\nversions and registry checksums. These sources are not needed at runtime.\nThe OS supplies WKWebView (macOS), WebView2 (Windows), or WebKitGTK (Linux).\n', encoding='utf-8')
-manifest['desktop'] = {'framework': 'Tauri', 'version': '2.12.1', 'transport': 'stdio', 'webview': 'system'}
+manifest['desktop'] = {'framework': 'Tauri', 'version': '2.12.1', 'transport': 'stdio', 'webview': 'system',
+                       'viewer_html_sha256': desktop_viewer_sha256,
+                       'viewer_app_sha256': manifest['viewer_app_sha256']}
 manifest['files'] = []
 for file in sorted(destination.rglob('*')):
     if file.is_file() and file.relative_to(destination) != manifest_path:

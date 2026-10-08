@@ -1,0 +1,131 @@
+<h2>Where should the controls live?</h2>
+<p class="subtitle">All three put the canvas edge to edge. They differ in how much stays on screen. Mockups show the inline-in-chat size with an edge picked; expanded gets more room but the same structure. Light theme here is only a placeholder; theme is the next question.</p>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <linearGradient id="bgL" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f1f4f8"/><stop offset="1" stop-color="#d9dfe7"/></linearGradient>
+    <filter id="sh" x="-20%" y="-20%" width="140%" height="160%"><feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#1c2733" flood-opacity="0.18"/></filter>
+    <g id="plate">
+      <polygon points="190,165 190,187 320,227 320,205" fill="#c5ccd5"/>
+      <polygon points="320,205 320,227 430,187 430,165" fill="#b0b9c4"/>
+      <polygon points="190,165 300,128 430,165 320,205" fill="#f6f8fa"/>
+      <ellipse cx="310" cy="167" rx="27" ry="10" fill="#9aa4b0"/>
+      <ellipse cx="310" cy="165" rx="27" ry="10" fill="#6f7a87"/>
+      <g stroke="#8a95a2" stroke-width="1" fill="none" stroke-linejoin="round">
+        <polyline points="190,165 300,128 430,165 320,205 190,165"/>
+        <polyline points="190,165 190,187 320,227 430,187 430,165"/>
+        <line x1="320" y1="205" x2="320" y2="227"/>
+      </g>
+      <line x1="320" y1="205" x2="430" y2="165" stroke="#1a73e8" stroke-width="3.5" stroke-linecap="round"/>
+    </g>
+    <g id="cube">
+      <polygon points="0,-9 16,-17 32,-9 16,-1" fill="#fbfcfd" stroke="#aab3be" stroke-width=".8"/>
+      <polygon points="0,-9 16,-1 16,17 0,9" fill="#d3d9e0" stroke="#aab3be" stroke-width=".8"/>
+      <polygon points="16,-1 32,-9 32,9 16,17" fill="#bfc7d1" stroke="#aab3be" stroke-width=".8"/>
+      <text x="16" y="-8" font-size="5" text-anchor="middle" fill="#5d6874" font-family="system-ui">TOP</text>
+      <text x="8" y="9" font-size="5" text-anchor="middle" fill="#5d6874" font-family="system-ui">FRONT</text>
+    </g>
+    <g id="selbar">
+      <g filter="url(#sh)"><rect x="118" y="296" width="324" height="40" rx="20" fill="#fff"/></g>
+      <text x="136" y="313" font-size="9.5" font-weight="600" fill="#1d2630" font-family="system-ui">Edge</text>
+      <text x="136" y="325" font-size="8.5" fill="#76828f" font-family="system-ui">line · 20.0 mm</text>
+      <line x1="184" y1="304" x2="184" y2="328" stroke="#e1e5ea"/>
+      <rect x="192" y="303" width="50" height="26" rx="13" fill="#eaf2fe"/>
+      <text x="217" y="319" font-size="9.5" font-weight="600" fill="#1a73e8" text-anchor="middle" font-family="system-ui">Fillet</text>
+      <rect x="248" y="303" width="58" height="26" rx="13" fill="#f1f3f6"/>
+      <text x="277" y="319" font-size="9.5" fill="#3b4652" text-anchor="middle" font-family="system-ui">Chamfer</text>
+      <line x1="314" y1="304" x2="314" y2="328" stroke="#e1e5ea"/>
+      <rect x="322" y="303" width="112" height="26" rx="13" fill="#f1f3f6"/>
+      <text x="334" y="319" font-size="9" fill="#8b96a2" font-family="system-ui">Ask the agent…</text>
+    </g>
+  </defs>
+</svg>
+
+<div class="options">
+
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Floating cards + tool dock</h3>
+      <p>Closest to Shapr3D. A Scene card (features, parts) floats at left, a slim dock of inspection tools (Section, Measure, Colors, Notes, Views, Motion) at right, each opening a small popover. Models live behind the project name pill. Panels collapse to the pill when space is tight.</p>
+      <svg viewBox="0 0 560 350" style="width:100%;max-width:640px;border-radius:12px;display:block;margin-top:10px" font-family="system-ui">
+        <rect width="560" height="350" fill="url(#bgL)"/>
+        <use href="#plate"/>
+        <!-- project pill -->
+        <g filter="url(#sh)"><rect x="12" y="12" width="168" height="30" rx="15" fill="#fff"/></g>
+        <text x="28" y="31" font-size="10" font-weight="600" fill="#1d2630">◇ live_plate</text>
+        <text x="96" y="31" font-size="9" fill="#76828f">r3 · ready ▾</text>
+        <!-- export -->
+        <g filter="url(#sh)"><rect x="440" y="12" width="60" height="30" rx="15" fill="#fff"/></g>
+        <text x="470" y="31" font-size="9.5" fill="#1d2630" text-anchor="middle">Export ▾</text>
+        <use href="#cube" transform="translate(500,66) scale(.85)" />
+        <!-- scene card -->
+        <g filter="url(#sh)"><rect x="12" y="52" width="122" height="150" rx="12" fill="#fff"/></g>
+        <text x="24" y="70" font-size="8" letter-spacing="1" fill="#8b96a2" font-weight="600">SCENE</text>
+        <g font-size="9.5" fill="#2a343f">
+          <text x="24" y="90">▸ base plate</text>
+          <text x="24" y="108">▸ mounting hole</text>
+          <text x="24" y="126" fill="#1a73e8" font-weight="600">▸ edge fillet</text>
+          <text x="24" y="144">▸ chamfer</text>
+        </g>
+        <text x="24" y="170" font-size="8" letter-spacing="1" fill="#8b96a2" font-weight="600">PARAMETERS</text>
+        <text x="24" y="188" font-size="9" fill="#2a343f">height  <tspan fill="#76828f">12 mm</tspan></text>
+        <!-- dock -->
+        <g filter="url(#sh)"><rect x="522" y="96" width="28" height="158" rx="14" fill="#fff"/></g>
+        <g fill="#5d6874">
+          <circle cx="536" cy="114" r="5.5" fill="#dbe9fd"/><circle cx="536" cy="140" r="5.5" fill="#e6eaef"/><circle cx="536" cy="166" r="5.5" fill="#e6eaef"/>
+          <circle cx="536" cy="192" r="5.5" fill="#e6eaef"/><circle cx="536" cy="218" r="5.5" fill="#e6eaef"/><circle cx="536" cy="240" r="3" fill="#cfd5dc"/>
+        </g>
+        <use href="#selbar"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Icon rails + drawers</h3>
+      <p>Two thin icon rails (left: Models, Features, Parts; right: the inspection tools). Tapping an icon slides one drawer over the canvas edge; it closes on Escape or on canvas click. Less permanently on screen than A, but nothing is visible until opened.</p>
+      <svg viewBox="0 0 560 350" style="width:100%;max-width:640px;border-radius:12px;display:block;margin-top:10px" font-family="system-ui">
+        <rect width="560" height="350" fill="url(#bgL)"/>
+        <g transform="translate(40,0)"><use href="#plate"/></g>
+        <!-- top -->
+        <g filter="url(#sh)"><rect x="56" y="12" width="168" height="30" rx="15" fill="#fff"/></g>
+        <text x="72" y="31" font-size="10" font-weight="600" fill="#1d2630">◇ live_plate</text>
+        <text x="140" y="31" font-size="9" fill="#76828f">r3 · ready</text>
+        <use href="#cube" transform="translate(512,30) scale(.85)" />
+        <!-- left rail -->
+        <g filter="url(#sh)"><rect x="12" y="52" width="30" height="104" rx="15" fill="#fff"/></g>
+        <circle cx="27" cy="74" r="6" fill="#dbe9fd"/><circle cx="27" cy="102" r="6" fill="#e6eaef"/><circle cx="27" cy="130" r="6" fill="#e6eaef"/>
+        <!-- drawer open -->
+        <g filter="url(#sh)"><rect x="52" y="52" width="134" height="150" rx="12" fill="#fff"/></g>
+        <text x="64" y="70" font-size="8" letter-spacing="1" fill="#8b96a2" font-weight="600">MODELS</text>
+        <g font-size="9.5" fill="#2a343f"><text x="64" y="90" fill="#1a73e8" font-weight="600">live_plate</text><text x="64" y="108">bracket_v2</text><text x="64" y="126">hinge_assembly</text><text x="64" y="144">gear_pair</text></g>
+        <!-- right rail -->
+        <g filter="url(#sh)"><rect x="522" y="96" width="28" height="136" rx="14" fill="#fff"/></g>
+        <g><circle cx="536" cy="114" r="5.5" fill="#e6eaef"/><circle cx="536" cy="140" r="5.5" fill="#e6eaef"/><circle cx="536" cy="166" r="5.5" fill="#e6eaef"/><circle cx="536" cy="192" r="5.5" fill="#e6eaef"/><circle cx="536" cy="218" r="5.5" fill="#e6eaef"/></g>
+        <use href="#selbar"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Canvas only + one panel button</h3>
+      <p>Nothing but the model, a name pill, the ViewCube and the selection bar. A single Panels button opens one tabbed sheet (Models, Features, Parts, Inspect, Export). Maximum model area when inline in chat; everything else is one extra click away.</p>
+      <svg viewBox="0 0 560 350" style="width:100%;max-width:640px;border-radius:12px;display:block;margin-top:10px" font-family="system-ui">
+        <rect width="560" height="350" fill="url(#bgL)"/>
+        <g transform="translate(20,0)"><use href="#plate"/></g>
+        <g filter="url(#sh)"><rect x="12" y="12" width="168" height="30" rx="15" fill="#fff"/></g>
+        <text x="28" y="31" font-size="10" font-weight="600" fill="#1d2630">◇ live_plate</text>
+        <text x="96" y="31" font-size="9" fill="#76828f">r3 · ready</text>
+        <g filter="url(#sh)"><rect x="440" y="12" width="64" height="30" rx="15" fill="#fff"/></g>
+        <text x="472" y="31" font-size="9.5" fill="#1d2630" text-anchor="middle">☰ Panels</text>
+        <use href="#cube" transform="translate(512,70) scale(.85)" />
+        <use href="#selbar"/>
+      </svg>
+    </div>
+  </div>
+
+</div>

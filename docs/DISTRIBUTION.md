@@ -103,7 +103,12 @@ python3 packaging/make-mcpb.py bundle build/packages/agent-3d-cad-0.1.0-preview.
 Run packaging with Python 3.11+ from the same machine/toolchain that built the
 binaries. The desktop helper verifies native provenance, preserves the full
 resolved Rust dependency source archives and their notices, and hashes the
-complete resulting tree. Output directories must be new. Its macOS app is
+complete resulting tree. It also checks the desktop binary's compiled frontend
+against the embedded MCP viewer and current sources, permitting only the
+host-specific CSP difference; stale native or desktop UI builds fail packaging.
+`agent-cad-viewer --print-viewer-html` prints its compiled frontend for this
+developer check without opening a window or workspace. Output directories must
+be new. Its macOS app is
 ad-hoc signed only. The Claude `.mcpb` uses a binary stdio server and persistent
 workspace setting; it includes the core service and embedded viewer. The package
 layout follows the [MCPB 0.3 manifest specification](https://github.com/modelcontextprotocol/mcpb/blob/main/MANIFEST.md).

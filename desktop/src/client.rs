@@ -79,6 +79,22 @@ impl Drop for Client {
 mod tests {
     use super::*;
     #[test]
+    fn desktop_and_mcp_use_the_same_viewer() {
+        let exe = std::env::var_os("CAD_SERVICE_EXE").expect("Set CAD_SERVICE_EXE");
+        let root = std::env::temp_dir().join(format!("cad-viewer-parity-{}", uuid::Uuid::new_v4()));
+        let mut client = Client::start(Path::new(&exe), &root).unwrap();
+        let resource = client.request("resources/read", json!({"uri":"ui://agent-3d-cad/viewer.html"})).unwrap();
+        let html = resource["contents"][0]["text"].as_str().unwrap();
+        // Only the host security policy differs; Tauri supplies its IPC CSP.
+        let start = html.find("<meta http-equiv=\"Content-Security-Policy\"").unwrap();
+        let end = start + html[start..].find('>').unwrap() + 1;
+        let desktop_html = format!("{}{}", &html[..start], &html[end..]);
+        assert_eq!(include_str!("../ui/index.html"), desktop_html,
+                   "Rebuild both the native service and desktop from the same viewer sources");
+        drop(client);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn reopens_projects_and_exports_through_native_service() {
         let exe = std::env::var_os("CAD_SERVICE_EXE").expect("Set CAD_SERVICE_EXE for native integration tests");
         let root = std::env::temp_dir().join(format!("cad-tauri-{}", uuid::Uuid::new_v4()));

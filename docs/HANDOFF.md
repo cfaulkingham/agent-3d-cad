@@ -7,6 +7,157 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Shared standalone/plugin UI and installed update — 2026-10-08
+
+The user required the redesigned UI in both the embedded plugin and standalone
+app. Both already assembled the same `web/` sources, but the standalone release
+binary and generated frontend were still dated October 7. Rebuilt the Tauri
+release and installed a verified native/desktop bundle at
+`~/Applications/Agent3DCAD/desktop-shared-ui-02598ad-20261008`, with
+`~/Applications/Agent CAD.app` pointing to its app. Prior bundles remain intact.
+VERSION remains `0.1.0-preview.1`; these are local working-tree builds, with no
+new tag or public release.
+
+Implemented a guard against mismatched UI packages: the standalone binary's
+developer-only `--print-viewer-html` prints its compiled frontend without
+starting a window/service. Desktop packaging now checks that frontend against
+the reviewed current source and native bundle's embedded-resource hash before
+writing an output bundle. Only removal of the MCP CSP meta tag is permitted;
+Tauri retains its existing IPC-specific security policy. Desktop provenance
+records both frontend and MCP resource hashes. A real native/Rust integration
+test compares the service's `resources/read` HTML with the compiled standalone
+frontend; CTest `desktop_assets` rejects stale native assets, stale desktop
+assets and unavailable frontend diagnostics before bundle writes.
+
+Installation and verification:
+
+- Warning-free native build and offline locked Rust release build succeeded.
+  **3/3 Rust integration tests passed** in 2.18 s, including UI parity,
+  saved-project reopen and all desktop export formats.
+- **7/7 existing UI CTest suites passed** in 5.15 s. The final combined run
+  again passed those seven, but the new packaging fixture initially failed
+  because macOS resolves `/var` to `/private/var`. Canonicalizing the fixture's
+  temporary root fixed the path assertion; unchanged packaging checks then
+  passed **CTest desktop_assets 1/1**, with all four acceptance/rejection cases.
+  `git diff --check` passed. No geometry assertion was changed.
+- Complete provenance verification passed for **549 desktop-bundle files**
+  and **307 installed plugin files**. Installed native executables are identical
+  (SHA-256 `71a9c0dce111f472fa54f603a52521134f317adc0e4811c018c72ca554057177`).
+  Both independently returned 28 tools and identical MCP HTML (SHA-256
+  `0d22ccf8034f22011c6c0dc2f8fb97b862311bd80da9053092b60eecf67dfdf3`). The actual
+  installed desktop binary returned the same HTML with only its host CSP
+  difference (SHA-256
+  `bd36960dd3e20fb7e0197d284a113080ce9144b1b066a70afb8219e2772ff29d`). Its executable
+  hash is `589918875133e6bf462cd097ef2f61b24fe9596c9be54a71c692d194ac166a72`.
+  The installed app passed `codesign --verify --deep --strict` for its ad-hoc
+  signature; this is not publisher signing/notarization.
+- Removed only the disabled legacy `[mcp_servers.agent-3d-cad]` table, after
+  preserving the exact config with mode 0600. Parsed comparison confirmed all
+  unrelated settings unchanged. A fresh desktop runtime subsequently discovered
+  **28 Agent CAD tools with `pluginId=agent-cad@agent-cad-local`**, resolving the
+  name-masking diagnosis below. The running chat's already-loaded tool catalog
+  still needs reconnection/restart; no embedded-host rendering claim is made.
+- Actual standalone GUI displayed the redesigned floating project pill, Scene
+  card, tool dock, cube and selection bar, connected to the bundled service,
+  opened Documents/Agent3DCAD, and followed a committed edit. Installation itself
+  preserved all **27 existing model files** across both user project folders.
+
+While checking the live standalone UI, the user requested a selected edge round
+and explicitly chose **2 mm**. Applied the packaged native-cad skill through the
+installed native CLI because the current chat lacked the refreshed MCP catalog.
+Read `viewer_loop_plate` revision 2, resolved its actual evaluation-qualified
+`edge-4` to a unique 39 mm line, previewed a 2 mm selective fillet, and committed
+`side_round` with `expected_revision:2`. **Revision 3** is valid, one solid,
+60 × 40 × 12 mm within tolerance, 10 faces/22 edges, volume
+28,743.33745933181 mm³. The actual open GUI refreshed to revision 3 and
+`cad_context` confirmed the obsolete selection cleared. Of the original model
+files, only this document's `HEAD.json` changed; a new revision was added and
+prior source history remains intact.
+
+Evidence and configuration backup are in `build/shared-ui-20261008/`; build/test
+logs are `build-app-protocol/shared-ui-*`. Remaining scope: reconnect the current
+chat and verify embedded rendering in the real host. This increment was macOS
+arm64 only; Windows/Linux and the broader 1.0 host/signing gates remain open.
+
+## Latest local desktop plugin installation — 2026-10-08
+
+The user requested the latest Agent CAD plugin in this desktop app. GitHub
+`main` and the checkout both resolved to
+`02598add39edda596f3f227785e4ab7d4fe1a9d9`, including the viewer-shell redesign.
+Rebuilt `build-app-protocol` with the existing `.deps/hlr-streaming-sdk`
+(OCCT 8.0.1 / FreeType 2.14.3), installed a fresh portable core, and packaged
+the native Agent Plugins bundle. VERSION remains `0.1.0-preview.1`; this is
+a local build of current source, with no new release or tag.
+
+Installed and enabled `agent-cad@agent-cad-local` through the Codex plugin CLI.
+Its preserved source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-02598ad-20261008`; the CLI returned
+`~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1` as its installed
+copy. Both trees passed their complete **307-file** provenance inventory.
+Installed executable SHA-256:
+`71a9c0dce111f472fa54f603a52521134f317adc0e4811c018c72ca554057177`.
+
+The local installation adds an explicit `--workspace` override for the existing
+`~/Documents/Agent3DCAD` folder and updates that local package's `mcp.json`
+provenance hash. The ordinary generated archive retains the product's default
+workspace configuration. The prior standalone MCP entry is disabled, with its
+command/arguments retained for rollback. The pre-install configuration is backed
+up with mode 0600; parsed comparison verified that unrelated settings were
+preserved. Previous native installations and both project folders remain intact.
+
+Executed macOS arm64 checks:
+
+- Warning-free `cmake --build build-app-protocol --parallel 3` succeeded.
+- **13/13 CTest suites passed in 15.72 s**: installer, embedded_assets, notices,
+  cli_smoke, app_protocol, live, live_mcp_flow, webgl_renderer, viewer_shell,
+  live_ui, export_ui, artifact_retarget_ui, and performance_geometry. The last
+  suite passes with this selected streaming SDK; this does not diagnose the
+  other SDK's failure recorded in the viewer-shell section below.
+- Unmodified `tests/plugin_smoke.py` passed on the ordinary generated package:
+  complete provenance, empty-PATH native MCP/viewer discovery, create/edit,
+  process restart/reopen/history, STEP/STL/PDF/SVG and four DXF outputs.
+- The actual installed copy, using its actual configured workspace and empty
+  PATH with loader overrides cleared, passed initialize, 28-tool discovery,
+  embedded resource read, `cad_list`, and `cad_open` for a library view.
+  All five existing projects were listed at their prior revisions. The viewer
+  contains the new shell, with SHA-256
+  `0d22ccf8034f22011c6c0dc2f8fb97b862311bd80da9053092b60eecf67dfdf3`.
+  All **27 existing project files** across Documents/Agent3DCAD and
+  Documents/Agent CAD remained byte-identical; verification created only a new
+  live library view in the configured workspace.
+- The desktop's own bundled runtime (`0.162.0-alpha.2`, app
+  `26.1002.52244`) independently reports the plugin installed/enabled, recognizes
+  `agent-3d-cad`, and loads `agent-cad:native-cad` and `agent-cad:setup`.
+
+Evidence, install/config backup, runtime reports and exact commands are in
+`build/chatgpt-install-20261008-02598ad/`. The installer verification uses the
+cache path returned by the CLI; it is versioned here rather than the `local`
+cache path described in public documentation. A first desktop-runtime check
+was blocked by the filesystem sandbox, then succeeded with installation-scoped
+escalation. No auto-review rejection occurred.
+
+Next: restart this desktop app and start a fresh chat, then run the plugin setup
+to open saved projects. The running chat retained its old MCP tool catalog.
+Computer Use denied access to `com.openai.codex`; neither its safety restriction
+nor the host UI was bypassed. CLI/package/runtime verification above does not
+establish in-chat rendering or the complete 1.0 host journey. Existing
+ChatGPT/Claude release gates in RELEASE_1_0.md remain open.
+
+Follow-up UI/connection diagnosis (2026-10-08): the desktop restarted at
+22:48 UTC, but this chat still has no Agent CAD tools. Current desktop logs
+repeatedly report `mcp_extension_server_tools_empty` for `agent-3d-cad` with
+`pluginId=null`. A fresh desktop-runtime `config/read` and
+`mcpServerStatus/list` independently show the disabled October-7 standalone
+entry, the enabled local plugin, and an Agent CAD inventory with zero tools and
+no plugin ID. The installed plugin executable still matches the SHA-256 above.
+No Agent CAD service process was running during the check. This establishes a
+host connection/configuration problem; restarting alone did not resolve it.
+The same-name legacy entry may mask the plugin connection, but removal and
+successful in-host discovery/rendering have not been tested. No host settings
+or model files were changed during this diagnosis. Next: resolve the legacy
+entry/plugin precedence and verify actual `cad_list`, `cad_open`, and the new
+shell in the desktop host before claiming the installation journey complete.
+
 ## Viewer shell redesign — Shapr3D-style layout, selection and navigation — 2026-10-08
 
 Sub-project A of three (spec `docs/superpowers/specs/2026-10-08-viewer-shell-design.md`,
