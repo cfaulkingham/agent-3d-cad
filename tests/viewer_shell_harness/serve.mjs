@@ -1,6 +1,6 @@
 // Dev-only harness. Serves the assembled viewer inside a minimal MCP Apps host
 // page, backed by the real native stdio service. Nothing here ships or is a test.
-//   node tests/viewer_shell_harness/serve.mjs build-package/agent-3d-cad [port]
+//   node tests/viewer_shell_harness/serve.mjs build/agent-3d-cad [port]
 // Then open the printed URL. Query: ?doc=live_plate&theme=auto|light|dark&width=900&height=620
 // Read-only artifact mode: ?review_path=<review.json>&review_sha=<sha256> (create one with cad_artifact via POST /rpc).
 import http from 'node:http';
@@ -12,7 +12,7 @@ import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const exe = resolve(process.argv[2] ?? 'build-package/agent-3d-cad');
+const exe = resolve(process.argv[2] ?? 'build/agent-3d-cad');
 const requestedPort = Number(process.argv[3] ?? 0);
 const workspace = mkdtempSync(join(tmpdir(), 'cad-shell-harness-'));
 const seeds = ['live-plate', 'bracket', 'assembly', 'articulated-arm', 'nested-assembly'];

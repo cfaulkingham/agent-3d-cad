@@ -86,6 +86,7 @@ in [advanced client setup](docs/GETTING_STARTED.md) and
 
 ## More
 
+- [Repository layout and documentation index](docs/README.md)
 - [Client setup and troubleshooting](docs/GETTING_STARTED.md)
 - [Viewer and saved projects](docs/LIVE_VIEWER.md)
 - [External CAD, mesh, drawing and robot review](docs/ARTIFACT_REVIEW.md)

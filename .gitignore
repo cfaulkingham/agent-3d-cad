@@ -1,14 +1,29 @@
+# Local builds, dependency SDKs, evidence and CAD workspaces.
 /build*/
 /.deps/
+/.local/
 /workspace/
 /bundle/
 /CMakeUserPresets.json
+
+# Accidental in-source CMake output.
+/CMakeCache.txt
+/CMakeFiles/
+/cmake_install.cmake
+/compile_commands.json
+/Testing/
+/_deps/
+
+# Generated desktop assets and temporary design sessions.
+/desktop/target/
+/desktop/ui/
+/desktop/gen/
+/.superpowers/
+/.claude/worktrees/
+
+# Downloaded/generated archives and platform/language caches.
 *.tar.gz
 *.log
 .DS_Store
 __pycache__/
 *.pyc
-/desktop/target/
-/desktop/ui/
-/desktop/gen/
-/.claude/worktrees/

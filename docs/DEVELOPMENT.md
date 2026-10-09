@@ -41,9 +41,9 @@ Development needs CMake 3.24+ and a C++20 compiler. Build checksum-pinned native
 dependencies (OCCT 8.0.1 and FreeType 2.14.3):
 
 ```sh
-cmake -S cmake/dependencies -B build-deps \
+cmake -S cmake/dependencies -B build/dependencies \
   -DAGENTCAD_DEPS_PREFIX="$PWD/.deps/occt" -DAGENTCAD_JOBS=4
-cmake --build build-deps --parallel 4
+cmake --build build/dependencies --parallel 4
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DOpenCASCADE_DIR="$PWD/.deps/occt/lib/cmake/opencascade" \
   -DCMAKE_PREFIX_PATH="$PWD/.deps/occt"
@@ -62,6 +62,25 @@ retains the previous behavior. The patch and modified source accompany bundles.
 CMake fetches checksum-pinned nlohmann JSON 3.12.0 when not installed. Offline
 build overrides and bundle instructions are in [DISTRIBUTION.md](DISTRIBUTION.md).
 Local convenience presets and SDKs are ignored and are not repository requirements.
+
+Use `build/` for the current native build. If an existing patched SDK is already
+installed at a different prefix, select both its OCCT config and library prefix:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DOpenCASCADE_DIR="$PWD/.deps/hlr-streaming-sdk/lib/cmake/opencascade" \
+  -DCMAKE_PREFIX_PATH="$PWD/.deps/hlr-streaming-sdk" \
+  -DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON="$PWD/.deps/json-3.12.0"
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure
+```
+
+This example reuses local dependency installs; a fresh checkout uses the recipe
+above. Keep packages and dependency-build output under `build/packages/` and
+`build/dependencies/`. Store CAD workspaces under `.local/workspaces/` and
+evidence worth keeping under `.local/evidence/`, outside disposable build trees.
+See the [repository guide](README.md) for cleanup and the archived local evidence
+mapping. User projects still use their independently configured Documents folder.
 
 ## Try a complete workflow
 
@@ -90,11 +109,11 @@ Use a fresh workspace:
 
 ```sh
 build/agent-3d-cad --version
-build/agent-3d-cad call cad_create --workspace ./workspace --input examples/plate.create.json
-build/agent-3d-cad call cad_apply --workspace ./workspace --input examples/plate.edit.json
-build/agent-3d-cad call cad_view --workspace ./workspace --input examples/plate.query.json
-build/agent-3d-cad call cad_query --workspace ./workspace --input examples/plate.query.json
-build/agent-3d-cad call cad_export --workspace ./workspace --input examples/plate.export.json
+build/agent-3d-cad call cad_create --workspace .local/workspaces/plate --input examples/plate.create.json
+build/agent-3d-cad call cad_apply --workspace .local/workspaces/plate --input examples/plate.edit.json
+build/agent-3d-cad call cad_view --workspace .local/workspaces/plate --input examples/plate.query.json
+build/agent-3d-cad call cad_query --workspace .local/workspaces/plate --input examples/plate.query.json
+build/agent-3d-cad call cad_export --workspace .local/workspaces/plate --input examples/plate.export.json
 ```
 
 Open the returned HTML path in a browser. Orbit/zoom, pick a face or edge, and

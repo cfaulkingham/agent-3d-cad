@@ -262,8 +262,8 @@ bounded but large; a workspace that renders many large models can keep up to
 ## Verification
 
 ```sh
-cmake --build build-package --parallel 4
-ctest --test-dir build-package --output-on-failure
+cmake --build build --parallel 4
+ctest --test-dir build --output-on-failure
 ```
 
 When Node is available during development, CTest includes the bridge/state,

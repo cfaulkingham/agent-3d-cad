@@ -1,11 +1,65 @@
 # Implementation handoff
 
-Updated: 2026-10-08. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-09. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Repository and local artifact cleanup — 2026-10-09
+
+Removed all 13 historical root `build*` directories after preserving their
+saved data, then configured and compiled one fresh native `build/`. Removed
+superseded `.deps/hlr-sdk`, `.deps/portable-sdk`, `.deps/occt` and unpacked
+`.deps/freetype-2.14.3`. Retained the exact patched `.deps/hlr-streaming-sdk`,
+local JSON 3.12.0 source, pinned source archives and MCP SDK developer environment.
+The ignored local CMake preset now selects that SDK and its FreeType prefix;
+the previous preset is archived. Installed Applications/plugin copies and user
+Documents workspaces were outside the cleanup scope.
+
+Preserved **91 complete local workspaces with 221 document histories**, along
+with historical logs, reports, screenshots, bundle provenance and installation/
+configuration backups. Workspace contents were moved to `.local/workspaces/`
+and evidence to `.local/evidence/`, each retaining its original relative path.
+All **13,160 preserved files** passed SHA-256/size verification during the move
+and again after deletion. The inventory, mappings and hashes are in
+`.local/cleanup-20261009.json`; the procedure is archived at
+`.local/evidence/cleanup-20261009.py`. `.local/` is owner-only (0700) and ignored
+by Git. No model document, revision or saved workspace file was rewritten.
+Historical absolute paths in derived files may require regeneration when
+reopening a relocated workspace.
+
+Removed the seven tracked temporary `.superpowers/brainstorm/` files; retained
+its three HTML mockups in the local evidence archive. Added ignore rules for
+temporary design sessions, `.local/` and accidental in-source CMake output.
+Removed generated desktop UI/schema output and platform/Python caches. The
+maintained [repository/documentation guide](README.md) maps source ownership,
+local output and feature guides. Current development instructions and the viewer
+harness use `build/`; historical paths in older handoff entries/plans continue
+to identify the original runs and now map through the local archive.
+
+Validation (macOS arm64 only):
+
+- `cmake --preset local` configured exact OCCT 8.0.1 and FreeType 2.14.3.
+  `cmake --build build --parallel 4` succeeded. The clean build emitted five
+  existing `std::filesystem::u8path` deprecation warnings in `slicer_fixture.cpp`;
+  no native source or geometry assertions were changed.
+- `ctest --test-dir build --output-on-failure --parallel 4`: **56/56 passed in
+  70.82 s**, including performance geometry and desktop asset packaging checks.
+- The actual viewer harness started with no executable argument, using its new
+  `build/agent-3d-cad` default; its temporary service/workspace were cleaned up.
+  Loopback startup required sandbox escalation. This is a developer-harness
+  check, not new browser/desktop-host acceptance.
+- **99 local Markdown links** in the updated navigation/development/viewer docs
+  resolve; `node --check`, ignore-rule probes and `git diff --check` passed.
+  Build/CTest logs are in `.local/evidence/cleanup-validation/`.
+- Checkout allocation fell from **13.49 GiB to approximately 0.84 GiB**, including
+  the rebuilt native tree, retained dependencies and preserved local data.
+
+Next: use `build/` for native work and keep lasting workspaces/evidence outside
+it. Product next tasks and the outstanding 1.0 host/signing gates remain those
+recorded below and in RELEASE_1_0.md; this cleanup adds no platform certification.
 
 ## Shared standalone/plugin UI and installed update — 2026-10-08
 
