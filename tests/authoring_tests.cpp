@@ -56,6 +56,12 @@ void svg(const fs::path& root){
   Service paint_service(root/"paint_workspace");const auto paint_path=root/"paint.svg";write(paint_path,normalized_stroke);
   const auto paint_capture=paint_service.call("cad_capture_sketch",{{"format","svg"},{"path",path_to_utf8(paint_path)},{"feature_id","paint"},{"workplane",plane()}});
   require(paint_capture.at("feature").at("profile").at("content")==normalized_stroke&&paint_capture.at("source_sha256")==sha256(normalized_stroke),"Paint interpretation never normalizes captured bytes or identity");
+  const std::string declared="<?xml version='1.0' encoding='uTf-8' standalone='yes'?><svg xmlns='http://www.w3.org/2000/svg'><!--<!DOCTYPE inside a comment>--><title>Plain text</title><desc><![CDATA[plain description]]></desc><rect width='2' height='3'/></svg>";
+  near(BuiltModel(profile_model(imported("svg",declared))).summary().at("volume_mm3"),18);
+  for(const std::string source:{"<?xml-stylesheet type='text/css' href='https://example.invalid/hidden.css'?><svg><rect width='2' height='3'/></svg>","<?custom action='hide'?><svg><rect width='2' height='3'/></svg>","<!FOO><svg><rect width='2' height='3'/></svg>","<svg xmlns='https://example.invalid/other'><rect width='2' height='3'/></svg>","<svg xmlns=''><rect width='2' height='3'/></svg>","<?xml version='1.0' encoding='UTF-16'?><svg><rect width='2' height='3'/></svg>","<?xml version='1.0' custom='ignored'?><svg><rect width='2' height='3'/></svg>","<?xml version='1.0'?><?xml version='1.0'?><svg><rect width='2' height='3'/></svg>","<svg>unexpected text<rect width='2' height='3'/></svg>"})
+    fails("unsupported_format",[&]{BuiltModel rejected(profile_model(imported("svg",source)));});
+  write(paint_path,declared);const auto declared_capture=paint_service.call("cad_capture_sketch",{{"format","svg"},{"path",path_to_utf8(paint_path)},{"feature_id","declaration"},{"workplane",plane()}});
+  require(declared_capture.at("feature").at("profile").at("content")==declared&&declared_capture.at("source_sha256")==sha256(declared),"Standard XML declaration and namespace retain immutable raw bytes");
   fails("invalid_shape",[&]{BuiltModel rejected(profile_model(imported("svg","<svg><path d='M0 0 L10 0 L0 10'/></svg>")));});
   fails("invalid_shape",[&]{BuiltModel rejected(profile_model(imported("svg","<svg><path d='M0 0 L10 10 L0 10 L10 0 Z'/></svg>")));});
 }

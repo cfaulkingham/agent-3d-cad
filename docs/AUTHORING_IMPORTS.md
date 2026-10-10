@@ -111,6 +111,11 @@ stroked geometry, paint servers, clipping/masks, document types/entities,
 nested viewports and open paths. Paint keywords/functions are checked after
 trimming whitespace and folding ASCII case; escaped CSS paint tokens, variables
 and contextual paints are rejected. Checks never rewrite captured source bytes.
+Standard XML 1.0 declarations support UTF-8 encoding and standalone yes/no;
+other processing instructions, declarations and external stylesheets fail.
+When the root declares a namespace, it must be `http://www.w3.org/2000/svg`.
+Omitted namespaces remain accepted. Comments and title/desc text are retained
+in the captured source; other non-whitespace XML text is unsupported.
 The parser never fetches URLs or executes source content. Convert stroked
 artwork/text to supported filled contours in
 the source application, or use native font text authoring.
