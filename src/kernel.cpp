@@ -2798,10 +2798,7 @@ Json BuiltModel::summary(const std::string& feature_id) const {
         }
         throw Error("kernel_failure","Surface support nesting exceeds the integration bound");
       };
-      bool rational=false;
-      for(TopExp_Explorer face(shape,TopAbs_FACE);face.More();face.Next())rational|=rational_support(BRep_Tool::Surface(TopoDS::Face(face.Current())));
-      if(!rational)BRepGProp::VolumeProperties(shape,volume,1e-9);
-      else {
+      {
         Bnd_Box bounds;BRepBndLib::AddOptimal(shape,bounds,false,false);
         const auto lo=bounds.CornerMin(),hi=bounds.CornerMax();
         const gp_Pnt reference((lo.X()+hi.X())*.5,(lo.Y()+hi.Y())*.5,(lo.Z()+hi.Z())*.5);
@@ -2815,7 +2812,15 @@ Json BuiltModel::summary(const std::string& feature_id) const {
             combined.Add(properties);
           } else {
             BRepGProp_Vinert properties;properties.SetLocation(reference);
-            const double error=support.NaturalRestriction()?properties.Perform(support,1e-9):properties.Perform(support,domain,1e-9);
+            // Adaptive convergence measures mass, not every first moment.
+            // Plane faces bounded only by lines have polynomial integrands;
+            // fixed Gauss integrates their mass and moments exactly.
+            bool polynomial=BRepAdaptor_Surface(face).GetType()==GeomAbs_Plane;
+            for(TopExp_Explorer edge(face,TopAbs_EDGE);edge.More()&&polynomial;edge.Next())
+              polynomial=BRepAdaptor_Curve(TopoDS::Edge(edge.Current())).GetType()==GeomAbs_Line;
+            double error=0;
+            if(polynomial){if(support.NaturalRestriction())properties.Perform(support);else properties.Perform(support,domain);}
+            else error=support.NaturalRestriction()?properties.Perform(support,1e-9):properties.Perform(support,domain,1e-9);
             if(!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Surface volume integration failed");
             combined.Add(properties);
           }
