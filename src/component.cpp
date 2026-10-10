@@ -101,6 +101,7 @@ Materialized materialize(const Json& component) {
       if(copy["faces"].is_array())for(auto& selector:copy["faces"])rewrite_face(selector);
       else rewrite_face(copy["faces"]);
     }
+    if(copy.at("type")=="sheet_metal")for(auto& flange:copy["flanges"])flange["edge"]["feature_id"]=result.feature_map.at(text_field(flange.at("edge"),"feature_id"));
     if(copy.at("type")=="assembly") {
       for(auto& part:copy["parts"])part["input"]=result.feature_map.at(text_field(part,"input"));
       if(copy.contains("bom"))for(auto& item:copy["bom"])item["input"]=result.feature_map.at(text_field(item,"input"));

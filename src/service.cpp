@@ -35,6 +35,7 @@ Json summary_schema() {
     {"center_of_mass_mm",point},{"bounds_mm",object({{"min",point},{"max",point}},{"min","max"})},
     {"solid_count",integer},{"face_count",integer},{"edge_count",integer},
     {"assembly",{{"$ref","#/$defs/assembly_summary"}}},
+    {"sheet_metal",{{"$ref","#/$defs/sheet_metal_report"}}},
     {"components",array({{"$ref","#/$defs/component_status"}},64)}},
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
 }

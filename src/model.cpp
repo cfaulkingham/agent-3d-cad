@@ -137,6 +137,13 @@ Json model_definitions() {
     {"tolerance",{{"type","number"},{"minimum",1e-9},{"maximum",1e-3}}},{"closed",{{"type","boolean"}}}}, {"id","type","inputs","tolerance","closed"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_solid"}}},{"input",id},{"reverse",{{"type","boolean"}}}}, {"id","type","input"}));
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
+  const Json sheet_flange=object({{"id",id},{"edge",{{"$ref","#/$defs/selector"}}},{"inside_radius",scalar_ref},
+    {"angle_deg",scalar_ref},{"length",scalar_ref},{"start_gap",scalar_ref},{"end_gap",scalar_ref}},
+    {"id","edge","inside_radius","angle_deg","length"});
+  features.push_back(object({{"id",id},{"type",{{"const","sheet_metal"}}},{"input",id},{"thickness",scalar_ref},
+    {"k_factor",scalar_ref},{"flanges",{{"type","array"},{"items",sheet_flange},{"maxItems",32}}}},
+    {"id","type","input","thickness","k_factor","flanges"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sheet_unfold"}}},{"input",id}}, {"id","type","input"}));
   features.push_back(object({{"id",id},{"type",{{"const","shell"}}},{"input",id},
     {"thickness",scalar_ref},{"faces",shell_faces},{"join",offset_join}},{"id","type","input","thickness","faces"}));
   features.push_back(object({{"id",id},{"type",{{"const","offset"}}},{"input",id},
@@ -291,6 +298,16 @@ Json model_definitions() {
   const Json nonnegative = {{"type","number"},{"minimum",0}};
   const Json point_output = {{"type","array"},{"items",real},{"minItems",3},{"maxItems",3}};
   const Json bounds_output = object({{"min",point_output},{"max",point_output}}, {"min","max"});
+  const Json line_output={{"type","array"},{"items",point_output},{"minItems",2},{"maxItems",2}};
+  definitions["sheet_metal_report"]=object({
+    {"mode",{{"enum",{"formed","flat"}}}},{"source_feature_id",id},{"thickness_mm",nonnegative},{"k_factor",{{"type","number"},{"minimum",0},{"maximum",1}}},
+    {"neutral_axis_basis",{{"const","caller_supplied_k_factor"}}},{"flat_area_mm2",nonnegative},{"flat_volume_mm3",nonnegative},{"formed_volume_mm3",nonnegative},
+    {"volume_preservation_assumed",{{"const",false}}},
+    {"bends",{{"type","array"},{"maxItems",32},{"items",object({{"id",id},{"width_mm",nonnegative},{"inside_radius_mm",nonnegative},{"angle_deg",real},
+      {"straight_length_mm",nonnegative},{"bend_allowance_mm",nonnegative},{"bend_deduction_mm",real},
+      {"bend_start_line_mm",line_output},{"bend_center_line_mm",line_output},{"bend_end_line_mm",line_output}},
+      {"id","width_mm","inside_radius_mm","angle_deg","straight_length_mm","bend_allowance_mm","bend_deduction_mm","bend_start_line_mm","bend_center_line_mm","bend_end_line_mm"})}}}
+  },{"mode","source_feature_id","thickness_mm","k_factor","neutral_axis_basis","flat_area_mm2","flat_volume_mm3","formed_volume_mm3","volume_preservation_assumed","bends"});
   definitions["motion"] = object({
     {"dofs",{{"type","array"},{"maxItems",126},{"items",object({{"mate_id",id},{"coordinate",coordinate},
       {"unit",{{"enum",{"deg","mm"}}}},{"value",real},{"minimum",real},{"maximum",real},{"driven",{{"type","boolean"}}},{"coupling_id",id}},
@@ -772,6 +789,28 @@ void validate_model(const Json& model) {
       if (edges.is_string()) {
         if (edges != "all") throw Error("invalid_model", "Edges must be all or a geometric selector");
       } else validate_selector(edges, parameters, text_field(feature, "input"));
+    } else if(type=="sheet_metal") {
+      fields(feature,{"id","type","input","thickness","k_factor","flanges"});sketch_dependency(text_field(feature,"input"));
+      positive(feature.at("thickness"));const auto k=scalar(feature.at("k_factor"),parameters,"dimensionless");
+      if(k<0||k>1)throw Error("invalid_model","Sheet-metal k_factor must be between zero and one");
+      const auto& flanges=feature.at("flanges");if(!flanges.is_array()||flanges.size()>32)throw Error("invalid_model","Sheet metal allows at most 32 base-edge flanges");
+      std::set<std::string> flange_ids;
+      for(const auto& flange:flanges) {
+        const auto flange_id=text_field(flange,"id");
+        try {
+          fields(flange,{"id","edge","inside_radius","angle_deg","length"},{"start_gap","end_gap"});model_identifier(flange_id);
+          if(!flange_ids.insert(flange_id).second)throw Error("invalid_model","Sheet-metal flange IDs must be unique");
+          validate_selector(flange.at("edge"),parameters,text_field(feature,"input"));
+          if(flange.at("edge").at("curve_kind")!="line"||flange.at("edge").at("expected_count")!=1)throw Error("invalid_model","A flange must select exactly one straight outer profile edge");
+          positive(flange.at("inside_radius"));positive(flange.at("length"));
+          const auto angle=std::abs(scalar(flange.at("angle_deg"),parameters,"deg"));
+          if(angle<0.01||angle>=179.99)throw Error("invalid_model","Flange bend angle magnitude must be at least 0.01 and below 179.99 degrees");
+          for(const auto* gap:{"start_gap","end_gap"})if(flange.contains(gap)&&scalar(flange.at(gap),parameters)<0)throw Error("invalid_model","Flange endpoint gaps must be nonnegative");
+        }catch(const Error& e){auto details=e.details;details["flange_id"]=flange_id;throw Error(e.code,e.what(),details);}
+      }
+    } else if(type=="sheet_unfold") {
+      fields(feature,{"id","type","input"});dependency("input");
+      if(types.at(text_field(feature,"input"))!="sheet_metal")throw Error("invalid_model","Unfold requires preserved sheet_metal intent; edited or imported arbitrary solids cannot be unfolded");
     } else if(type=="shell"||type=="offset"||type=="thicken") {
       const auto dimension=type=="offset"?"distance":"thickness";
       if(type=="shell")fields(feature,{"id","type","input",dimension,"faces"},{"join"});
