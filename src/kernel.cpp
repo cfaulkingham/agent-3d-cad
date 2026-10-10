@@ -74,6 +74,12 @@
 #include <BRepCheck_Shell.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
+#include <BRepGProp_Face.hxx>
+#include <BRepGProp_Domain.hxx>
+#include <BRepGProp_Vinert.hxx>
+#include <BRepGProp_VinertGK.hxx>
+#include <Geom_SurfaceOfRevolution.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
@@ -2764,21 +2770,56 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     const auto& shape = geometry.shape;
     const auto solids = count(shape, TopAbs_SOLID);
     GProp_GProps volume, area, linear;
-    // Native pipe surfaces may be rational B-splines even for analytic input.
-    // Fixed-order quadrature can misreport their mass; use adaptive integration.
+    // Integrate rational supports with Gauss-Kronrod, retaining adaptive Gauss
+    // for polynomial/analytic faces. Applying GK to every face of a mixed body
+    // makes polynomial offset walls prohibitively slow without improving them.
     if (solids) {
-      bool polynomial_surface=false;
-      for(TopExp_Explorer face(shape,TopAbs_FACE);face.More();face.Next()) {
-        const auto kind=BRepAdaptor_Surface(TopoDS::Face(face.Current())).GetType();
-        polynomial_surface|=kind==GeomAbs_BSplineSurface||kind==GeomAbs_BezierSurface;
+      const auto rational_curve=[](occ::handle<Geom_Curve> curve) {
+        for(int depth=0;depth<32;++depth) {
+          if(const auto trimmed=occ::down_cast<Geom_TrimmedCurve>(curve)){curve=trimmed->BasisCurve();continue;}
+          if(const auto spline=occ::down_cast<Geom_BSplineCurve>(curve))return spline->IsRational();
+          if(const auto bezier=occ::down_cast<Geom_BezierCurve>(curve))return bezier->IsRational();
+          return false;
+        }
+        throw Error("kernel_failure","Curve support nesting exceeds the integration bound");
+      };
+      const auto rational_support=[&](occ::handle<Geom_Surface> surface) {
+        for(int depth=0;depth<32;++depth) {
+          if(const auto offset=occ::down_cast<Geom_OffsetSurface>(surface)){surface=offset->BasisSurface();continue;}
+          if(const auto trimmed=occ::down_cast<Geom_RectangularTrimmedSurface>(surface)){surface=trimmed->BasisSurface();continue;}
+          if(const auto spline=occ::down_cast<Geom_BSplineSurface>(surface))return spline->IsURational()||spline->IsVRational();
+          if(const auto bezier=occ::down_cast<Geom_BezierSurface>(surface))return bezier->IsURational()||bezier->IsVRational();
+          if(const auto swept=occ::down_cast<Geom_SurfaceOfLinearExtrusion>(surface))return rational_curve(swept->BasisCurve());
+          if(const auto revolved=occ::down_cast<Geom_SurfaceOfRevolution>(surface))return rational_curve(revolved->BasisCurve());
+          return false;
+        }
+        throw Error("kernel_failure","Surface support nesting exceeds the integration bound");
+      };
+      bool rational=false;
+      for(TopExp_Explorer face(shape,TopAbs_FACE);face.More();face.Next())rational|=rational_support(BRep_Tool::Surface(TopoDS::Face(face.Current())));
+      if(!rational)BRepGProp::VolumeProperties(shape,volume,1e-9);
+      else {
+        Bnd_Box bounds;BRepBndLib::AddOptimal(shape,bounds,false,false);
+        const auto lo=bounds.CornerMin(),hi=bounds.CornerMax();
+        const gp_Pnt reference((lo.X()+hi.X())*.5,(lo.Y()+hi.Y())*.5,(lo.Z()+hi.Z())*.5);
+        GProp_GProps combined(reference);
+        for(TopExp_Explorer faces(shape,TopAbs_FACE);faces.More();faces.Next()) {
+          const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);
+          if(rational_support(BRep_Tool::Surface(face))) {
+            BRepGProp_VinertGK properties;properties.SetLocation(reference);
+            const double error=support.NaturalRestriction()?properties.Perform(support,1e-9,true,false):properties.Perform(support,domain,1e-9,true,false);
+            if(error<0||!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Rational surface volume integration failed");
+            combined.Add(properties);
+          } else {
+            BRepGProp_Vinert properties;properties.SetLocation(reference);
+            const double error=support.NaturalRestriction()?properties.Perform(support,1e-9):properties.Perform(support,domain,1e-9);
+            if(!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Surface volume integration failed");
+            combined.Add(properties);
+          }
+        }
+        volume=combined;
       }
-      // Gauss-only integration can report a tiny error estimate while missing
-      // the analytic volume of a rational affine-transformed cylinder by 1e-7
-      // relative. Gauss-Kronrod resolves the surface/trim quadrature separately.
-      if(polynomial_surface) {
-        const double error=BRepGProp::VolumePropertiesGK(shape,volume,1e-9,false,true,true,false);
-        if(error<0||!std::isfinite(volume.Mass()))throw Error("kernel_failure","Exact surface volume integration failed");
-      } else BRepGProp::VolumeProperties(shape,volume,1e-9);
+      if(!std::isfinite(volume.Mass())||volume.Mass()<=0)throw Error("kernel_failure","Solid volume integration produced invalid material mass");
     }
     BRepGProp::SurfaceProperties(shape, area,1e-9);
     Bnd_Box box;

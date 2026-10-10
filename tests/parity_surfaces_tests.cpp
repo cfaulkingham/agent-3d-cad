@@ -35,6 +35,24 @@ TopoDS_Shape independent_step(const BuiltModel& built,const fs::path& path){buil
 void crown(const fs::path& root){auto doc=parse_json(read_text(fs::path(CAD_SOURCE_DIR)/"examples/freeform-panel.create.json")).at("model");
  for(const auto* join:{"arc","intersection"})for(int sign:{-1,1}){auto d=doc;d["features"].push_back({{"id","body"},{"type","thicken"},{"input","trimmed"},{"thickness",sign},{"join",join}});d["output"]="body";BuiltModel solid(d);require(solid.summary().at("solid_count")==1,"Crown thickens into one valid solid");const double volume=solid.summary().at("volume_mm3");require(volume>250&&volume<270,"Crown material volume corresponds to 16x16 mm patch and 1 mm wall");const auto shape=independent_step(solid,root/(std::string(join)+std::to_string(sign)+".step"));GProp_GProps mass;BRepGProp::VolumeProperties(shape,mass);near(mass.Mass(),volume,1e-3);near(BuiltModel(d,solid.snapshot()).summary().at("volume_mm3"),volume,1e-5);require(!solid.topology().at("provenance").at("history").empty(),"Normalized thickening retains source topology history");}
 }
+void mixed_volume() {
+ auto d=parse_json(read_text(fs::path(CAD_SOURCE_DIR)/"examples/freeform-panel.create.json")).at("model");
+ d["features"].push_back({{"id","body"},{"type","thicken"},{"input","trimmed"},{"thickness",1},{"join","arc"}});d["output"]="body";
+ const auto crown_mass=BuiltModel(d).summary();
+ d["features"].push_back({{"id","cylinder"},{"type","cylinder"},{"radius",5},{"height",10}});
+ d["features"].push_back({{"id","ellipse"},{"type","scale"},{"input","cylinder"},{"factors",{2,3,.5}},{"origin",{1,2,3}}});
+ d["features"].push_back({{"id","mixed"},{"type","assembly"},{"parts",Json::array({
+   Json{{"id","panel"},{"input","body"}},
+   Json{{"id","elliptic"},{"input","ellipse"},{"placement",{{"translation",{50,60,70}},{"rotation",{{"origin",{0,0,0}},{"axis",{0,0,1}},{"angle_deg",90}}}}}}
+ })}});d["output"]="mixed";
+ const auto summary=BuiltModel(d).summary();
+ const double cylinder_volume=750*std::numbers::pi,crown_volume=crown_mass.at("volume_mm3"),total=cylinder_volume+crown_volume;
+ near(summary.at("volume_mm3"),total,1e-5);require(summary.at("solid_count")==2,"Mixed rational and polynomial assembly preserves both solids");
+ const std::array<double,3> cylinder_center={54,59,74};
+ for(int axis=0;axis<3;++axis)near(summary.at("center_of_mass_mm")[axis],
+   (crown_volume*crown_mass.at("center_of_mass_mm")[axis].get<double>()+cylinder_volume*cylinder_center[axis])/total,1e-6);
+ near(BuiltModel(d,BuiltModel(d).snapshot()).summary().at("volume_mm3"),total,1e-5);
+}
 void imports(const fs::path& root){auto source=model(Json::array({plane()}),"patch");BuiltModel sheet(source);sheet.export_file(root/"surface.step","step");Service service(root/"imports");const auto record=service.call("cad_import",{{"document_id","surface"},{"path",path_to_utf8(root/"surface.step")},{"geometry","surface"}});require(record.at("model").at("features")[0].at("type")=="import_step_surface","Surface source intent is explicit");near(record.at("summary").at("area_mm2"),200);near(record.at("summary").at("volume_mm3"),0);require(record.at("summary").at("solid_count")==0,"Surface STEP does not imply solid");fails("invalid_shape",[&]{service.call("cad_import",{{"document_id","wrong"},{"path",path_to_utf8(root/"surface.step")}});});
  auto invalid=record.at("model");invalid["features"].push_back({{"id","wrong"},{"type","offset"},{"input","imported"},{"distance",1}});invalid["output"]="wrong";fails("invalid_model",[&]{validate_model(invalid);});
  fs::remove(root/"surface.step");Service reopened(root/"imports");near(reopened.call("cad_query",{{"document_id","surface"},{"revision",1}}).at("summary").at("area_mm2"),200);auto d=record.at("model");d["features"].push_back({{"id","body"},{"type","thicken"},{"input","imported"},{"thickness",2}});d["output"]="body";near(BuiltModel(d).summary().at("volume_mm3"),400);
@@ -106,4 +124,4 @@ void projections(const fs::path& root){const auto select=Json{{"type","geometric
 }
 void rollback(const fs::path& root){auto d=model(Json::array({plane()}),"patch");Service service(root/"rollback");service.call("cad_create",{{"document_id","surface"},{"model",d}});const auto before=service.call("cad_read",{{"document_id","surface"}});const auto bad=Json{{"id","trimmed"},{"type","surface_trim"},{"input","patch"},{"boundary",polygon({{-.1,.1},{.9,.1},{.9,.9},{-.1,.9}})}};fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","surface"},{"expected_revision",1},{"operations",Json::array({{{"op","add_feature"},{"feature",bad}},{{"op","set_output"},{"feature_id","trimmed"}}})}});});require(service.call("cad_read",{{"document_id","surface"}})==before,"Failed worker surface edit preserves committed revision and bytes");}
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);component_capture(temp.path);networks(temp.path);projections(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);component_capture(temp.path);networks(temp.path);projections(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
