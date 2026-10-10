@@ -275,7 +275,7 @@ Json plan_printer_handoff(const fs::path& workspace, const Json& record, const J
   const Json gcode = {{"path", "original.gcode"}, {"sha256", sha256(raw)}, {"bytes", raw.size()}};
   const auto review = Json{{"schema_version", 1}, {"source", source}, {"source_association", "caller_declared_not_geometry_verified"},
     {"gcode", gcode}, {"options", options.at("review")}, {"report", report}}.dump(2)+"\n";
-  atomic_text(stage.path/"source.json", record.dump(2)+"\n"); atomic_text(stage.path/"review.json", review, plan_limit);
+  atomic_payload_json(stage.path/"source.json", record); atomic_text(stage.path/"review.json", review, plan_limit);
   const auto names = names_for(options); const auto artifacts = ledger_for(stage.path, names);
   const Json plan = {{"schema_version", 1}, {"source", source}, {"source_association", "caller_declared_not_geometry_verified"},
     {"options", options}, {"profiles", profiles}, {"gcode", gcode}, {"artifacts", artifacts}, {"report", report},
@@ -312,7 +312,7 @@ Json verify_printer_handoff(const fs::path& workspace, const Json& record, const
   const auto manifest_raw = read_text(root/"manifest.json", plan_limit);
   if (parse_json(manifest_raw, plan_limit) != manifest_for(source, plan.at("artifacts"), raw))
     throw Error("artifact_mismatch", "Reviewed printer manifest changed");
-  if (parse_json(read_text(root/"source.json")) != record) throw Error("artifact_mismatch", "Reviewed printer source snapshot differs");
+  if (read_payload_json(root/"source.json") != record) throw Error("artifact_mismatch", "Reviewed printer source snapshot differs");
   const auto gcode = read_text(root/"original.gcode", gcode_bytes_limit);
   const Json identity = {{"path", "original.gcode"}, {"sha256", sha256(gcode)}, {"bytes", gcode.size()}};
   if (plan.at("gcode") != identity) throw Error("artifact_mismatch", "Reviewed printer G-code identity differs");

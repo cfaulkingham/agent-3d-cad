@@ -1,11 +1,188 @@
 # Implementation handoff
 
-Updated: 2026-10-09. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-10. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Carousel workflow: STEP diagnosis, periodic meshes and native 3MF — 2026-10-10
+
+Investigated the actual failures in Codex chat `01a12666-30df-7f70-93d1-6b1df443ca91`
+("Fix shaft tolerances"). Preserved the existing STEP-size-limit changes below.
+The user's original STEP has 51 solids and one invalid lower-shaft solid; a later
+revision with that shaft fixed still contains valid roller faces that OCCT's
+ordinary triangulator cannot mesh. These are separate failures.
+
+Implemented:
+
+- `cad_inspect_step` is a read-only, worker-backed tool (also through `cad_job`)
+  reporting source hash, per-solid validity, tessellation, bounds and named BRep
+  diagnostics. The actual original source identifies solid 31, face 106
+  `UnorientableShape` and wire 118 `SelfIntersectingWire`. Diagnostic face/wire
+  indices are local to that checked shape. New explicit `cad_import.solid_indices`
+  requires `expected_sha256`; extraction retains complete original bytes and hash,
+  requires complete STEP root transfer and validates every selected solid. Source
+  solid indices are qualified by the exact source hash and pinned kernel.
+- Valid periodic faces that fail triangulation get a private tessellation retry,
+  with original face identity retained for picking. Exact saved B-reps and source
+  revisions are unchanged. For print meshes, narrowly eligible full conical or
+  cylindrical walls get a private seam normalization and sewn mesh boundary, with
+  validity, area, volume and bounds checked. STL now rejects incomplete/open meshes
+  instead of letting the old writer silently skip missing face triangulations.
+- Native geometry-only 3MF export preserves separate source solids. Optional
+  rectangular-bed layout packs across at most 64 plates with explicit margins,
+  spacing and quarter-turns. Complete explicit placements support XYZ orientation
+  and layout reuse across edits. Actual mesh vertices rest on Z=0. Each plate has
+  standard OPC/3MF metadata, a hash and source IDs; `layout.json` records placement
+  and source identity. Publication is staged, locked and content-qualified.
+  STEP/STL/3MF exports support `feature_id`; the embedded Export menu offers 3MF.
+- Installed skill references now resolve beside `SKILL.md` in native and plugin
+  bundles. Skill guidance uses native inspection/extraction/print layout and the
+  existing embedded PNG action. No build123d/Python dependency was added to the
+  product. The standalone adapter accepts 3MF, but its installed app was not updated.
+
+Validation on macOS arm64 / OCCT 8.0.1:
+
+- Native build succeeded. A complete serial CTest pass ran all 58 suites in
+  **210.92 s**: 56 passed; two test harness failures were corrected (bounded retry
+  for the documented transient job publication lock, and applying the same
+  **15 KiB/tool** discovery budget to 29 tools). Both reran successfully in
+  **6.62 s**. All 58 have passing evidence across those runs; no single clean
+  full-suite run is claimed. Earlier timeout failures in purchased-part/STEP
+  suites passed in the final serial run. The exact periodic-cone fixture covers
+  display face coverage, unchanged source bytes/geometry, closed meshes, layout,
+  extraction/hash rejection, and asynchronous inspection.
+- Independent live schema validation: **907 checks / 29 tools**; actual artifact
+  MCP schema validation: **209 checks**. Rust/native integration tests: **3/3**,
+  including 3MF export. Packaged-plugin smoke passed provenance, skill references,
+  empty-PATH startup, create/edit/history, native STEP inspection and all exports.
+- The actual **9,965,224-byte** revision before roller replacement renders every
+  original face and exports **all 51 solids on four 256 × 256 mm plates**, with
+  8 mm margins and 3 mm spacing. Independent ZIP/XML, mesh-edge, signed-volume,
+  bed-contact and clearance checks pass. The official lib3mf reader reports
+  **zero warnings**, with every mesh manifold and consistently oriented.
+- Real browser harness testing displayed that complete carousel and completed
+  Export → 3MF. Screenshots are `viewer-carousel.jpg` and `viewer-3mf-export.jpg`.
+  This is browser harness evidence, not a claim of reloaded host-session behavior.
+
+Installed the tested working tree over `1ce76d5`, without changing VERSION or
+publishing a release. Active local plugin source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-1ce76d5-carousel-workflow-20261010`;
+all **342 files** match provenance, all **102 saved model files** and unrelated
+settings were preserved, and the previous source/configuration backup remains.
+Fresh ChatGPT `0.144.0-alpha.4` and Codex `0.162.0-alpha.17.2` runtimes discover both
+skills and all **29 tools**, including STEP inspection and the 3MF schema. The
+installed binary, with PATH empty and development loader overrides removed,
+diagnosed the actual invalid source, explicitly imported its 50 valid solids,
+then imported/rendered all 51 solids of the corrected revision and exported the
+four plates. Independent lib3mf and mesh/layout checks passed on those installed
+outputs too; saved models were rechecked unchanged after execution. The
+packaged binary SHA-256 is
+`55586814d0c69ed2b4687137593defe3f5eb4f6d32e07126d96d58ab7a6cec8d`.
+Evidence and reproducible local probes/install scripts are in
+`.local/evidence/carousel-workflow-20261010/`.
+
+Limitations/next work: invalid source solids still require an explicit modeling
+correction; this does not silently heal self-intersecting thread geometry or
+recover STEP design history. Compound `solid-N` print IDs are revision-local;
+check correspondence after topology changes. Rectangle packing is conservative,
+not optimal; 3MF contains geometry, not slicer profiles/supports or print approval.
+Restart the host to use the new installed server in an existing chat. Remaining
+1.0 host/platform/signing gates and broader build123d feature parity are not closed
+by these workflow fixes. Add cross-platform regression evidence for this increment
+before making a new platform compatibility claim.
+
+## STEP importer rebuilt and installed in ChatGPT — 2026-10-10
+
+Rebuilt the working tree over `1ce76d5`, installed a fresh portable core bundle,
+and packaged Agent CAD without changing VERSION (`0.1.0-preview.1`) or publishing
+a release/tag. Standard packaged-plugin smoke passed complete provenance,
+empty-PATH MCP/viewer discovery, create/edit/reopen/history and
+STEP/STL/PDF/SVG/four DXF exports.
+
+Installed via `/Applications/ChatGPT.app/Contents/Resources/codex` into the existing
+`agent-cad@agent-cad-local` registration. Active source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-1ce76d5-step-import-20261010-chatgpt`;
+cache is `~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1`.
+The contained modern launcher is `./bin/agent-3d-cad-step-import-20261010`.
+All **310 installed package files** match the prepared provenance inventory;
+all **56 saved model files**, the existing `~/Documents/Agent3DCAD` workspace
+argument and unrelated parsed settings are preserved. Previous sources remain;
+the original configuration backup is mode 0600.
+
+ChatGPT's bundled runtime (`0.144.0-alpha.4`) needed legacy `.codex-plugin/plugin.json`
+and `.mcp.json` metadata, plus an absolute installed-source launcher path in that
+legacy MCP file. Its initial generic install synthesized incomplete metadata and
+could not discover the server; relative legacy launch also produced zero tools.
+The final install-specific compatibility files are included in provenance. The
+portable modern manifest/launcher remains alongside them. Repository release
+packaging has not been changed to promise legacy-host portability.
+
+Final verification:
+
+- Fresh ChatGPT `0.144.0-alpha.4` and current desktop `0.162.0-alpha.17.2` runtimes
+  both discover the enabled plugin, both skills and **28 tools**. Their actual
+  importer descriptions advertise removal of the fixed source byte cap.
+- The installed contained binary, with PATH empty and no development loader
+  overrides, imported a **2,435,390-byte STEP**, preserved its exact source/hash
+  and **80 mm³** solid volume, then reopened, rebuilt and replayed the committed
+  import after deleting the original. The workspace was an isolated temporary
+  directory; actual user model files were rechecked unchanged afterward.
+- Native binary SHA-256:
+  `7d5837fee4b2e808f0dec0ce26db38070b2a01fc67cf503bca624c79063c18c4`.
+  Embedded viewer SHA-256:
+  `8c327ffb7c2be9305cc22e002a347213d0cb73d5600a32c2388ade5ae9f5e860`.
+- `git diff --check` passed. Build, packaging, installer, discovery and large-import
+  evidence/scripts are in `.local/evidence/step-import-install-20261010/`.
+
+The current host session's existing connection was not restarted. Quit and reopen
+ChatGPT before validating this build in the actual embedded session. Fresh runtime
+checks do not establish that reload or any remaining 1.0 host/platform/signing gate.
+
+## STEP imports without a fixed source byte cap — 2026-10-10
+
+Removed the 512 KiB STEP restriction from native import, feature validation,
+discovery schemas and read-only artifact review. STEP source bytes remain embedded
+unchanged with their verified SHA-256. Model-bearing internal JSON now budgets
+metadata separately from `import_step.content`, including component snapshots,
+worker inputs, revision storage, receipt recovery and durable job requests/results.
+This also removes the hidden 1 MiB save/rebuild and 64 MiB job-result ceilings for
+STEP content. Artifact capture, ledgers and verification likewise exempt the
+original STEP bytes from file/package caps; other formats keep their existing bounds.
+
+Worker memory budgets can exceed 4 GiB (native signed 32-bit MiB representation);
+defaults remain 2,048 MiB / 30 seconds, with larger explicit budgets via `cad_job`.
+UTF-8, source hash, complete-root transfer, geometry validity, cancellation and
+atomic publication checks remain. Model metadata, geometry/display and transport
+request limits remain: large STEP files are supplied by path, not inline in MCP
+requests. Source strings are still held in memory, sometimes in multiple copies;
+this is not streaming/out-of-core import. Other export/package limits still apply.
+
+Validation (macOS arm64, pinned OCCT 8.0.1):
+
+- Native build passed. New `step_import` CTest passed in **11.07 s**, using valid
+  STEP solids with legal comment padding above **2 MiB** and **65 MiB**. It covers
+  exact volume/bytes/hash, cold reopen/rebuild, edit/export/restore, failed-geometry
+  rollback, receipt-index recovery, portable pinned components, 8 GiB job admission,
+  durable large-result read/replay, artifact capture and portable verification
+  after deleting the original. Padding isolates byte limits from geometry complexity;
+  this does not establish performance for arbitrary complex vendor models.
+- Independent schema conformance passed **927 checks across 28 tools**, including
+  actual large CLI import/read results and the expanded memory-budget schema.
+- The other **56 CTest suites** ran with two-way parallelism: **54 passed**;
+  playback and annotation hit wall-time limits (both reported roughly 253 s
+  despite 120 s test limits). Both passed unchanged in an isolated serial rerun:
+  playback **3.54 s**, annotation **2.43 s**. All **57 suites** therefore have
+  passing evidence across these runs; no single clean full-suite run is claimed.
+- Independent actual artifact MCP schema validation passed **199 checks**, including
+  acceptance of STEP sources above 64 MiB and retained limits for other formats.
+  `git diff --check` passed.
+
+Implementation evidence: `.local/evidence/step-import-20261010/`. The installation
+follow-up above records the rebuilt and deployed plugin. Existing 1.0
+platform/host/signing gates still apply.
 
 ## Export dropdown on the bottom toolbar — 2026-10-09
 

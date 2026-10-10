@@ -69,9 +69,10 @@ workspace without its libraries; refreshing there requires the named source
 revision to be available again. Components have no live filesystem links.
 
 Bounds: 64 tracked components per document, four levels of embedded source
-provenance, and the existing 1 MiB JSON, 256 local-feature, 128 local-parameter,
+provenance, and the existing 1 MiB JSON metadata, 256 local-feature, 128 local-parameter,
 assembly-expansion, kernel and worker budgets. Snapshots count toward the JSON
-budget even when only part of their dependency graph is materialized. Removing
+budget even when only part of their dependency graph is materialized, except
+embedded STEP source strings, which have no fixed byte cap. Removing
 or detaching components does not retroactively alter historical revisions.
 
 Example: create `nested-assembly.create.json`, then

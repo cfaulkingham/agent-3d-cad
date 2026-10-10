@@ -39,6 +39,8 @@ public:
   // IDs are local to this evaluation and feature. They are never design references.
   Json topology(const std::string& feature_id = "", const QueryLimits& limits = {}) const;
   Json mesh(const std::string& feature_id = "", const QueryLimits& limits = {}) const;
+  // Separate, welded, closed meshes for native 3MF export.
+  Json print_meshes(const std::string& feature_id = "") const;
   // Exact and explicitly sampled process checks. Reports never certify production.
   Json fabrication_review(const Json& options,const std::string& feature_id = "") const;
   // Revalidate evaluated face/edge descriptors uniquely; distances use B-reps,
@@ -61,6 +63,9 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 std::string kernel_version();
+// Read-only source diagnosis, including invalid solids that cannot be committed.
+// Solid indices qualify this exact STEP byte source and pinned kernel only.
+Json inspect_step(const std::string& content);
 // Drawing-wide limits (entities, points, examined edges, balloon anchors) for
 // views obtained separately, e.g. from per-view projection caches. `view_budgets`
 // holds each view's recorded usage ({entities, points, examined_edges}, as returned

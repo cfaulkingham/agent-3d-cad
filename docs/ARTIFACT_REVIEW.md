@@ -72,7 +72,7 @@ Identical review bytes reuse an existing verified package.
 
 | Format | Parsed review | Units and unsupported cases |
 | --- | --- | --- |
-| STEP/STP | Existing isolated native `import_step` and `BuiltModel` view worker; exact summary and tessellated display | `file`; embedded bytes ≤512 KiB. No OCCT pointers outside `kernel.cpp`. Opaque import is not recovered feature history. Current fixture is a native round trip, not cross-vendor qualification. |
+| STEP/STP | Existing isolated native `import_step` and `BuiltModel` view worker; exact summary and tessellated display | `file`; no fixed STEP source byte cap (worker memory/time budgets apply). No OCCT pointers outside `kernel.cpp`. Opaque import is not recovered feature history. Current fixture is a native round trip, not cross-vendor qualification. |
 | STL | Binary or ASCII triangles, including finite coordinates and degenerate-triangle rejection | Explicit mm/cm/m/in/ft/um; no intrinsic units, watertightness or exact-solid claim. Binary attribute/color payloads are unsupported. |
 | GLB | GLB 2 JSON/BIN, selected scene, indexed/unindexed triangle primitives, float positions, byte/ushort/uint indices, hierarchy and matrix/TRS transforms | Intrinsic meters, Y up. Mirror winding is handled. External buffers/images, extensions, skins, animation, morph targets, sparse accessors and non-triangle modes are unsupported. Materials/textures/cameras/lights and inactive scenes are not rendered. |
 | 3MF | OPC content types/relationships, stored/deflated ZIP, core build meshes, nested component placements and unit conversion | `file`; core units/default millimeters. Only the default core XML namespace is supported. Required extensions, extension attributes, ZIP64, encryption, multi-disk ZIP and noncontained relationships are unsupported. Instances remain separate meshes; overlapping parts are not unioned or manufacturing certified. |
@@ -88,12 +88,13 @@ never executed as JavaScript, Python, shell commands, plugins or code.
 
 ## Bounds and parser dependencies
 
-Each source/reference file is at most 64 MiB; all explicit references total at
-most 128 MiB. XML inputs are at most 16 MiB with 100,000 lexical/tree nodes,
+STEP source files have no fixed byte cap. Other source/reference files are at
+most 64 MiB; all explicit references total at most 128 MiB. XML inputs are at most 16 MiB with 100,000 lexical/tree nodes,
 depth 64 and attribute length 4096. Geometry has at most 200,000 vertices,
 triangles and curve points, 10,000 groups/curves/placements, and coordinates
 within ±1e9 mm. Robot trees have at most 1024 links/joints. Review JSON is at
-most 64 MiB; captured package ledger bytes are at most 256 MiB; the separately
+most 64 MiB; captured package ledger bytes excluding the original STEP source
+are at most 256 MiB; the separately
 bounded manifest is at most 1 MiB. Cancellation checkpoints occur throughout
 parsing, hashing and publication. Durable admission/history/failure/cancel
 state is provided by the shared Service/job coordinator. `cad_artifact` supports

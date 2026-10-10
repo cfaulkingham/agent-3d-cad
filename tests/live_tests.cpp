@@ -400,7 +400,7 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==28,"legacy, drawings, BOM, manufacturing/geometry/G-code review, printer handoff, slicing, measurement, robot export, external artifact review and live tools remain published");
+  require(definitions.size()==29,"STEP inspection, legacy, drawings, BOM, manufacturing/geometry/G-code review, printer handoff, slicing, measurement, robot export, external artifact review and live tools remain published");
   require(std::any_of(definitions.begin(),definitions.end(),[](const Json& tool){return tool.at("name")=="cad_printer_handoff";}),"native offline printer handoff is included in discovery");
   for(const auto* name:{"cad_artifact","cad_artifact_show"})require(std::any_of(definitions.begin(),definitions.end(),[&](const Json& tool){return tool.at("name")==name;}),std::string(name)+" is included in discovery");
   for(const auto& tool:definitions) {

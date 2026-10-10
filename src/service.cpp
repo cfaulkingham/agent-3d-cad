@@ -1,5 +1,6 @@
 #include "agentcad/service.hpp"
 #include "agentcad/kernel.hpp"
+#include "agentcad/print_export.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/viewer.hpp"
@@ -145,8 +146,18 @@ Json tool_definitions() {
     tool("cad_restore","Rebuild a historical model as a new revision. History remains immutable; expected_revision must match HEAD.",
       {{"document_id",id},{"expected_revision",revision},{"source_revision",revision},{"request_id",id}},
       {"document_id","expected_revision","source_revision"},object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
-    tool("cad_import","Create a document from a local STEP file up to 512 KiB. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Does not fetch URLs or infer editable history.",
-      {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}}}, {"document_id","path"},
+    tool("cad_inspect_step","Inspect a local STEP before importing, including invalid geometry. Reports per-solid validity, tessellation, bounds and diagnostic entities. Source solid indices are scoped to the returned SHA-256 and pinned kernel; use that hash with cad_import solid_indices. No repair, document or revision is created.",
+      {{"path",text},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"path"},
+      object({{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"kernel_version",text},{"index_lifetime",{{"const","source_sha256_and_kernel"}}},
+        {"valid",{{"type","boolean"}}},{"meshable",{{"type","boolean"}}},{"solid_count",{{"type","integer"},{"minimum",0},{"maximum",4096}}},
+        {"errors",array(object({{"code",text},{"message",text},{"details",{{"type","object"}}}},{"code","message","details"}),64)},
+        {"solids",array(object({{"index",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"valid",{{"type","boolean"}}},{"meshable",{{"type","boolean"}}},
+          {"bounds_mm",summary_schema().at("properties").at("bounds_mm")},{"volume_mm3",{{"type",{"number","null"}}}},
+          {"errors",array(object({{"code",text},{"message",text},{"details",{{"type","object"}}}},{"code","message","details"}),64)}},
+          {"index","valid","meshable","bounds_mm","volume_mm3","errors"}),4096)}},
+        {"source_sha256","kernel_version","index_lifetime","valid","meshable","solid_count","solids","errors"}),true),
+    tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
+      {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
       {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh"}}}},{"feature_id",id}},
@@ -154,9 +165,10 @@ Json tool_definitions() {
     tool("cad_measure","Measure committed B-reps: face/edge/leaf pair distances, analytic angles, common material volume, or planar section curves and material caps. Clearance queries cover at most 23 leaves. Section queries use an explicit displayed-world plane and optional exploded leaf offsets; distance queries always use the saved source pose. Reject stale/draft/build-mismatched references and ambiguous recovery.",
       {{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},{"query",{{"$ref","#/$defs/measurement_query"}}}},
       {"document_id","revision","evaluation_id","feature_id","query"},definitions.at("measurement_result"),true),
-    tool("cad_export","Export a committed revision as independent STEP or binary STL using mm coordinates.",
-      {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}}},{"document_id","revision","format"},
-      object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}}},
+    tool("cad_export","Export a committed revision or feature as STEP, binary STL or separate-solid 3MF. Optional 3MF layout packs a rectangular bed across plates or reuses complete explicit placements. Geometry-only files retain mm units; no slicing or hardware actions.",
+      {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf"}}}},{"feature_id",id},{"layout",print_layout_schema()}},{"document_id","revision","format"},
+      object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}},
+        {"layout_path",text},{"plates",array(object({{"plate",{{"type","integer"},{"minimum",1},{"maximum",64}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"source_ids",array(text,4096)}},{"plate","path","bytes","sha256","source_ids"}),64)}},
         {"document_id","revision","format","path","bytes","units"}),false),
     tool("cad_manufacture","Export a revision-qualified manufacturing package with editable source, unique leaf STEP/STL/drawings, saved assembly placement, BOM/purchasing data, explicit process assumptions and a portable SHA-256 manifest. Defaults to both solid formats and native drawings. Does not perform process certification, slicing or physical printing.",
       {{"document_id",id},{"revision",revision},{"feature_id",id},{"options",{{"$ref","#/$defs/manufacturing_options"}}}}, {"document_id","revision"},
@@ -232,11 +244,11 @@ Json tool_definitions() {
       {{"action",{{"type","string"}}}},{"action"},{{"type","object"},{"$ref","#/$defs/artifact_review_result"}},false),
     tool("cad_job","Submit, inspect, list or cancel a durable job. Submit a tool and arguments with request_id; retries return the same job. Geometry runs in bounded native workers.",
       {{"action",{{"enum",{"submit","get","cancel","list"}}}},{"request_id",id},{"job_id",id},{"tool",text},{"arguments",{{"type","object"}}},
-        {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array())}},
+        {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array())}},
       {"action"},{{"type","object"}},false)
   });
   const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},
-    {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",4096}}}},Json::array());
+    {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array());
   for(auto& definition:tools)if(definition.at("name")=="cad_artifact") {
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/artifact_arguments"},{"$defs",definitions}};
   }
@@ -247,7 +259,11 @@ Json tool_definitions() {
   }
   for(auto& definition:tools)if(definition.at("name")=="cad_printer_handoff")
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
-  const std::set<std::string> job_tools={"cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  for(auto& tool:tools) {
+    if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};}
+    if(tool.at("name")=="cad_export")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"required",{"layout"}}}},{"then",{{"properties",{{"format",{{"const","3mf"}}}}}}}}});
+  }
+  const std::set<std::string> job_tools={"cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   std::set<std::string> result_contracts;
   for(const auto& definition:tools) {
@@ -457,6 +473,11 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
+  if(tool=="cad_inspect_step") {
+    fields(args,{"path"},{"expected_sha256"});text_field(args,"path");
+    if(args.contains("expected_sha256")){const auto hash=text_field(args,"expected_sha256");if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected STEP SHA-256");}
+    return;
+  }
   if(tool=="cad_artifact") {
     if(text_field(args,"action")=="review")validate_artifact_review_arguments(args);
     else if(text_field(args,"action")=="verify") {
@@ -473,7 +494,8 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_apply") fields(args,{"document_id","expected_revision","operations"},{"request_id"});
   else if(tool=="cad_restore") fields(args,{"document_id","expected_revision","source_revision"},{"request_id"});
   else if(tool=="cad_import") {
-    fields(args,{"document_id","path"},{"request_id","expected_sha256","purchase"});
+    fields(args,{"document_id","path"},{"request_id","expected_sha256","purchase","solid_indices"});
+    if(args.contains("solid_indices")){if(args.contains("purchase"))throw Error("invalid_argument","Subset imports cannot claim an unchanged purchased artifact");validate_step_solid_indices(args.at("solid_indices"));if(!args.contains("expected_sha256"))throw Error("invalid_argument","STEP subset import requires expected_sha256 from inspection");}
     if(args.contains("expected_sha256")) {
       const auto hash=text_field(args,"expected_sha256");
       if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected STEP SHA-256");
@@ -481,7 +503,11 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
     if(args.contains("purchase"))try{validate_purchase(args.at("purchase"));}
       catch(const Error& error){throw Error("invalid_argument",error.what(),error.details);}
   }
-  else if(tool=="cad_export") fields(args,{"document_id","revision","format"});
+  else if(tool=="cad_export") {
+    fields(args,{"document_id","revision","format"},{"feature_id","layout"});const auto format=text_field(args,"format");
+    if(format!="step"&&format!="stl"&&format!="3mf")throw Error("invalid_argument","Export format must be step, stl or 3mf");
+    if(args.contains("layout")){if(format!="3mf")throw Error("invalid_argument","Print layout requires 3mf format");validate_print_layout(args.at("layout"));}
+  }
   else if(tool=="cad_manufacture") {fields(args,{"document_id","revision"},{"feature_id","options"});validate_manufacturing_options(args.value("options",Json::object()));}
   else if(tool=="cad_fabrication_review") {fields(args,{"document_id","revision","options"},{"feature_id"});validate_fabrication_options(args.at("options"));}
   else if(tool=="cad_gcode_review") {
@@ -539,6 +565,15 @@ Json Service::execute(const std::string& tool,const Json& args) {
     if(args.at("action")=="review")return review_external_artifact(store_.root(),args,AGENTCAD_CACHE_BUILD);
     return verify_external_artifact(path_from_utf8(text_field(args,"review_path")).parent_path(),text_field(args,"expected_sha256"));
   }
+  if(tool=="cad_inspect_step") {
+    const auto content=read_text(path_from_utf8(text_field(args,"path")),unlimited_bytes),digest=sha256(content);
+    if(invalid_utf8_offset(content))throw Error("invalid_argument","STEP content must be UTF-8");
+    if(args.contains("expected_sha256")&&args.at("expected_sha256")!=digest)throw Error("artifact_mismatch","STEP bytes do not match expected_sha256",{{"actual_sha256",digest}});
+    const Json model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},
+      {"features",Json::array({{{"id","source"},{"type","import_step"},{"content",content},{"sha256",digest}}})},{"output","source"}};
+    auto result=evaluate_model(store_.root(),model,{{"kind","inspect_step"}});
+    result["source_sha256"]=digest;result["kernel_version"]=kernel_version();result["index_lifetime"]="source_sha256_and_kernel";return result;
+  }
   const auto id=text_field(args,"document_id");
   if(tool=="cad_read") return store_.read(id,args.contains("revision")?std::optional(revision_number(args.at("revision"))):std::nullopt);
   if(tool=="cad_resolve_selection") {
@@ -589,8 +624,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
       else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"),
         [&](const std::string& source,std::uint64_t revision){return store_.read(source,revision);});
       else {
-        const auto content=read_text(path_from_utf8(text_field(args,"path")));
-        if(content.size()>512*1024)throw Error("limit_exceeded","Embedded STEP imports are limited to 512 KiB");
+        const auto content=read_text(path_from_utf8(text_field(args,"path")),unlimited_bytes);
         // Documents embed STEP as a JSON (UTF-8) string; transcoding would change
         // the bytes and SHA-256 that define the imported feature.
         if(const auto offset=invalid_utf8_offset(content))
@@ -600,6 +634,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
         if(args.contains("expected_sha256")&&args.at("expected_sha256")!=digest)
           throw Error("artifact_mismatch","STEP bytes do not match expected_sha256",{{"expected_sha256",args.at("expected_sha256")},{"actual_sha256",digest}});
         Json feature={{"id","imported"},{"type","import_step"},{"content",content},{"sha256",digest}};
+        if(args.contains("solid_indices"))feature["solid_indices"]=args.at("solid_indices");
         if(args.contains("purchase")) {
           auto purchase=args.at("purchase");
           if(purchase.contains("artifact_sha256")&&purchase.at("artifact_sha256")!=digest)
@@ -690,7 +725,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
       const auto report=evaluate_model(store_.root(),record.at("model"),{{"kind","gcode_review"},{"path",path_to_utf8(stage/"original.gcode")},{"options",args.at("options")}}).at("gcode_report");
       const auto content=Json{{"schema_version",1},{"source",source},{"source_association","caller_declared_not_geometry_verified"},
         {"gcode",{{"path","original.gcode"},{"sha256",digest},{"bytes",original.size()}}},{"options",args.at("options")},{"report",report}}.dump(2)+"\n";
-      atomic_text(stage/"review.json",content,gcode_bytes_limit);atomic_text(stage/"source.json",record.dump(2)+"\n");
+      atomic_text(stage/"review.json",content,gcode_bytes_limit);atomic_payload_json(stage/"source.json",record);
       Json ledger=Json::array();for(const auto* name:{"original.gcode","review.json","source.json"}) {
         const auto raw=read_text(stage/name,gcode_bytes_limit);ledger.push_back({{"path",name},{"sha256",sha256(raw)},{"bytes",raw.size()}});
       }
@@ -833,12 +868,33 @@ Json Service::execute(const std::string& tool,const Json& args) {
     result["feature_id"]=args.value("feature_id",record.at("model").at("output"));return result;
   }
   const auto format=text_field(args,"format");
-  if(format!="step"&&format!="stl")throw Error("invalid_argument","Export format must be step or stl");
+
   const auto exports=store_.root()/"exports";directory(exports);
-  const auto target=exports/(id+"-r"+std::to_string(revision)+"."+format),temporary=temporary_file(exports);
+  if(format=="3mf") {
+    const auto stage=temporary_directory(exports);
+    try {
+      const Json identity={{"document_id",id},{"revision",revision},{"feature_id",args.value("feature_id",record.at("model").at("output"))},
+        {"model_sha256",sha256(record.at("model").dump())},{"kernel_version",kernel_version()}};
+      const auto report=evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"feature_id",identity.at("feature_id")},
+        {"path",path_to_utf8(stage)},{"options",args.value("layout",Json())},{"identity",identity}}).at("print_export");
+      const auto target=exports/(id+"-r"+std::to_string(revision)+"-3mf-"+sha256(report.dump()).substr(0,24));
+      {DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();
+        if(fs::is_symlink(fs::symlink_status(target)))throw Error("storage_error","Print package cannot be a symlink");
+        if(fs::exists(target)) {
+          if(parse_json(read_text(target/"layout.json"))!=report)throw Error("artifact_mismatch","Existing print package differs from its source");
+          for(const auto& plate:report.at("plates"))if(sha256_file(target/path_from_utf8(text_field(plate,"path")),128*1024*1024,check_job_cancelled)!=text_field(plate,"sha256"))throw Error("artifact_mismatch","Existing print plate bytes changed");
+        }else fs::rename(stage,target);
+      }
+      Json plates=report.at("plates");for(auto& plate:plates)plate["path"]=path_to_utf8(target/path_from_utf8(text_field(plate,"path")));
+      std::error_code ignored;fs::remove_all(stage,ignored);
+      return {{"document_id",id},{"revision",revision},{"format",format},{"path",plates[0].at("path")},{"bytes",plates[0].at("bytes")},
+        {"units","mm"},{"layout_path",path_to_utf8(target/"layout.json")},{"plates",plates}};
+    }catch(...){std::error_code ignored;fs::remove_all(stage,ignored);throw;}
+  }
+  const auto target=exports/(id+(args.contains("feature_id")?"-"+text_field(args,"feature_id"):"")+"-r"+std::to_string(revision)+"."+format),temporary=temporary_file(exports);
   std::uintmax_t bytes=0;
   try {
-    evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"path",path_to_utf8(temporary)}});
+    evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format",format},{"path",path_to_utf8(temporary)},{"feature_id",args.value("feature_id",record.at("model").at("output"))}});
     std::error_code size_error;bytes=fs::file_size(temporary,size_error);
     if(size_error)throw Error("storage_error","Cannot measure export: "+size_error.message());
     DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();publish_file(temporary,target);

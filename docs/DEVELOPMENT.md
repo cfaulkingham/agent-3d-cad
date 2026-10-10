@@ -222,7 +222,7 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-Twenty-eight application tools expose create/read/apply/restore/import,
+Twenty-nine application tools expose create/read/apply/restore/import,
 query/measurement/export/BOM/drawing/manufacturing/process review, G-code review,
 slicing/printer plans, robot handoff, external artifact review, view/preview/
 selection resolution, comparison, jobs, model discovery and live view context.
@@ -296,3 +296,11 @@ notarization remain owner decisions.
 
 See [SPEC.md](SPEC.md), [ROADMAP.md](ROADMAP.md), and
 [DEPENDENCIES.md](DEPENDENCIES.md) for architecture, acceptance gates and terms.
+
+## STEP and print workflow regression
+
+`ctest --test-dir build -R print_workflow --output-on-failure` drives the real
+native CLI from an isolated temporary workspace. Independent ZIP/XML, triangle
+adjacency, signed-volume, bed-margin and spacing checks cover 3MF, layout replay,
+subset import and periodic-face rendering/STL export. Python is a development
+test driver only; the installed exporter and inspector are C++.

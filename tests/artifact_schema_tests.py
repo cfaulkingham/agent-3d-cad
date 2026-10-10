@@ -3,6 +3,7 @@ Run after artifact_mcp_flow.mjs: python artifact_schema_tests.py evidence.json
 """
 from pathlib import Path
 import json, sys
+from copy import deepcopy
 from jsonschema import Draft202012Validator
 
 data=json.loads(Path(sys.argv[1]).read_text());tools={x['name']:x for x in data['discovery']};checks=0
@@ -25,6 +26,12 @@ for key,value in [('expected_sha256','A'*64),('document_id','Fake'),('revision',
     assert not validator.is_valid(invalid),(key,'must reject');checks+=1
 result=next(c['result'] for c in data['calls'] if c['name']=='cad_artifact')
 validator=Draft202012Validator(tools['cad_artifact']['outputSchema'])
+large=deepcopy(result)
+large['source'].update(format='step', declared_units='file', bytes=65*1024*1024, path='original.step')
+assert validator.is_valid(large), 'STEP source bytes have no fixed cap'
+large['source'].update(format='stl', declared_units='mm', path='original.stl')
+assert not validator.is_valid(large), 'Other source formats retain their byte budget'
+checks+=2
 for key in ['read_only','editable_history_recovered','native_selection_references']:
     invalid=dict(result);invalid[key]=not result[key]
     assert not validator.is_valid(invalid),(key,'must reject');checks+=1

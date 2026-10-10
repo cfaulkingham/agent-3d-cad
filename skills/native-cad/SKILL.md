@@ -23,6 +23,36 @@ revision-qualified selection; check `stale`, `draft` and `read_only`. Do not
 require a copied request, entity number or screenshot when current context is
 available. Honor the user's request; selecting geometry alone is not an edit.
 
+When the task edits an external STEP, start with `cad_inspect_step` (use `cad_job`
+for large files). It reports the raw source SHA-256, every solid's bounds, validity,
+meshability and native diagnostic entities. Invalid source geometry is not repaired
+or silently dropped. Inspect errors before choosing a repair; do not substitute
+an older part without verifying its geometry and the user's intended change.
+Use `cad_import` to create the editable opaque source needed for the requested
+edit. An explicit `solid_indices` subset requires the inspection's
+`expected_sha256`; indices qualify only those exact bytes and kernel version.
+This can isolate a valid shaft or bearing from a file containing a different bad
+solid. It does not recover the original feature history. The imported feature
+retains all original bytes and the explicit subset for reproducible rebuilds.
+Use native `cad_query`/`cad_measure`, feature-scoped `cad_export`, and the embedded
+viewer for inspection and exports. A Python CAD runtime is not needed.
+
+For printing, `cad_export` accepts `format: "3mf"` and optional `feature_id`.
+It preserves separate solids and verifies closed, consistently oriented meshes.
+Add `layout: {bed_mm: [256,256], margin_mm: 8, spacing_mm: 3}` to pack them onto
+as many plates as needed, retaining their current orientation except optional
+quarter turns about Z. Inspect the returned `plates` and `layout_path`; this is
+an unsliced geometry package. It does not choose supports, material or printer
+settings. Set `allow_quarter_turn: false` when rotation must remain fixed.
+For a chosen orientation or repeat layout, supply a complete `placements` array
+of `{source_id, plate, x_mm, y_mm, rotation_deg: [x,y,z]}` inside `layout`.
+Angles are applied about world X, then Y, then Z; x/y locate the rotated bounding
+box minimum, and each part is placed on Z=0. Copy those five fields from
+`layout.json` to preserve placements after dimensional edits; check source IDs
+against the new model. Assembly leaf IDs persist, while `solid-N` suffixes are
+revision-local. Explicit placements are rechecked for margins and spacing.
+Exports do not alter the saved assembly pose. Use jobs for large print exports.
+
 For an original external STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF file, use
 `cad_artifact` with `action: review`, its absolute regular path, actual raw
 lowercase `expected_sha256`, explicit `format` and units. STEP/3MF use `file`;
@@ -46,8 +76,8 @@ Native measurement, sections, editing, notes, presets and playback are unavailab
 in that view. Discuss source references and declared limitations instead.
 An optional `native_source` association is caller-declared even when its real
 historical record is hash-qualified. Open that authoritative native document
-with `cad_show` for edits. Use `cad_import` only when explicitly creating an
-opaque STEP feature; imported geometry does not recover original design history.
+with `cad_show` for edits. Use `cad_import` when an opaque editable STEP source is needed for the requested
+edit; imported geometry does not recover original design history.
 
 Use `chamfer` with `input`, `distance` and `edges` for symmetric bevels. It uses
 the same geometric edge selector as fillet. For curved profiles, use a sketch
@@ -235,8 +265,8 @@ not physical materials. Saved views store camera, clip/explosion, colors and
 hidden leaves. `cad_viewer action:"preset"` uses list/save/apply/delete, current
 view/evaluation and a name except for list. Save/apply require a saved pose.
 A changed plane or explosion retires sections; other view changes retain them.
-Save PNG image downloads a local capture without sending it to chat. Use the
-separate Include this view option for an explicit chat attachment. Read the
+Export → PNG image captures the embedded viewer without a Python renderer.
+It saves a local image without sending it to chat. Read the
 bundled APPEARANCE.md for limits, revision pruning and stale-context rules.
 
 Use `cad_measure` with a current committed document/revision/evaluation/feature
@@ -331,7 +361,7 @@ terminal and surface concrete feature errors. Retry the same logical mutation
 with the same request ID when reconciling a lost response. Never claim a queued
 or running job has committed.
 
-Export named revisions using `cad_export` (`step` or `stl`). The saved document is
+Export named revisions using `cad_export` (`step`, `stl` or `3mf`). The saved document is
 the editable source; exports are independent manufacturing/review outputs.
 Measurements use millimeters. Native geometry validity is not a DFM certificate.
 

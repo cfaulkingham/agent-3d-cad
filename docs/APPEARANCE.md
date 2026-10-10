@@ -80,9 +80,8 @@ Save PNG image captures the current WebGL frame, including visible colors,
 hidden parts, clipping, exploded placement and any current qualified section.
 The app requests a local browser download named for the document and revision;
 the host may require a save location or restrict downloads. The PNG data URL
-is bounded to 8 MiB. No upload or message is sent by this button. Quick Edit's
-existing Include this view option remains a separate explicit chat attachment
-with its existing 2 MiB limit.
+is bounded to 8 MiB. No upload or message is sent by this button. The removed Quick Edit composer
+and its image-attachment option are no longer viewer controls.
 
 Native behavior, controller race tests and mocked WebGL verification do not
 establish rendered host readiness. HANDOFF records actual test and browser

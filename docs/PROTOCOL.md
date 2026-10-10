@@ -38,7 +38,9 @@ the plain grammar: a POSIX workspace that already holds a document named `aux`
 keeps reading, editing and listing it (it still cannot be opened on Windows; rename
 its `documents/` directory and the `document_id` inside its records to move it).
 Names inside a model (features, parameters, assembly parts and mates) never become
-file names and are not restricted. A `request_id` on a document tool is stored in
+standalone file names and are not restricted by the Windows device-name rule.
+Feature-scoped export names include the document and revision as well.
+A `request_id` on a document tool is stored in
 a receipt, not used as a file name, so it is not restricted either.
 A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
@@ -49,7 +51,7 @@ Optional `components` records up to 64 captured source revisions, embedded model
 snapshots and SHA-256 checksums, scalar bindings, and feature/parameter identity
 maps. Their materialized dependencies are ordinary local editable features.
 Snapshots have at most four provenance levels and count toward the 1 MiB document
-limit. Rebuilding a consumer needs no source document. See [COMPONENTS.md](COMPONENTS.md).
+metadata limit; embedded `import_step.content` bytes are excluded. Rebuilding a consumer needs no source document. See [COMPONENTS.md](COMPONENTS.md).
 
 A scalar is a finite number within ±1,000,000, a parameter reference, or a bounded
 arithmetic tree. Dimensions use mm; directions are dimensionless; rotation uses
@@ -87,7 +89,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `pattern` | `input`, `count`, `step` | 2–64 translated copies including original; replication budget below |
 | `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | 2–64 rotated copies; signed angular step, including original |
 | `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
-| `import_step` | `content`, `sha256` | Embedded STEP text ≤512 KiB with matching SHA-256 |
+| `import_step` | `content`, `sha256` | Nonempty embedded STEP text with matching SHA-256; optional explicit `solid_indices` subset, no fixed source byte cap |
 | `assembly` | `parts` | 1–64 named instances of earlier solids or assemblies; optional acyclic rigid/articulated `mates`, `couplings`, `poses`, and source-keyed `bom` metadata |
 
 `workplane` requires `origin`, `normal`, `x_direction`; directions must be nonzero
@@ -277,6 +279,25 @@ picks, missing evaluations and identity
 mismatches fail explicitly. Geometry selectors can be suggested for unique edges;
 faces return measurements but have no face-based editing operation yet.
 
+## STEP diagnosis and explicit extraction
+
+`cad_inspect_step(path, expected_sha256?)` transfers the original STEP in a bounded
+native worker without committing a document. It returns `source_sha256`, pinned
+`kernel_version`, aggregate `valid`/`meshable`, `solid_count`, and every solid's
+one-based `index`, exact bounds, volume, validity, meshability and errors. Invalid
+B-reps report up to 64 native entity/status diagnostics per error, with explicit
+truncation. Entity indices in errors qualify only that failed shape. Inspection
+never heals, drops or replaces geometry. Source labels/history are not recovered.
+
+`cad_import` optionally accepts `solid_indices` (1–4096 unique integers) with the
+required `expected_sha256` from inspection. The saved `import_step` embeds the
+complete original bytes and subset. It transfers every source root, then builds
+only the explicitly selected solids; missing indices fail. Unselected invalid
+solids are intentionally outside that import. Indices qualify only the exact
+source SHA-256 and pinned kernel, never a later file or revision. Subset imports cannot claim unchanged `purchase` metadata for the whole artifact.
+Full imports continue to reject any invalid solid or loose geometry. Both inspection and
+import support `cad_job`; inspection needs no document ID.
+
 ## Tools
 
 Document operations require `document_id`. External artifact review/show and
@@ -289,12 +310,13 @@ JSON-safe integers. See runtime schemas for exact closed field definitions.
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
 | `cad_apply` | `expected_revision`, `operations`, optional `request_id` | New committed record + summary |
 | `cad_restore` | `expected_revision`, `source_revision`, optional `request_id` | Historical intent rebuilt as a new revision |
-| `cad_import` | `path`, optional `request_id`, `expected_sha256`, `purchase` | New document with exact embedded STEP bytes; optional verified supplier/artifact identity; see [sourced-part contract](PURCHASED_PARTS.md) |
+| `cad_inspect_step` | No `document_id`; `path`, optional `expected_sha256` | Source-qualified per-solid validity, meshability, bounds and BRep diagnostics; no document creation |
+| `cad_import` | `path`, optional `request_id`, `expected_sha256`, `purchase`, `solid_indices` | New document with exact embedded STEP bytes; explicit subset requires the source hash and cannot carry `purchase`; see [sourced-part contract](PURCHASED_PARTS.md) |
 | `cad_artifact` | No `document_id`; `action: review` with absolute `path`, raw `expected_sha256`, explicit `format`, `units`, optional `references`, `native_source`; or `action: verify` with `review_path`, review `expected_sha256` | Portable captured read-only review, source/review hashes, parsed summary and explicit representation limits; see [artifact contract](ARTIFACT_REVIEW.md) |
 | `cad_artifact_show` | No `document_id`; `review_path`, review `expected_sha256`, optional `view_id` | Verify/reparse and display a frozen artifact in the MCP App; `{view_id,document_id:null,read_only:true,artifact,resource_uri}` |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
 | `cad_measure` | `revision`, `evaluation_id`, `feature_id`, `query` | Exact source-pose pair distances/angles, clearance/interference, or native planar section curves/material caps; see [measurement](MEASUREMENTS.md) and [section](SECTIONS.md) contracts |
-| `cad_export` | `revision`, `format` (`step`/`stl`) | Artifact path, bytes, units and identity |
+| `cad_export` | `revision`, `format` (`step`/`stl`/`3mf`), optional `feature_id`, 3MF-only `layout` | Artifact path, bytes, units and identity; 3MF also returns all plates and layout manifest |
 | `cad_manufacture` | `revision`, optional `feature_id`, `options` | Complete native manufacturing package: editable source, unique leaf STEP/STL/drawings, saved assembly pose, BOM/purchasing data, explicit process assumptions and portable hash manifest; see [manufacturing contract](MANUFACTURING.md) |
 | `cad_fabrication_review` | `revision`, `options`, optional `feature_id` | Hashed native JSON review with explicit process inputs, exact or sampled measurements, unknown unsupported checks and saved-pose clearance/interference; see [review contract](FABRICATION_REVIEW.md) |
 | `cad_gcode_review` | `revision`, absolute plain `.gcode` `path`, `expected_sha256`, `options`, optional `feature_id` | Native stateful static review, unchanged G-code and portable hash ledger; explicit machine/material/initial assumptions and caller CAD association; see [G-code contract](GCODE_REVIEW.md) |
@@ -368,6 +390,14 @@ Updating a locally edited component fails with `component_modified` unless
 Detach keeps the local features/parameters; remove deletes them. Repair remaining
 references in the same batch. Full ownership, portability and limits are in
 [COMPONENTS.md](COMPONENTS.md).
+
+`cad_import` has no fixed source-file byte cap. Embedded STEP content is excluded
+from internal document, component, worker-input and durable job-result JSON byte
+budgets; ordinary metadata and geometry limits still apply. Large imports use
+`cad_job` with an appropriate `memory_mb` and timeout budget. The source remains
+in memory during import, so actual memory use can exceed the file size.
+MCP/CLI request envelopes still have a 1 MiB limit: pass the local file path to
+`cad_import` instead of sending large STEP strings inline.
 
 `cad_import` embeds the file's bytes unchanged in a JSON string, so the file must
 be valid UTF-8 (ISO 10303-21 files are normally ASCII and encode other text with
@@ -491,7 +521,9 @@ follows the corresponding face descriptor.
 The mesh and edge mappings share the topology identity. The hard bounds are 10,000
 combined faces/edges, 200,000 vertices, 200,000 triangles and 200,000 edge points.
 Persisted evaluation metadata, worker results and artifacts are each bounded to
-64 MiB. Document inputs remain limited to 1 MiB. Exceeding a bound is explicit
+64 MiB. Embedded STEP source bytes in model-bearing internal payloads are
+excluded from JSON byte budgets; model metadata remains limited to 1 MiB.
+Transport request envelopes remain limited to 1 MiB. Exceeding a bound is explicit
 `limit_exceeded`, not truncation of geometry.
 
 View artifacts need only a browser. Orbit/zoom, select faces/edges, copy or save a
@@ -506,12 +538,40 @@ tests, 4 million edge samples); a model exceeding this requires a feature-scoped
 view. Browser artifacts accept coordinates up to ±1e12 mm. These are review
 limits, not changes to the exact saved geometry.
 
-STEP exports exact solids. Binary STL uses 0.1 mm linear and 0.5 rad angular
-meshing tolerance. Files are independent of service memory/source documents.
+STEP exports exact solids. Binary STL and native 3MF use 0.1 mm linear and
+0.5 rad angular meshing tolerance. Print meshes weld within 1e-7 mm and must be
+closed and consistently oriented; missing faces or open meshes fail explicitly.
+Periodic face failures retry on temporary iso-parametric splits. Display patches
+retain the original selectable face identity; print meshes may normalize the seam of a complete analytic cone/cylinder wall
+on its original surface, coordinate adjoining boundaries and check exact area,
+volume and bounds. Unsupported trims still fail explicitly. Saved exact solids and STEP
+exports remain untouched by tessellation. Files are independent of service memory/source documents.
 Assembly exports retain positioned solids as a compound; editable part IDs and
 mate semantics remain in the saved JSON, without a promised exchange hierarchy.
 Artifact destinations are service-generated beneath `exports`; arbitrary export
-paths are not accepted. Re-export of a revision replaces its derived STEP/STL.
+paths are not accepted. Re-export of a revision replaces its derived STEP/STL. `feature_id` can scope any
+export to an existing feature. Native 3MF exports preserve each solid as a named
+object and build item, in mm, with valid standard metadata. Print output is a
+content-qualified directory with `layout.json` and one or more `plate-N.3mf`
+files. The response's `path`/`bytes` identify the first plate; `plates` lists all
+files with hashes and source IDs, and `layout_path` identifies the manifest.
+
+For 3MF only, optional `layout` requires `bed_mm: [width, depth]`, with optional
+`margin_mm` (default 8), `spacing_mm` (default 3), `allow_quarter_turn` (default
+true). Packing uses conservative bounding rectangles, may rotate about Z by 90°,
+places each part on Z=0, and creates up to 64 plates. It is deterministic but
+makes no optimality, support, material, slicing or printer-readiness claim.
+
+Alternatively `layout.placements` explicitly covers every source solid once with
+`{source_id, plate, x_mm, y_mm, rotation_deg:[x,y,z]}`. Rotations apply world X,
+then Y, then Z; x/y locate the rotated bounding-box minimum. Copy these five
+fields from `layout.json` to reuse a layout after edits. Native assembly leaf IDs
+survive dimensional edits; `solid-N` suffixes are revision-local and require
+correspondence review after topology changes. Margins and pairwise rectangle
+spacing are revalidated independently before publication. Geometry is never
+omitted to fit a bed. Up to 4096 solids, two million mesh vertices/triangles,
+32 MiB model XML per plate and 256 MiB per package are supported; worker budgets
+still apply. No export changes the saved assembly pose.
 
 ### Live MCP App views
 
@@ -721,7 +781,7 @@ hosts and native platforms retain their own acceptance gates.
 
 Use `{"action":"get","job_id":"plate_edit_2"}`, `cancel` with the same job_id,
 or `{"action":"list"}`. Submit supports
-artifact/create/apply/restore/import/query/measure/export/
+inspect_step/artifact/create/apply/restore/import/query/measure/export/
 manufacture/fabrication_review/gcode_review/printer_handoff/slice/robot_export/
 preview/view/drawing/bom. `cad_artifact` review/verify jobs require no native
 `document_id` at the top level or inside `arguments`; their typed success result
@@ -760,7 +820,9 @@ fail. It reads as a `failed` job with error `job_record_corrupt`, and counts
 toward admission only while a live coordinator still owns it. Use a new
 request_id instead of a damaged one.
 
-Budgets: timeout 1–300,000 ms; memory 128–4,096 MiB. Defaults 30 seconds/2,048 MiB.
+Budgets: timeout 1–300,000 ms; memory at least 128 MiB, up to the native signed
+32-bit MiB representation (2,147,483,647). There is no 4 GiB policy ceiling; choose
+a memory budget appropriate for the machine. Defaults are 30 seconds/2,048 MiB.
 Queue time counts toward the asynchronous deadline. Synchronous geometry uses
 default budgets. Workers run via native process spawning, without model-supplied
 code. Coordinators and workers execute the running service image itself, whatever
@@ -865,7 +927,7 @@ workspace/
   jobs/.lock                        # job admission
   jobs/<request_id>/state.json      # small job record: state, error, result digest
   jobs/<request_id>/request.json    # immutable submitted tool arguments
-  jobs/<request_id>/result.json     # result (≤64 MiB), published before success
+  jobs/<request_id>/result.json     # result (≤64 MiB metadata, STEP bytes excluded), published before success
   jobs/<request_id>/.lock           # coordinator ownership
   jobs/<request_id>/cancel          # cancellation request
   views/<view_id>/state.json        # workspace-scoped association and context
@@ -967,7 +1029,7 @@ readable. `serve` stdout remains exclusively newline-delimited JSON.
 
 The Tauri shell is an adapter to the same MCP stdio service. Its page can call
 only library/show/context/viewer tools for its window’s view. Native export IPC
-accepts a document, committed revision and one of `step`, `stl`, `pdf`, `svg`,
+accepts a document, committed revision and one of `step`, `stl`, `3mf`, `pdf`, `svg`,
 `dxf`; the shell uses `cad_job` and OS save dialogs. Workspace dialogs and recent
 paths are local UI state. This adds no modeling tool or document schema, HTTP
 endpoint, shell execution tool, or remote chat-send API. Agents connected to the

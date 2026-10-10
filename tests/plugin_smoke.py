@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -19,6 +20,8 @@ exe = (root / settings['command']).resolve()
 assert exe.is_relative_to(root) and exe.is_file()
 assert not (root / 'desktop').exists()
 assert (root / 'skills/native-cad/SKILL.md').is_file()
+for name in set(re.findall(r'\b[A-Z][A-Z_0-9]*\.md', (root / 'skills/native-cad/SKILL.md').read_text())) - {'SKILL.md'}:
+    assert (root / 'skills/native-cad' / name).is_file(), f'Missing skill reference: {name}'
 assert (root / manifest['extensions']['com.openai']['onboardingSkill']).is_file()
 inventory = json.loads((root / 'share/agent-3d-cad/provenance.json').read_text(encoding='utf-8'))
 actual = {file.relative_to(root).as_posix() for file in root.rglob('*') if file.is_file()}
@@ -82,4 +85,11 @@ with tempfile.TemporaryDirectory(prefix='cad-plugin-') as temp:
         if artifact['format'] == 'pdf': assert path.read_bytes().startswith(b'%PDF-')
     assert replies[-1]['structuredContent'] == original, 'Exports changed the source'
 
-print('Packaged plugin: complete provenance, empty-PATH MCP/viewer discovery, create/edit/reopen/history and STEP/STL/PDF/SVG/four DXF exports passed. No host installation is implied.')
+
+    print_file = session([tool('cad_export', {'document_id':'first_project','revision':2,'format':'3mf',
+        'layout':{'bed_mm':[256,256],'margin_mm':8,'spacing_mm':3}})])[0]['structuredContent']
+    assert len(print_file['plates']) == 1 and Path(print_file['path']).read_bytes().startswith(b'PK')
+    step_file = session([tool('cad_export', {'document_id':'first_project','revision':2,'format':'step'})])[0]['structuredContent']
+    diagnosis = session([tool('cad_inspect_step', {'path':step_file['path']})])[0]['structuredContent']
+    assert diagnosis['valid'] and diagnosis['meshable'] and diagnosis['solid_count'] == 1
+print('Packaged plugin: complete provenance and skill references, empty-PATH MCP/viewer discovery, create/edit/reopen/history, STEP inspection and STEP/STL/3MF/PDF/SVG/four DXF exports passed. No host installation is implied.')

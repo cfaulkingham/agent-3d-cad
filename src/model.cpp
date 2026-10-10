@@ -52,6 +52,12 @@ void validate_occurrence_path(const std::string& path) {
     start=end+1;
   }
 }
+void validate_step_solid_indices(const Json& indices) {
+  if(!indices.is_array()||indices.empty()||indices.size()>4096)throw Error("invalid_argument","STEP solid_indices requires 1–4096 distinct source indices");
+  std::set<int> seen;
+  for(const auto& index:indices)if(!index.is_number_integer()||index<1||index>4096||!seen.insert(index.get<int>()).second)
+    throw Error("invalid_argument","STEP solid_indices requires unique integers between 1 and 4096");
+}
 Json model_definitions() {
   const Json id = {{"$ref", "#/$defs/model_id"}};
   const Json numeric = {{"type", "number"}, {"minimum", -1e6}, {"maximum", 1e6}};
@@ -140,8 +146,10 @@ Json model_definitions() {
     {"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"axis",axis_schema},{"angle_deg",scalar_ref}},
     {"id","type","input","count","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","hole"}}},{"input",id},{"origin",vector_ref},{"axis",vector_ref},{"radius",scalar_ref},{"depth",scalar_ref}}, {"id","type","input","origin","axis","radius","depth"}));
-  features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1},{"maxLength",524288}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
-    {"purchase",{{"allOf",Json::array({Json{{"$ref","#/$defs/purchase"}},Json{{"required",{"artifact_sha256"}}}})}}}}, {"id","type","content","sha256"}));
+  features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
+    {"purchase",{{"allOf",Json::array({Json{{"$ref","#/$defs/purchase"}},Json{{"required",{"artifact_sha256"}}}})}}},
+    {"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"id","type","content","sha256"}));
+  features.back()["not"]={{"required",{"solid_indices","purchase"}}};
   features.push_back(object({{"id",id},{"type",{{"const","assembly"}}},
     {"parts",{{"type","array"},{"items",{{"$ref","#/$defs/assembly_part"}}},{"minItems",1},{"maxItems",64}}},
     {"mates",{{"type","array"},{"items",{{"$ref","#/$defs/mate"}}},{"maxItems",63}}},
@@ -542,7 +550,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
 
 void validate_model(const Json& model) {
   fields(model, {"schema_version", "units", "parameters", "features", "output"}, {"components"});
-  if(model.contains("components") && model.dump().size()>max_json_bytes)throw Error("limit_exceeded","Component document exceeds the 1 MiB JSON budget");
+  validate_payload_size(model);
   if (!model.at("schema_version").is_number_integer() || model.at("schema_version") != 1)
     throw Error("unsupported_schema", "Only model schema_version 1 is supported");
   if (text_field(model, "units") != "mm") throw Error("invalid_model", "Only millimeters are supported");
@@ -713,10 +721,11 @@ void validate_model(const Json& model) {
       if (expanded_parts>4096) throw Error("limit_exceeded","A document permits at most 4096 expanded assembly leaf occurrences");
       leaf_counts[id]=leaves;depths[id]=depth;
     } else if (type == "import_step") {
-      fields(feature, {"id", "type", "content", "sha256"},{"purchase"});
+      fields(feature, {"id", "type", "content", "sha256"},{"purchase","solid_indices"});
+      if(feature.contains("solid_indices")){validate_step_solid_indices(feature.at("solid_indices"));if(feature.contains("purchase"))throw Error("invalid_model","Subset imports cannot claim an unchanged purchased artifact");}
       const auto content = text_field(feature,"content");
       const auto digest = text_field(feature,"sha256");
-      if (content.empty() || content.size() > 512*1024) throw Error("limit_exceeded", "Embedded STEP content must contain 1 to 524288 bytes");
+      if (content.empty()) throw Error("limit_exceeded", "Embedded STEP content must not be empty");
       if (digest.size() != 64 || digest.find_first_not_of("0123456789abcdef") != std::string::npos || sha256(content) != digest)
         throw Error("invalid_model", "Embedded STEP content does not match its SHA-256 identity");
       if(feature.contains("purchase")) {

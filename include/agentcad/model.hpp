@@ -5,6 +5,7 @@
 
 namespace agentcad {
 Json model_definitions();
+void validate_step_solid_indices(const Json& indices);
 inline constexpr std::size_t assembly_leaf_limit = 1024;
 inline constexpr std::size_t assembly_depth_limit = 8;
 Json occurrence_schema();

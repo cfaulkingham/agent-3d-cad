@@ -52,6 +52,8 @@ private:
 void directory(const fs::path& path);
 std::string read_text(const fs::path& path, std::size_t max_bytes = max_json_bytes);
 void atomic_text(const fs::path& path, const std::string& text, std::size_t max_bytes = max_json_bytes);
+Json read_payload_json(const fs::path& path, std::size_t max_bytes = max_json_bytes);
+void atomic_payload_json(const fs::path& path, const Json& value, std::size_t max_bytes = max_json_bytes);
 fs::path temporary_file(const fs::path& directory);
 // Creates a new owner-only directory with a unique name beneath parent.
 fs::path temporary_directory(const fs::path& parent);

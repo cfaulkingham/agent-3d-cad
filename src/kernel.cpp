@@ -36,7 +36,10 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepCheck_Result.hxx>
+#include <ShapeUpgrade_ShapeDivideClosed.hxx>
 #include <BRepCheck_Shell.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
@@ -73,6 +76,7 @@
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
 #include <TopoDS_Iterator.hxx>
+#include <TopExp_Explorer.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Circ.hxx>
@@ -90,6 +94,7 @@
 #include <fstream>
 #include <set>
 #include <tuple>
+#include <bit>
 
 static_assert(OCC_VERSION_HEX == 0x080001, "agent-3d-cad requires OCCT 8.0.1");
 
@@ -177,9 +182,67 @@ int count(const TopoDS_Shape& shape, TopAbs_ShapeEnum kind) {
   TopExp::MapShapes(shape, kind, map);
   return map.Extent();
 }
+const char* check_status_name(BRepCheck_Status status){switch(status){
+case BRepCheck_NoError:return "NoError";
+case BRepCheck_InvalidPointOnCurve:return "InvalidPointOnCurve";
+case BRepCheck_InvalidPointOnCurveOnSurface:return "InvalidPointOnCurveOnSurface";
+case BRepCheck_InvalidPointOnSurface:return "InvalidPointOnSurface";
+case BRepCheck_No3DCurve:return "No3DCurve";
+case BRepCheck_Multiple3DCurve:return "Multiple3DCurve";
+case BRepCheck_Invalid3DCurve:return "Invalid3DCurve";
+case BRepCheck_NoCurveOnSurface:return "NoCurveOnSurface";
+case BRepCheck_InvalidCurveOnSurface:return "InvalidCurveOnSurface";
+case BRepCheck_InvalidCurveOnClosedSurface:return "InvalidCurveOnClosedSurface";
+case BRepCheck_InvalidSameRangeFlag:return "InvalidSameRangeFlag";
+case BRepCheck_InvalidSameParameterFlag:return "InvalidSameParameterFlag";
+case BRepCheck_InvalidDegeneratedFlag:return "InvalidDegeneratedFlag";
+case BRepCheck_FreeEdge:return "FreeEdge";
+case BRepCheck_InvalidMultiConnexity:return "InvalidMultiConnexity";
+case BRepCheck_InvalidRange:return "InvalidRange";
+case BRepCheck_EmptyWire:return "EmptyWire";
+case BRepCheck_RedundantEdge:return "RedundantEdge";
+case BRepCheck_SelfIntersectingWire:return "SelfIntersectingWire";
+case BRepCheck_NoSurface:return "NoSurface";
+case BRepCheck_InvalidWire:return "InvalidWire";
+case BRepCheck_RedundantWire:return "RedundantWire";
+case BRepCheck_IntersectingWires:return "IntersectingWires";
+case BRepCheck_InvalidImbricationOfWires:return "InvalidImbricationOfWires";
+case BRepCheck_EmptyShell:return "EmptyShell";
+case BRepCheck_RedundantFace:return "RedundantFace";
+case BRepCheck_InvalidImbricationOfShells:return "InvalidImbricationOfShells";
+case BRepCheck_UnorientableShape:return "UnorientableShape";
+case BRepCheck_NotClosed:return "NotClosed";
+case BRepCheck_NotConnected:return "NotConnected";
+case BRepCheck_SubshapeNotInShape:return "SubshapeNotInShape";
+case BRepCheck_BadOrientation:return "BadOrientation";
+case BRepCheck_BadOrientationOfSubshape:return "BadOrientationOfSubshape";
+case BRepCheck_InvalidPolygonOnTriangulation:return "InvalidPolygonOnTriangulation";
+case BRepCheck_InvalidToleranceValue:return "InvalidToleranceValue";
+case BRepCheck_EnclosedRegion:return "EnclosedRegion";
+case BRepCheck_CheckFail:return "CheckFail";
+default:return "Unknown";}}
 void check_shape(const TopoDS_Shape& shape) {
-  if (shape.IsNull() || !BRepCheck_Analyzer(shape).IsValid())
-    throw Error("invalid_shape", "Feature did not produce valid solid geometry");
+  if (shape.IsNull()) throw Error("invalid_shape", "Feature produced no geometry");
+  BRepCheck_Analyzer analyzer(shape);
+  if (!analyzer.IsValid()) {
+    Json failures=Json::array();bool truncated=false;
+    for(const auto kind:{TopAbs_SOLID,TopAbs_SHELL,TopAbs_FACE,TopAbs_WIRE,TopAbs_EDGE,TopAbs_VERTEX}) {
+      ShapeMap entities;TopExp::MapShapes(shape,kind,entities);
+      for(int i=1;i<=entities.Extent();++i) {
+        const auto checked=analyzer.Result(entities(i));if(checked.IsNull())continue;
+        Json statuses=Json::array();
+        const auto append=[&](const auto& list){for(const auto status:list)if(status!=BRepCheck_NoError&&std::find(statuses.begin(),statuses.end(),check_status_name(status))==statuses.end())statuses.push_back(check_status_name(status));};
+        append(checked->Status());
+        for(checked->InitContextIterator();checked->MoreShapeInContext();checked->NextShapeInContext())append(checked->StatusOnShape());
+        if(statuses.empty())continue;
+        if(failures.size()>=64){truncated=true;continue;}
+        const char* name=kind==TopAbs_SOLID?"solid":kind==TopAbs_SHELL?"shell":kind==TopAbs_FACE?"face":kind==TopAbs_WIRE?"wire":kind==TopAbs_EDGE?"edge":"vertex";
+        failures.push_back({{"kind",name},{"index",i},{"brep_check_statuses",statuses}});
+      }
+    }
+    throw Error("invalid_shape", "Feature did not produce valid solid geometry",
+      {{"invalid_entities",failures},{"diagnostics_truncated",truncated},{"index_lifetime","this_shape_only"}});
+  }
   // A valid compound may still contain open faces or wires beside its solids.
   // Traverse containment, preserving cumulative orientation and placement,
   // instead of treating a positive aggregate volume as solid-only evidence.
@@ -271,6 +334,58 @@ Json edge_descriptor(const TopoDS_Edge& edge, int index) {
     result["axis"] = direction(curve.Circle().Axis().Direction());
   }
   return result;
+}
+std::optional<TopoDS_Face> periodic_rectangle(const TopoDS_Face& face) {
+  // Only a complete analytic periodic wall with no inner trims is eligible.
+  // Recreate its seam on the same surface, solely in private mesh geometry.
+  BRepAdaptor_Surface adaptor(face);if(adaptor.GetType()!=GeomAbs_Cone&&adaptor.GetType()!=GeomAbs_Cylinder)return {};
+  if(count(face,TopAbs_WIRE)!=1||count(face,TopAbs_EDGE)>16)return {};
+  for(TopExp_Explorer it(face,TopAbs_EDGE);it.More();it.Next()){const auto kind=BRepAdaptor_Curve(TopoDS::Edge(it.Current())).GetType();if(kind!=GeomAbs_Circle&&kind!=GeomAbs_Line)return {};}
+  const auto surface=BRep_Tool::Surface(face);if(!surface->IsUPeriodic())return {};
+  double u0,u1,v0,v1;BRepTools::UVBounds(face,u0,u1,v0,v1);
+  if(std::abs(u1-u0-surface->UPeriod())>1e-7)return {};
+  BRepBuilderAPI_MakeFace maker(surface,u0,u0+surface->UPeriod(),v0,v1,1e-7);if(!maker.IsDone())return {};
+  auto result=maker.Face();result.Orientation(face.Orientation());if(!BRepCheck_Analyzer(result).IsValid())return {};
+  GProp_GProps before,after;BRepGProp::SurfaceProperties(face,before);BRepGProp::SurfaceProperties(result,after);
+  if(std::abs(before.Mass()-after.Mass())>1e-8*std::max(1.0,std::abs(before.Mass())))return {};
+  const auto a=bounds(face),b=bounds(result);for(const auto* end:{"min","max"})for(int k=0;k<3;++k)if(std::abs(a.at(end)[k].get<double>()-b.at(end)[k].get<double>())>1e-6)return {};
+  return result;
+}
+// A periodic trim can defeat OCCT's 2D triangulator despite a valid B-rep.
+// Split only a private face for tessellation; retain the original face identity,
+// analytic surface and exact solid. Never repair or replace the saved geometry.
+std::vector<TopoDS_Face> tessellated_faces(const TopoDS_Face& face, const Json& context) {
+  TopLoc_Location location;
+  const auto ready=BRep_Tool::Triangulation(face,location);
+  if(!ready.IsNull()&&ready->NbTriangles()>0)return {face};
+  Json details=context;details["surface_kind"]=surface_kind(BRepAdaptor_Surface(face).GetType());details["bounds_mm"]=bounds(face);
+  BRepBuilderAPI_Copy copy(face);ShapeUpgrade_ShapeDivideClosed split(copy.Shape());
+  split.SetNbSplitPoints(1);split.Perform();const auto divided=split.Result();
+  if(!divided.IsNull()&&count(divided,TopAbs_FACE)>1&&count(divided,TopAbs_FACE)<=16&&BRepCheck_Analyzer(divided).IsValid()) {
+    GProp_GProps before,after;BRepGProp::SurfaceProperties(face,before);BRepGProp::SurfaceProperties(divided,after);
+    const auto a=bounds(face),b=bounds(divided);bool same=std::abs(before.Mass()-after.Mass())<=1e-7*std::max(1.0,std::abs(before.Mass()));
+    for(const auto* end:{"min","max"})for(int k=0;k<3;++k)same=same&&std::abs(a.at(end)[k].get<double>()-b.at(end)[k].get<double>())<=1e-6;
+    if(same) {
+      BRepMesh_IncrementalMesh retry(divided,.1,false,.5,false);std::vector<TopoDS_Face> fragments;
+      for(TopExp_Explorer it(divided,TopAbs_FACE);it.More();it.Next()) {
+        const auto fragment=TopoDS::Face(it.Current());const auto mesh=BRep_Tool::Triangulation(fragment,location);
+        if(mesh.IsNull()||mesh->NbTriangles()==0){fragments.clear();break;}fragments.push_back(fragment);
+      }
+      if(retry.IsDone()&&!fragments.empty())return fragments;
+    }
+  }
+  details["attempted_periodic_split"]=true;
+  throw Error("kernel_failure","Face tessellation failed, including periodic-face retry",details);
+}
+TopoDS_Shape read_step(const std::string& content) {
+  STEPControl_Reader reader;reader.SetShapeProcessFlags(ShapeProcess::OperationsFlags{});
+  std::istringstream stream(content);
+  if(reader.ReadStream("embedded.step",stream)!=IFSelect_RetDone)throw Error("kernel_failure","Embedded STEP content could not be imported");
+  reader.SetSystemLengthUnit(1.0);
+  const int roots=reader.NbRootsForTransfer(),transferred=reader.TransferRoots();
+  if(roots<=0||transferred!=roots)throw Error("kernel_failure","STEP did not transfer every root; partial transfers are rejected",
+    {{"total_roots",roots},{"transferred_roots",transferred}});
+  return reader.OneShape();
 }
 bool matches(const Json& descriptor, const Json& selector, const Json& parameters) {
   if (descriptor.at("degenerate") == true || descriptor.at("curve_kind") != selector.at("curve_kind")) return false;
@@ -758,6 +873,30 @@ TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp
 }
 }
 
+Json inspect_step(const std::string& content) {
+  try {
+    const auto shape=read_step(content);ShapeMap solids;TopExp::MapShapes(shape,TopAbs_SOLID,solids);
+    if(solids.Extent()>4096)throw Error("limit_exceeded","STEP inspection permits at most 4096 solids");
+    Json result={{"valid",true},{"meshable",true},{"solid_count",solids.Extent()},{"solids",Json::array()},{"errors",Json::array()}};
+    try{check_shape(shape);}catch(const Error& e){result["valid"]=false;result["meshable"]=false;result["errors"].push_back(e.json());}
+    for(int i=1;i<=solids.Extent();++i) {
+      const auto& solid=solids(i);GProp_GProps volume;BRepGProp::VolumeProperties(solid,volume);
+      Json entry={{"index",i},{"valid",true},{"meshable",false},{"bounds_mm",bounds(solid)},
+        {"volume_mm3",std::isfinite(volume.Mass())?Json(volume.Mass()):Json(nullptr)},{"errors",Json::array()}};
+      try{check_shape(solid);}catch(const Error& e){entry["valid"]=false;entry["errors"].push_back(e.json());}
+      if(entry.at("valid")==true)try{
+        BRepMesh_IncrementalMesh mesh(solid,.1,false,.5,false);int j=0;
+        if(!mesh.IsDone())throw Error("kernel_failure","Solid tessellation failed");
+        for(TopExp_Explorer f(solid,TopAbs_FACE);f.More();f.Next())tessellated_faces(TopoDS::Face(f.Current()),{{"solid_index",i},{"face_id","face-"+std::to_string(++j)}});
+        entry["meshable"]=true;
+      }catch(const Error& e){entry["errors"].push_back(e.json());}
+      if(entry.at("meshable")==false)result["meshable"]=false;
+      result["solids"].push_back(std::move(entry));
+    }
+    return result;
+  }catch(const Standard_Failure& e){throw occt_error(e);}
+}
+
 BuiltModel::BuiltModel(const Json& model) : BuiltModel(model,FeatureCache{}) {}
 BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std::make_unique<Impl>()) {
   validate_model(model);
@@ -912,25 +1051,17 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
             {{"source_feature_id",input},{"removed_volume_mm3",removed},{"hole_volume_mm3",cutter.Mass()}});
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "import_step") {
-        STEPControl_Reader reader;
-        // Import transfers the supplied geometry; optional shape-healing passes
-        // must not silently change its topology or orientation before validation.
-        reader.SetShapeProcessFlags(ShapeProcess::OperationsFlags{});
-        std::istringstream stream(text_field(feature,"content"));
-        if (reader.ReadStream("embedded.step",stream) != IFSelect_RetDone)
-          throw Error("kernel_failure","Embedded STEP content could not be imported");
-        reader.SetSystemLengthUnit(1.0); // OCCT length-unit scale 1 is millimeters.
-        // TransferRoots skips roots that fail and returns only the successful
-        // count. Anything short of every root is a lost part, never an import.
-        const int roots=reader.NbRootsForTransfer();
-        const int transferred=reader.TransferRoots();
-        const Json counts={{"transferred_roots",transferred},{"total_roots",roots}};
-        if (roots <= 0 || transferred <= 0)
-          throw Error("kernel_failure","Embedded STEP content could not be imported",counts);
-        if (transferred != roots)
-          throw Error("kernel_failure","Embedded STEP import transferred only "+std::to_string(transferred)+" of "+
-            std::to_string(roots)+" root entities; partial imports are rejected",counts);
-        shape=reader.OneShape();
+        shape=read_step(text_field(feature,"content"));
+        if(feature.contains("solid_indices")) {
+          ShapeMap solids;TopExp::MapShapes(shape,TopAbs_SOLID,solids);
+          TopoDS_Compound selected;BRep_Builder builder;builder.MakeCompound(selected);
+          for(const auto& value:feature.at("solid_indices")) {
+            const auto index=value.get<int>();
+            if(index>solids.Extent())throw Error("selection_missing","STEP solid index is absent from the pinned source",{{"solid_index",index},{"solid_count",solids.Extent()}});
+            builder.Add(selected,solids(index));
+          }
+          shape=selected;
+        }
       } else if (type == "cut") {
         BRepAlgoAPI_Cut operation;
         NCollection_List<TopoDS_Shape> left, right;
@@ -1219,10 +1350,11 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
       {"selection_lifetime", "evaluation"}, {"linear_deflection_mm", 0.1}, {"angular_deflection_rad", 0.5},
       {"positions", Json::array()}, {"triangles", Json::array()}, {"triangle_faces", Json::array()}, {"edges", Json::array()}};
     for (int i = 1; i <= geometry.faces.Extent(); ++i) {
-      const auto face = TopoDS::Face(geometry.faces(i));
+      const Json context={{"feature_id",feature_id.empty()?impl_->output:feature_id},{"face_id","face-"+std::to_string(i)},
+        {"part_id",geometry.parts.empty()?Json(nullptr):Json(geometry.face_parts[i])}};
+      for(const auto& face:tessellated_faces(TopoDS::Face(geometry.faces(i)),context)) {
       TopLoc_Location location;
       const auto triangulation = BRep_Tool::Triangulation(face, location);
-      if (triangulation.IsNull()) throw Error("kernel_failure", "A face has no triangulation", {{"face_id", "face-" + std::to_string(i)}});
       const auto offset = result.at("positions").size();
       if (offset + triangulation->NbNodes() > vertex_limit || result.at("triangles").size() + triangulation->NbTriangles() > triangle_limit)
         throw Error("limit_exceeded", "Mesh exceeds its vertex or triangle limit", {{"vertex_limit", vertex_limit}, {"triangle_limit", triangle_limit}});
@@ -1234,6 +1366,7 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
         result["triangles"].push_back({offset+a-1, offset+b-1, offset+c-1});
         result["triangle_faces"].push_back("face-" + std::to_string(i));
       }
+    }
     }
     std::size_t total_points = 0;
     for (int i = 1; i <= geometry.edges.Extent(); ++i) {
@@ -1256,6 +1389,83 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
+
+Json BuiltModel::print_meshes(const std::string& feature_id) const {
+  try {
+    const auto& geometry=impl_->feature(feature_id);Json result=Json::array();
+    std::vector<std::pair<std::string,TopoDS_Shape>> leaves;
+    if(geometry.parts.empty())leaves.emplace_back(feature_id.empty()?impl_->output:feature_id,geometry.shape);
+    else for(const auto& part:geometry.parts)leaves.emplace_back(part.id,part.shape);
+    std::size_t total_vertices=0,total_triangles=0;
+    for(const auto& [name,shape]:leaves) {
+      ShapeMap solids;TopExp::MapShapes(shape,TopAbs_SOLID,solids);
+      for(int i=1;i<=solids.Extent();++i) {
+        if(result.size()>=4096)throw Error("limit_exceeded","3MF export permits at most 4096 solids");
+        const auto source_id=solids.Extent()==1?name:name+"/solid-"+std::to_string(i);
+        const auto& exact_solid=solids(i);BRepBuilderAPI_Copy copy(exact_solid);auto solid=copy.Shape();
+        BRepMesh_IncrementalMesh mesh(solid,.1,false,.5,false);
+        if(!mesh.IsDone())throw Error("export_failed","Solid tessellation failed",{{"source_id",source_id}});
+        bool missing=false;TopLoc_Location location;
+        for(TopExp_Explorer face(solid,TopAbs_FACE);face.More();face.Next())if(BRep_Tool::Triangulation(TopoDS::Face(face.Current()),location).IsNull())missing=true;
+        if(missing) {
+          // Retessellate a private shell with a clean seam on a complete
+          // analytic wall. Sewing coordinates boundary discretization across
+          // neighbors. The exact model is retained; changed measurements fail.
+          BRepBuilderAPI_Sewing sewing(1e-7);
+          for(TopExp_Explorer it(solid,TopAbs_FACE);it.More();it.Next()) {
+            auto face=TopoDS::Face(it.Current());
+            if(BRep_Tool::Triangulation(face,location).IsNull()) {
+              const auto clean=periodic_rectangle(face);
+              if(!clean)throw Error("export_failed","Cannot produce a closed print mesh for this periodic trim",{{"source_id",source_id}});
+              face=*clean;
+            }
+            sewing.Add(face);
+          }
+          sewing.Perform();const auto sewn=sewing.SewedShape();
+          if(sewn.IsNull()||!BRepCheck_Analyzer(sewn).IsValid())throw Error("export_failed","Periodic print mesh boundary normalization failed",{{"source_id",source_id}});
+          GProp_GProps va,vb,aa,ab;BRepGProp::VolumeProperties(solid,va);BRepGProp::VolumeProperties(sewn,vb);BRepGProp::SurfaceProperties(solid,aa);BRepGProp::SurfaceProperties(sewn,ab);
+          bool same=std::abs(va.Mass()-vb.Mass())<=1e-7*std::max(1.0,std::abs(va.Mass()))&&std::abs(aa.Mass()-ab.Mass())<=1e-7*std::max(1.0,std::abs(aa.Mass()));
+          const auto a=bounds(solid),b=bounds(sewn);for(const auto* end:{"min","max"})for(int k=0;k<3;++k)same=same&&std::abs(a.at(end)[k].get<double>()-b.at(end)[k].get<double>())<=1e-6;
+          if(!same)throw Error("export_failed","Periodic mesh normalization changed source measurements",{{"source_id",source_id}});
+          solid=sewn;BRepTools::Clean(solid);BRepMesh_IncrementalMesh retry(solid,.1,false,.5,false);
+          if(!retry.IsDone())throw Error("export_failed","Periodic print tessellation failed",{{"source_id",source_id}});
+        }
+        using Key=std::array<long long,3>;std::map<Key,std::vector<std::size_t>> buckets;
+        std::vector<gp_Pnt> vertices;std::vector<std::array<std::size_t,3>> triangles;
+        const auto bb=bounds(solid);const auto base=bb.at("min").get<std::array<double,3>>();
+        const auto vertex=[&](const gp_Pnt& p){
+          constexpr double tolerance=1e-7;Key key{};
+          for(int k=0;k<3;++k){const double local=p.Coord(k+1)-base[k];if(!std::isfinite(local)||std::abs(local)>1e6)throw Error("limit_exceeded","Print mesh extent exceeds 1,000,000 mm");key[k]=static_cast<long long>(std::floor(local/tolerance));}
+          for(int x=-1;x<=1;++x)for(int y=-1;y<=1;++y)for(int z=-1;z<=1;++z){auto it=buckets.find({key[0]+x,key[1]+y,key[2]+z});if(it!=buckets.end())for(auto index:it->second)if(vertices[index].Distance(p)<=tolerance)return index;}
+          if(++total_vertices>2000000)throw Error("limit_exceeded","Print export exceeds two million vertices");
+          const auto index=vertices.size();vertices.push_back(p);buckets[key].push_back(index);return index;
+        };
+        int face_index=0;
+        for(TopExp_Explorer it(solid,TopAbs_FACE);it.More();it.Next()) {
+          for(const auto& face:tessellated_faces(TopoDS::Face(it.Current()),{{"source_id",source_id},{"face_id","face-"+std::to_string(++face_index)}})) {
+            TopLoc_Location loc;const auto tri=BRep_Tool::Triangulation(face,loc);std::vector<std::size_t> ids(tri->NbNodes()+1);
+            for(int n=1;n<=tri->NbNodes();++n)ids[n]=vertex(tri->Node(n).Transformed(loc.Transformation()));
+            for(int n=1;n<=tri->NbTriangles();++n){int a,b,c;tri->Triangle(n).Get(a,b,c);if(face.Orientation()==TopAbs_REVERSED)std::swap(b,c);
+              std::array<std::size_t,3> t={ids[a],ids[b],ids[c]};
+              if(t[0]==t[1]||t[1]==t[2]||t[0]==t[2])continue; // Zero-area seam slivers after bounded vertex welding.
+              if(++total_triangles>2000000)throw Error("limit_exceeded","Print export exceeds two million triangles");triangles.push_back(t);
+            }
+          }
+        }
+        std::map<std::pair<std::size_t,std::size_t>,std::pair<int,int>> edges;
+        for(const auto& t:triangles)for(int k=0;k<3;++k){auto a=t[k],b=t[(k+1)%3];const int direction=a<b?1:-1;if(a>b)std::swap(a,b);auto& edge=edges[{a,b}];++edge.first;edge.second+=direction;}
+        std::size_t open=0;for(const auto& [key,value]:edges)if(value.first!=2||value.second!=0)++open;
+        if(open)throw Error("export_failed","Print mesh is not closed and consistently oriented",{{"source_id",source_id},{"invalid_edge_count",open}});
+        double signed_volume=0;const gp_Pnt origin(base[0],base[1],base[2]);
+        for(const auto& t:triangles)signed_volume+=gp_Vec(origin,vertices[t[0]]).Dot(gp_Vec(origin,vertices[t[1]]).Crossed(gp_Vec(origin,vertices[t[2]])))/6;
+        if(!std::isfinite(signed_volume)||signed_volume<=0)throw Error("export_failed","Print mesh has nonpositive oriented volume",{{"source_id",source_id}});
+        Json positions=Json::array(),indices=Json::array();for(const auto& p:vertices)positions.push_back(point(p));for(const auto& t:triangles)indices.push_back(t);
+        result.push_back({{"source_id",source_id},{"bounds_mm",bb},{"positions",positions},{"triangles",indices}});
+      }
+    }
+    return result;
+  }catch(const Standard_Failure& e){throw occt_error(e,{{"feature_id",feature_id.empty()?impl_->output:feature_id}},"export_failed");}
+}
 
 Json BuiltModel::section(const Json& query,const std::string& feature_id) const {
   validate_section_query(query);const auto selected=feature_id.empty()?impl_->output:feature_id;
@@ -2225,17 +2435,20 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       if (writer.Transfer(impl_->feature(feature_id).shape, STEPControl_AsIs) != IFSelect_RetDone || writer.Write(filename.c_str()) != IFSelect_RetDone)
         throw Error("export_failed", "STEP writer failed");
     } else if (format == "stl") {
-      BRepBuilderAPI_Copy copy(impl_->feature(feature_id).shape);
-      BRepMesh_IncrementalMesh mesh(copy.Shape(), 0.1, false, 0.5, false);
-      if (!mesh.IsDone()) throw Error("export_failed", "Tessellation failed");
-      StlAPI_Writer writer;
-      writer.ASCIIMode() = false;
-      std::ofstream output(path, std::ios::binary | std::ios::trunc);
-      if (!output || !writer.Write(copy.Shape(), output)) throw Error("export_failed", "STL writer failed");
-      output.flush();
-      if (!output) throw Error("export_failed", "STL stream write failed");
-      output.close();
-      if (output.fail()) throw Error("export_failed", "STL stream close failed");
+      const auto meshes=print_meshes(feature_id);std::uint32_t triangles=0;
+      for(const auto& mesh:meshes)triangles+=static_cast<std::uint32_t>(mesh.at("triangles").size());
+      std::ofstream output(path,std::ios::binary|std::ios::trunc);
+      if(!output)throw Error("export_failed","Cannot open STL output");
+      const std::string header="Agent CAD closed solid mesh";std::array<char,80> padded{};std::copy(header.begin(),header.end(),padded.begin());output.write(padded.data(),padded.size());
+      const auto u32=[&](std::uint32_t value){for(int k=0;k<4;++k)output.put(static_cast<char>((value>>(8*k))&255));};
+      const auto f32=[&](double value){const float f=static_cast<float>(value);if(!std::isfinite(f))throw Error("export_failed","STL coordinate exceeds float representation");u32(std::bit_cast<std::uint32_t>(f));};
+      u32(triangles);
+      for(const auto& mesh:meshes)for(const auto& t:mesh.at("triangles")) {
+        std::array<gp_Pnt,3> p;for(int k=0;k<3;++k){const auto v=mesh.at("positions").at(t[k].get<std::size_t>()).get<std::array<double,3>>();p[k]=gp_Pnt(v[0],v[1],v[2]);}
+        gp_Vec normal=gp_Vec(p[0],p[1]).Crossed(gp_Vec(p[0],p[2]));if(normal.Magnitude()>0)normal.Normalize();
+        for(int k=1;k<=3;++k)f32(normal.Coord(k));for(const auto& vertex:p)for(int k=1;k<=3;++k)f32(vertex.Coord(k));output.put(0);output.put(0);
+      }
+      output.flush();if(!output)throw Error("export_failed","STL stream write failed");output.close();if(output.fail())throw Error("export_failed","STL stream close failed");
     } else throw Error("invalid_argument", "Export format must be step or stl");
   } catch (const Standard_Failure& e) {
     throw occt_error(e, Json::object(), "export_failed");

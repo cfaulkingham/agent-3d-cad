@@ -35,7 +35,13 @@ Json rewrite_parameters(const Json& value,const Json& replacements,std::size_t& 
   }
   if(value.is_object()) {
     charge(2);Json result=Json::object();
-    for(const auto& item:value.items()){charge(item.key().size()+4);result[item.key()]=rewrite_parameters(item.value(),replacements,remaining);}return result;
+    for(const auto& item:value.items()) {
+      charge(item.key().size()+4);
+      if(value.value("type",Json())=="import_step" && item.key()=="content" && item.value().is_string()) {
+        charge(2);result[item.key()]=item.value();
+      } else result[item.key()]=rewrite_parameters(item.value(),replacements,remaining);
+    }
+    return result;
   }
   if(value.is_array()) {
     charge(2+value.size());Json result=Json::array();

@@ -308,7 +308,10 @@ offsets only affect the selected projection, never the model or mate solution.
 Internal primitives remain axis-aligned in their source coordinates.
 
 M0 bounds documents to 1 MiB of JSON, nesting depth 64, 128 parameters, 256
-features, and 256 operations per edit. Input numbers are finite and within
+features, and 256 operations per edit. The current STEP importer excludes embedded
+STEP source strings from internal document/worker JSON byte budgets; imports
+have no fixed file-size cap and remain subject to worker memory/time budgets.
+Transport input envelopes and ordinary metadata retain their byte limits. Input numbers are finite and within
 plus/minus 1,000,000; positive primitive dimensions/radii are at least 0.00001 mm.
 These limits do not bound kernel execution time. M2 must add process deadlines,
 memory limits, queue admission, cancellation, and recovery before untrusted
@@ -374,3 +377,11 @@ Each milestone in `ROADMAP.md` has testable acceptance criteria. Maintain actual
 evidence in `HANDOFF.md`: commands, platform, kernel version, successes,
 failures, and unverified claims. New agents should be able to pick one next
 task, run a reproducible baseline, and demonstrate a concrete increment.
+
+
+STEP workflow extension (2026-10-10): native read-only inspection diagnoses
+invalid per-solid input before admission. Explicit source-hash-qualified subsets
+can become opaque imported features. Periodic meshing retries preserve the exact
+source; complete closed print meshes drive STL and 3MF. Native 3MF and optional
+rectangular plate packing are derived exports with qualified manifests, never
+assembly edits or slicing approval. See PROTOCOL.md for implemented bounds.

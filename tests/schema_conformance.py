@@ -195,7 +195,25 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         "operations": [{"op": "set_parameter", "name": "height", "value": 10}]})
     exported = call("cad_export", {"document_id": "part", "revision": 2, "format": "step"})
     imported = call("cad_import", {"document_id": "imported", "path": exported["path"], "request_id": "import_once"})
+    inspected = call("cad_inspect_step", {"path": exported["path"]})
+    call("cad_import", {"document_id": "source_subset", "path": exported["path"],
+                        "expected_sha256": inspected["source_sha256"], "solid_indices": [1]})
+    call("cad_export", {"document_id": "part", "revision": 2, "format": "3mf", "feature_id": "base",
+                        "layout": {"bed_mm": [256, 256], "margin_mm": 8, "spacing_mm": 3}})
+
     step_bytes = pathlib.Path(exported["path"]).read_bytes()
+    large_path = pathlib.Path(workspace) / "large.step"
+    large_bytes = step_bytes.replace(b"DATA;", (b"/* large source */\n" * 120000) + b"DATA;", 1)
+    large_path.write_bytes(large_bytes)
+    large_import = call("cad_import", {"document_id": "large_schema", "path": str(large_path),
+                                      "expected_sha256": hashlib.sha256(large_bytes).hexdigest()})
+    assert large_import["model"]["features"][0]["content"].encode() == large_bytes
+    call("cad_read", {"document_id": "large_schema"})
+    budget_args = {"action": "submit", "tool": "cad_import", "request_id": "large_budget_schema",
+                   "arguments": {"document_id": "large_budget_schema", "path": str(large_path)},
+                   "budget": {"memory_mb": 8192}}
+    assert Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(budget_args)
+    checks += 2
     step_hash = hashlib.sha256(step_bytes).hexdigest()
     purchase = {"supplier": "Schema fixture supplier", "part_number": "FIXTURE-1", "source_url": "https://example.invalid/FIXTURE-1"}
     bought = call("cad_import", {"document_id": "purchased_schema", "path": exported["path"],

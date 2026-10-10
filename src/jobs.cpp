@@ -1,6 +1,7 @@
 #include "agentcad/jobs.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/kernel.hpp"
+#include "agentcad/print_export.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/robot.hpp"
 #include "agentcad/manufacturing.hpp"
@@ -50,7 +51,8 @@ extern char** environ;
 namespace agentcad {
 namespace {
 constexpr std::size_t max_result_bytes = 64 * 1024 * 1024;
-// result.json and request.json wrap a bounded payload with the job identity.
+// result.json and request.json wrap bounded metadata with the job identity.
+// Embedded STEP source bytes are excluded from these JSON byte budgets.
 constexpr std::size_t max_result_file_bytes = max_result_bytes + 64 * 1024;
 constexpr std::size_t max_request_file_bytes = max_json_bytes + 64 * 1024;
 constexpr int max_active_jobs = 8;
@@ -103,7 +105,7 @@ bool mutation(const std::string& tool) {
 Json budget(const Json& value) {
   fields(value, {}, {"timeout_ms", "memory_mb"});
   Json result = {{"timeout_ms", 30000}, {"memory_mb", 2048}};
-  for (auto [key, minimum, maximum] : {std::tuple{"timeout_ms", 1, 300000}, std::tuple{"memory_mb", 128, 4096}}) {
+  for (auto [key, minimum, maximum] : {std::tuple{"timeout_ms", 1, 300000}, std::tuple{"memory_mb", 128, std::numeric_limits<int>::max()}}) {
     if (!value.contains(key)) continue;
     if (!value.at(key).is_number_integer() || value.at(key) < minimum || value.at(key) > maximum)
       throw Error("invalid_argument", std::string(key) + " is outside its supported integer range");
@@ -121,17 +123,17 @@ fs::path executable_path() {
 }
 Json read_result(const fs::path& path) {
   std::string text;
-  try { text = read_text(path, max_result_bytes); }
+  try { text = read_text(path, unlimited_bytes); }
+  catch (const Error&) { throw Error("worker_failed", "Worker output is missing or unreadable"); }
+  try { return parse_payload_json(text, max_result_bytes); }
   catch (const Error& e) {
-    if (e.code == "limit_exceeded") throw Error("limit_exceeded", "Worker output exceeds 64 MiB");
-    throw Error("worker_failed", "Worker output missing or exceeds 64 MiB");
+    if (e.code == "limit_exceeded") throw;
+    throw Error("worker_failed", "Worker returned malformed JSON");
   }
-  try { return Json::parse(text); }
-  catch (const Json::exception&) { throw Error("worker_failed", "Worker returned malformed JSON"); }
 }
 void write_result(const fs::path& path, const Json& value) {
   const auto text = value.dump();
-  if (text.size() > max_result_bytes) throw Error("limit_exceeded", "Worker result exceeds 64 MiB");
+  if (text.size() > max_result_bytes) validate_payload_size(value, max_result_bytes);
   std::ofstream stream(path, std::ios::binary | std::ios::trunc);
   stream.write(text.data(), static_cast<std::streamsize>(text.size())); stream.close();
   if (!stream) throw Error("storage_error", "Cannot write worker result");
@@ -371,8 +373,8 @@ Json corrupt_view(const std::string& id, std::int64_t timestamp, const Error& er
     {"progress", 0.0}, {"submitted_at_unix_ms", 0}, {"updated_at_unix_ms", timestamp}, {"error", error.json()}};
 }
 void write_request(const fs::path& path, const Json& state, const Json& arguments) {
-  atomic_text(path / "request.json", Json{{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
-    {"tool", state.at("tool")}, {"fingerprint", state.at("fingerprint")}, {"arguments", arguments}}.dump(), max_request_file_bytes);
+  atomic_payload_json(path / "request.json", Json{{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
+    {"tool", state.at("tool")}, {"fingerprint", state.at("fingerprint")}, {"arguments", arguments}}, max_request_file_bytes);
 }
 Json request_arguments(const fs::path& path, const JobRecord& record) {
   if (record.arguments) {
@@ -380,7 +382,7 @@ Json request_arguments(const fs::path& path, const JobRecord& record) {
     return *record.arguments;
   }
   Json request;
-  try { request = parse_json(read_text(path / "request.json", max_request_file_bytes), max_request_file_bytes); }
+  try { request = read_payload_json(path / "request.json", max_request_file_bytes); }
   catch (const Error& e) { throw corrupt("Job request is missing or unreadable: " + std::string(e.what())); }
   const auto& state = record.state;
   if (!request.is_object() || request.value("schema_version", Json()) != job_schema_version ||
@@ -393,21 +395,22 @@ Json request_arguments(const fs::path& path, const JobRecord& record) {
 }
 // Publishes result.json, then records its digest in the (not yet saved) state.
 void attach_result(const fs::path& path, Json& state, const Json& result) {
-  const auto text = Json{{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
-    {"fingerprint", state.at("fingerprint")}, {"result", result}}.dump();
-  if (text.size() > max_result_file_bytes) throw Error("limit_exceeded", "Job result exceeds 64 MiB");
-  atomic_text(path / "result.json", text, max_result_file_bytes);
+  const Json envelope={{"schema_version", job_schema_version}, {"job_id", state.at("job_id")},
+    {"fingerprint", state.at("fingerprint")}, {"result", result}};
+  validate_payload_size(envelope, max_result_file_bytes);
+  const auto text = envelope.dump();
+  atomic_text(path / "result.json", text, unlimited_bytes);
   state["result_sha256"] = sha256(text); state["result_bytes"] = text.size();
 }
 // With a recorded digest, result.json must match it exactly. Without one (the
 // coordinator stopped before its state flipped) the file's identity must match.
 StoredResult read_stored_result(const fs::path& path, const Json& state) {
-  const auto text = read_text(path / "result.json", max_result_file_bytes);
+  const auto text = read_text(path / "result.json", unlimited_bytes);
   auto digest = sha256(text);
   if (state.contains("result_sha256") && (state.at("result_sha256") != digest || state.at("result_bytes") != text.size()))
     throw corrupt("Job result does not match its recorded digest");
   Json envelope;
-  try { envelope = Json::parse(text); } catch (const Json::exception&) { throw corrupt("Job result is not valid JSON"); }
+  try { envelope = parse_payload_json(text, max_result_file_bytes); } catch (const Error&) { throw corrupt("Job result is not valid bounded JSON metadata"); }
   if (!envelope.is_object() || envelope.value("schema_version", Json()) != job_schema_version ||
       envelope.value("job_id", Json()) != state.at("job_id") || envelope.value("fingerprint", Json()) != state.at("fingerprint") ||
       !envelope.contains("result"))
@@ -674,8 +677,8 @@ ParallelProjection project_in_parallel(const fs::path& workspace, const Json& mo
         auto limits = current_budget; limits["timeout_ms"] = std::max<std::int64_t>(1, remaining_ms(started));
         const Json single = {{"kind","projection"},{"drawing",{{"views",Json::array({drawing.at("views").at(view)})},
           {"hidden_lines",drawing.at("hidden_lines")}}}};
-        atomic_text(files->path / "input.json", Json{{"model", model}, {"request", single}, {"budget", limits},
-          {"cache_root",path_to_utf8(workspace/".cache")}}.dump());
+        atomic_payload_json(files->path / "input.json", Json{{"model", model}, {"request", single}, {"budget", limits},
+          {"cache_root",path_to_utf8(workspace/".cache")}});
         auto child = std::make_unique<Child>(launch({"--internal-geometry-worker", files->path / "input.json", files->path / "output.json"},
           true, current_budget.at("memory_mb")));
         active.push_back({view, files, std::move(child), std::move(slot)});
@@ -753,8 +756,8 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
   } catch (const Json::exception&) { missing.clear(); }
   if (missing.size() >= 2) parallel = project_in_parallel(workspace, model, *drawing, missing, started);
   TemporaryDirectory files(workspace);
-  atomic_text(files.path / "input.json", Json{{"model", model}, {"request", request}, {"budget", current_budget},
-    {"cache_root",path_to_utf8(workspace/".cache")}}.dump());
+  atomic_payload_json(files.path / "input.json", Json{{"model", model}, {"request", request}, {"budget", current_budget},
+    {"cache_root",path_to_utf8(workspace/".cache")}});
   if (parallel) atomic_text(files.path / "precomputed.json", Json{{"views",parallel->supplied},{"summary",parallel->summary}}.dump());
   auto child = launch({"--internal-geometry-worker", files.path / "input.json", files.path / "output.json"}, true, current_budget.at("memory_mb"));
   try {
@@ -856,7 +859,7 @@ int process_worker_main(const fs::path& input,const fs::path& output) {
 
 int geometry_worker_main(const fs::path& input, const fs::path& output) {
   try {
-    const auto payload = parse_json(read_text(input)); fields(payload, {"model", "request", "budget"}, {"cache_root"});
+    const auto payload = read_payload_json(input); fields(payload, {"model", "request", "budget"}, {"cache_root"});
     const auto limits = budget(payload.at("budget"));
 #if !defined(_WIN32) && !defined(__APPLE__)
     const auto bytes = static_cast<rlim_t>(limits.at("memory_mb").get<int>()) * 1024 * 1024;
@@ -875,6 +878,9 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
+    if(kind=="inspect_step") {
+      write_result(output,{{"result",inspect_step(text_field(payload.at("model").at("features")[0],"content"))},{"cache",Json::object()}});return 0;
+    }
     if(kind=="gcode_review") {
       const auto report=inspect_gcode(read_text(path_from_utf8(text_field(request,"path")),gcode_bytes_limit),request.at("options"));
       write_result(output,{{"result",{{"gcode_report",report}}},{"cache",Json::object()}});
@@ -979,7 +985,10 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       check_drawing_totals(requested,Json(projection.budgets),text_field(payload.at("model"),"output"));
       result["drawing"]=render_drawing(assembled,drawing,request.at("identity"));
     }
-    if (kind == "export") geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"),feature);
+    if (kind == "export") {
+      if(request.at("format")=="3mf")result["print_export"]=export_3mf(geometry(),feature,request.value("options",Json()),request.at("identity"),path_from_utf8(text_field(request,"path")));
+      else geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"),feature);
+    }
     else if(kind=="manufacturing") {
       result["manufacturing"]=manufacture(payload.at("model"),geometry(),request.at("options"),request.at("identity"),path_from_utf8(text_field(request,"path")));
     }
@@ -1058,7 +1067,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

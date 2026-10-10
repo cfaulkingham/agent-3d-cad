@@ -165,6 +165,14 @@ DocumentLock::~DocumentLock() {
 #endif
 }
 
+Json read_payload_json(const fs::path& path, std::size_t max_bytes) {
+  return parse_payload_json(read_text(path, unlimited_bytes), max_bytes);
+}
+void atomic_payload_json(const fs::path& path, const Json& value, std::size_t max_bytes) {
+  validate_payload_size(value, max_bytes);
+  atomic_text(path, value.dump(2) + "\n", unlimited_bytes);
+}
+
 std::string read_text(const fs::path& path, std::size_t max_bytes) {
 #ifdef _WIN32
   reject_symlink(path);
@@ -323,7 +331,7 @@ std::uint64_t head_revision(const fs::path& document) {
 }
 // The receipt a revision file records for request_id, if any.
 std::optional<Json> revision_receipt(const fs::path& document, std::uint64_t revision, const std::string& request_id) {
-  const auto raw = parse_json(read_text(document / "revisions" / (std::to_string(revision) + ".json")));
+  const auto raw = read_payload_json(document / "revisions" / (std::to_string(revision) + ".json"));
   if (!raw.is_object() || !raw.contains("receipt")) return {};
   const auto& receipt = raw.at("receipt");
   if (!receipt.is_object() || receipt.value("request_id", Json()) != request_id) return {};
@@ -385,7 +393,7 @@ Json Store::read(const std::string& id, std::optional<std::uint64_t> revision) c
   const auto current = revision_number(head.at("revision"));
   const auto requested = revision.value_or(current);
   if (requested > current) throw Error("not_found", "Revision has not been committed");
-  auto record = parse_json(read_text(path / "revisions" / (std::to_string(requested) + ".json")));
+  auto record = read_payload_json(path / "revisions" / (std::to_string(requested) + ".json"));
   fields(record, {"schema_version", "document_id", "revision", "kernel_version", "model"}, {"receipt"});
   if (record.at("schema_version") != 1 || record.at("document_id") != id || record.at("revision") != requested)
     throw Error("storage_error", "Revision record does not match its identity");
@@ -418,7 +426,7 @@ Json Store::commit(const std::string& id, const Json& model, bool create, const 
   if (const auto through = std::min(indexed_through(path), committed); through < committed) {
     std::map<std::string, std::uint64_t> receipts;
     for (auto revision = through + 1; revision <= committed; ++revision) {
-      const auto raw = parse_json(read_text(path / "revisions" / (std::to_string(revision) + ".json")));
+      const auto raw = read_payload_json(path / "revisions" / (std::to_string(revision) + ".json"));
       if (raw.is_object() && raw.contains("receipt") && raw.at("receipt").is_object() &&
           raw.at("receipt").contains("request_id") && raw.at("receipt").at("request_id").is_string())
         receipts[raw.at("receipt").at("request_id").get<std::string>()] = revision;
@@ -431,7 +439,7 @@ Json Store::commit(const std::string& id, const Json& model, bool create, const 
   if (!request_id.empty()) write_receipt_entry(path, request_id, next);
   // A snapshot beyond HEAD from a previous interrupted write is uncommitted.
   // It is safe to replace that exact next snapshot while holding the workspace lock.
-  atomic_text(path / "revisions" / (std::to_string(next) + ".json"), record.dump(2) + "\n");
+  atomic_payload_json(path / "revisions" / (std::to_string(next) + ".json"), record);
   atomic_text(path / "HEAD.json", Json{{"revision", next}}.dump() + "\n");
   write_coverage(path, next);
   record.erase("receipt");

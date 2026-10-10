@@ -94,7 +94,7 @@ async fn open_recent(window: WebviewWindow, state: tauri::State<'_, Shared>, ind
 #[serde(deny_unknown_fields)]
 struct ExportRequest { document_id: String, revision: u64, format: String }
 fn generate_export(state: &Desktop, request: &ExportRequest) -> Result<Vec<PathBuf>> {
-    if !["stl", "step", "pdf", "svg", "dxf"].contains(&request.format.as_str()) || request.revision == 0 { return Err("Choose a saved model revision and export format".into()); }
+    if !["stl", "step", "3mf", "pdf", "svg", "dxf"].contains(&request.format.as_str()) || request.revision == 0 { return Err("Choose a saved model revision and export format".into()); }
     let drawing = ["pdf", "svg", "dxf"].contains(&request.format.as_str());
     let mut args = json!({"document_id":request.document_id, "revision":request.revision});
     if drawing { args["drawing"] = json!({"formats":[request.format]}); } else { args["format"] = json!(request.format); }
@@ -180,7 +180,7 @@ mod tests {
         open(&state, state.initial.clone()).unwrap();
         tool(&state, "cad_create", json!({"document_id":"part","model":{"schema_version":1,"units":"mm","parameters":{},"features":[{"id":"box","type":"box","size":[20,10,5]}],"output":"box"}})).unwrap();
         let original = tool(&state, "cad_read", json!({"document_id":"part"})).unwrap();
-        for format in ["step", "stl", "pdf", "svg", "dxf"] {
+        for format in ["step", "stl", "3mf", "pdf", "svg", "dxf"] {
             let files = generate_export(&state, &ExportRequest { document_id: "part".into(), revision: 1, format: format.into() }).unwrap();
             assert_eq!(files.len(), if format == "dxf" {4} else {1}, "{format}");
             for path in files {

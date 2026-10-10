@@ -38,8 +38,9 @@ The saved `import_step` feature contains the complete original STEP string,
 its hash and optional purchasing identity. No path or URL is needed to rebuild.
 Direct document creation/editing must provide `purchase.artifact_sha256` and it
 must equal the feature's verified content hash. Ordinary unsourced imports remain
-compatible. STEP imports retain the existing 512 KiB, UTF-8, complete-root and
-valid-solid limits; no feature history is reconstructed.
+compatible. STEP imports have no fixed source byte cap; UTF-8, complete-root and
+valid-solid requirements and worker memory/time budgets still apply. No feature
+history is reconstructed.
 
 Use `set_component` with an explicit source document/revision to incorporate an
 imported part into another document. The self-contained captured source retains

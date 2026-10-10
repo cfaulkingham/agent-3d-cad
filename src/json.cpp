@@ -19,6 +19,40 @@ Json parse_json(const std::string& text, std::size_t max_bytes) {
   } catch (const Json::exception& e) { throw Error("invalid_json", e.what()); }
 }
 
+namespace {
+void charge_payload(const Json& value, std::size_t& remaining, unsigned depth) {
+  if (depth > 64) throw Error("limit_exceeded", "JSON nesting exceeds 64 levels");
+  const auto charge = [&](std::size_t bytes) {
+    if (bytes > remaining) throw Error("limit_exceeded", "JSON metadata exceeds its byte limit (STEP source bytes excluded)");
+    remaining -= bytes;
+  };
+  if (value.is_object()) {
+    charge(2);
+    const bool step = value.contains("type") && value.at("type") == "import_step";
+    bool first = true;
+    for (const auto& [key, item] : value.items()) {
+      charge(Json(key).dump().size() + 1 + (first ? 0 : 1)); first = false;
+      if (step && key == "content" && item.is_string()) charge(2);
+      else charge_payload(item, remaining, depth + 1);
+    }
+  } else if (value.is_array()) {
+    charge(2); bool first = true;
+    for (const auto& item : value) {
+      if (!first) charge(1); first = false;
+      charge_payload(item, remaining, depth + 1);
+    }
+  } else charge(value.dump().size());
+}
+}
+void validate_payload_size(const Json& value, std::size_t max_bytes) {
+  charge_payload(value, max_bytes, 0);
+}
+Json parse_payload_json(const std::string& text, std::size_t max_bytes) {
+  auto value = parse_json(text, unlimited_bytes);
+  if (text.size() > max_bytes) validate_payload_size(value, max_bytes);
+  return value;
+}
+
 bool parse_decimal(std::string_view text, double& value) {
   if (text.empty() || text.front() == '+') return false;
   // Check decimal syntax before the C conversion, which also accepts leading

@@ -5,10 +5,12 @@
 #include <initializer_list>
 #include <optional>
 #include <string_view>
+#include <limits>
 
 namespace agentcad {
 using Json = nlohmann::json;
 inline constexpr std::size_t max_json_bytes = 1024 * 1024;
+inline constexpr std::size_t unlimited_bytes = std::numeric_limits<std::size_t>::max();
 
 class Error : public std::runtime_error {
 public:
@@ -19,6 +21,11 @@ public:
 };
 
 Json parse_json(const std::string& text, std::size_t max_bytes = max_json_bytes);
+// Internal documents and worker payloads carry exact STEP source strings. Charge
+// their structure/metadata to the JSON budget, but not import_step.content.
+// Transport requests still use parse_json and their existing total byte limit.
+void validate_payload_size(const Json& value, std::size_t max_bytes = max_json_bytes);
+Json parse_payload_json(const std::string& text, std::size_t max_bytes = max_json_bytes);
 // Parse one finite decimal token with classic-locale syntax, no leading '+' or
 // whitespace, and no overflow or underflow to zero. Leaves value unchanged on failure.
 bool parse_decimal(std::string_view text, double& value);

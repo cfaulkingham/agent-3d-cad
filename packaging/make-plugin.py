@@ -56,7 +56,7 @@ catalog.write_text(json.dumps({
         'policy': {'installation': 'AVAILABLE', 'authentication': 'ON_INSTALL'}, 'category': 'Productivity'}]
 }, indent=2) + '\n', encoding='utf-8')
 shutil.copytree(repo / 'plugins/agent-cad/skills', destination / 'skills')
-shutil.copytree(repo / 'skills/native-cad', destination / 'skills/native-cad')
+shutil.copytree(root / 'share/agent-3d-cad/skills/native-cad', destination / 'skills/native-cad')
 (destination / 'assets').mkdir()
 shutil.copy2(repo / 'desktop/icons/icon.png', destination / 'assets/icon.png')
 for notice in ['LICENSE', 'NOTICE']:

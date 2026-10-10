@@ -62,4 +62,8 @@ for(const mode of ['desktop','job']){
 {
  const f=fixture(),pending=f.control.click();f.response.resolve({state:'failed',job_id:'export_job',error:{message:'Native export failed'}});await pending;check(f.messages.at(-1)==='Native export failed','Current export failure remains visible');
 }
+{
+ const f=fixture('job','3mf'),pending=f.control.click();f.response.resolve({state:'succeeded',result:{path:'plate-1.3mf'}});await pending;
+ check(f.calls[0].args.tool==='cad_export'&&f.calls[0].args.arguments.format==='3mf'&&f.nodes.get('copy-text').value==='plate-1.3mf','3MF toolbar export uses the native exporter');
+}
 console.log('PASS '+checks+' export UI source-qualification checks');
