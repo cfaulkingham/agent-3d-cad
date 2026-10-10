@@ -7,6 +7,42 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Export dropdown on the bottom toolbar — 2026-10-09
+
+Moved Export from the Models menu to the right end of the bottom toolbar. Its
+dropdown retains STEP/STL/PDF/SVG/DXF saved-revision exports and PNG capture.
+Export stays visible at compact widths while camera and inspection controls
+scroll horizontally. Escape closes the dropdown and returns focus to its toolbar
+button. Existing draft/read-only restrictions and native export behavior are
+unchanged; no tool or document contract changed.
+
+Validation (macOS arm64): native build succeeded; **7/7 relevant CTest suites
+passed in 0.80 s** (embedded_assets, desktop_assets, artifact_retarget_ui,
+desktop_bridge, viewer_shell, live_ui and export_ui). JavaScript syntax and
+`git diff --check` passed. Real browser checks at 900 and 360 px verified direct
+toolbar access, the format/PNG options and Escape focus restoration. At 360 px,
+Export occupied x=286.26–354, fully inside the viewport. Clicking Export saved
+revision produced a valid 30,427-byte STEP file from the temporary bracket
+workspace. Standard packaged-plugin smoke checks passed complete provenance,
+empty-PATH discovery, create/edit/reopen/history and all supported CAD/drawing
+formats. Evidence and screenshot: `.local/evidence/export-toolbar-20261009/`.
+
+Installed the working-tree build through the bundled desktop CLI; VERSION stays
+`0.1.0-preview.1`. Current source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-68fadab-export-toolbar-20261009`, using
+contained command `./bin/agent-3d-cad-export-toolbar-20261009`. All **308 installed
+files** match the prepared inventory, all **42 saved model files** are unchanged,
+and the workspace override and unrelated settings are preserved. Native SHA-256:
+`9a9db364da0b2f5e78e6bf9567d9355cb2e6df02272a58a5b04034b0d8497572`.
+Embedded viewer SHA-256:
+`8c327ffb7c2be9305cc22e002a347213d0cb73d5600a32c2388ade5ae9f5e860`.
+A fresh bundled runtime discovers the enabled plugin, both skills and **28
+tools**; the installed native service serves the exact toolbar viewer with PATH
+empty. Earlier versioned sources remain; no public release/tag was created.
+Current-session embedded reload acceptance remains pending: fresh-runtime and
+browser-harness checks do not establish it. Restart the host and reopen the
+viewer to verify that gate. Remaining 1.0 host/platform/signing gates still apply.
+
 ## Select in the viewer, request edits in the main chat — 2026-10-09
 
 Removed the embedded Quick Edit composer, Send/Copy request controls, request

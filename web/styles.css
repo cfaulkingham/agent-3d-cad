@@ -280,7 +280,11 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 .popover-left{top:40px;left:10px;max-height:calc(100% - 90px)}
 .popover-right,.popover-right-top{top:auto;right:12px;bottom:45px;max-height:calc(100% - 100px);width:min(320px,calc(100% - 24px))}
 .viewer-footer{position:absolute;bottom:0;left:0;right:0;height:36px;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface);border-top:1px solid var(--hairline);z-index:6;padding:4px 10px}
-.view-toolbar{display:flex;align-items:center;gap:6px;min-width:0}
+.view-toolbar{display:flex;align-items:center;gap:10px;min-width:0;width:100%}
+.view-controls{display:flex;align-items:center;gap:6px;min-width:0;overflow-x:auto}
+.view-controls>*{flex-shrink:0}
+.toolbar-export{flex-shrink:0;display:flex;align-items:center;gap:6px;height:26px;padding:3px 10px;font-size:12px;margin-left:auto;border:0;background:var(--surface-2);border-radius:6px;white-space:nowrap}
+.toolbar-export[aria-expanded=true],.toolbar-export[aria-expanded=true]:hover:not(:disabled){background:var(--accent);color:var(--on-accent)}
 .view-toolbar .segmented button{padding:3px 13px}
 .footer-icon{width:22px;height:26px;display:grid;place-items:center;padding:0;background:transparent;border:0;color:var(--text-2);border-radius:4px}
 .footer-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
@@ -295,8 +299,9 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 #app[data-compact=true] .top-right{gap:6px}
 #app[data-compact=true] .popover-right{top:auto;bottom:45px;max-height:calc(100% - 100px)}
 #app[data-compact=true] .pick-hint{font-size:12px;padding:4px 9px;top:12px}
-#app[data-compact=true] .viewer-footer{height:36px;padding:4px 6px;overflow-x:auto}
-#app[data-compact=true] .view-toolbar{gap:4px;flex-shrink:0}
+#app[data-compact=true] .viewer-footer{height:36px;padding:4px 6px}
+#app[data-compact=true] .view-toolbar{gap:6px}
+#app[data-compact=true] .view-controls{gap:4px}
 #app[data-compact=true] .view-toolbar .segmented button{padding:3px 8px;font-size:12px}
 #app[data-compact=true] .footer-icon{width:20px}
 #app[data-compact=true] .parameter-card{width:min(300px,calc(100% - 24px));top:46px}

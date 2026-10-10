@@ -208,7 +208,10 @@ retains the feature tree and detailed visibility controls. Card arrows collapse
 contents; the Parameters close button leaves a reopen button. Resizing or opening
 and closing Parameters recenters the usable viewport while preserving orbit and zoom.
 
-The Models menu contains the library, exports and optional orientation cube.
+The Models menu contains the library and optional orientation cube. The bottom
+toolbar's **Export** dropdown offers STEP, STL, PDF, SVG and DXF exports of the
+saved revision, plus PNG capture of the current view. It stays visible in compact
+views while the camera and inspection controls can scroll horizontally.
 Clicking geometry reveals the compact selection indicator. The bottom ellipsis
 opens inspection tools (Visual inspection, Colors, Review notes, Saved views,
 Exact section, Face and part clearance, Sequences, Motion and Source). An icon appears only while

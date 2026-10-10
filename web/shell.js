@@ -103,7 +103,7 @@
     }
     function open(key, trigger) {
       if (openKey) close(false);
-      openKey = key; returnTo = key === 'export' ? $('project-pill') : trigger || doc.activeElement;
+      openKey = key; returnTo = trigger || doc.activeElement;
       const entry = popovers[key];
       entry.el.hidden = false;
       entry.trigger?.setAttribute('aria-expanded', 'true');

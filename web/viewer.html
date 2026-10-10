@@ -65,7 +65,6 @@
     <nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav>
   <div class="top-right">
     <button id="fullscreen" class="pill" hidden title="Expand viewer">Expand ↗</button>
-    <button id="export-menu-button" class="pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="export-menu">Export <span class="chevron" aria-hidden="true">▾</span></button>
   </div>
   </section>
 
@@ -173,6 +172,7 @@
 
   <footer class="viewer-footer">
     <nav class="view-toolbar" aria-label="View controls">
+      <div class="view-controls">
       <div id="standard-views" class="segmented" role="group" aria-label="Camera view"><button data-view="iso" aria-pressed="true">Iso</button><button data-view="front" aria-pressed="false">Front</button><button data-view="top" aria-pressed="false">Top</button><button data-view="right" aria-pressed="false">Right</button></div>
       <button id="toggle-grid" class="footer-icon" aria-label="Show grid" title="Grid" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M8 3v18M16 3v18M3 8h18M3 16h18"/></svg></button>
       <button id="toggle-axes" class="footer-icon" aria-label="Show axes" title="Axes" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8zM3 8l9 5 9-5M12 3v19M3 17l9-5 9 5"/></svg></button>
@@ -180,8 +180,10 @@
       <button id="toggle-edges" class="footer-icon" aria-label="Show edges" title="Edges" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="m4 20 16-16"/></svg></button>
       <button id="fit" class="footer-icon" aria-label="Fit model" title="Fit model (Home)"><svg viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/></svg></button>
       <button id="dock-toggle" class="footer-icon" aria-haspopup="true" aria-expanded="false" aria-controls="tool-dock" title="Inspection tools" aria-label="Inspection tools"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+      </div>
+      <div class="corner-readout"><span id="dimensions"></span></div>
+      <button id="export-menu-button" class="toolbar-export" aria-haspopup="dialog" aria-expanded="false" aria-controls="export-menu">Export <span class="chevron" aria-hidden="true">▾</span></button>
     </nav>
-    <div class="corner-readout"><span id="dimensions"></span></div>
   </footer>
 
   <details id="copy-fallback" class="card floating-note" hidden><summary>Export paths</summary><textarea id="copy-text" readonly rows="6" aria-label="Export paths to copy"></textarea></details>
