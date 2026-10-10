@@ -119,11 +119,16 @@ orientation/binormal/guide controls and transition styles. Section planes must
 occupy distinct ordered path stations, including endpoints. See RICHER_MODELING.md.
 
 `sheet_metal` uses one planar sketch, explicit thickness/K-factor and named
-direct base-edge flanges with signed angles, inside radii and straight lengths.
-`sheet_unfold` derives a solid blank from preserved bend intent. Inspect
+bends. Attach to source `edge` selectors, a prior flange `parent` plus named
+`tip|start|end` attachment, or an internal `fold_line` in an existing rectangular
+blank region. Opposite bend pairs form jogs; `hem: true` permits exact ±180°
+open hems. Optional rectangular `relief`, straight-leg `miter`, and developed
+`cuts` preserve their exact formed/flat intent, including cuts through bends.
+`sheet_unfold` derives a solid blank from the preserved recipe. Inspect
 `summary.sheet_metal`; K-factor is an explicit engineering input, and non-midplane
-values give different formed/flat modeled volumes. Chained bends, hems and
-generated relief are unsupported. See SHEET_METAL.md.
+K factors produce distinct modeled formed/flat volumes. A hem's tangent-based
+bend deduction is `null`. Missing/ambiguous references and material collisions
+fail instead of guessing. See `SHEET_METAL.md` and `PARITY_SHEET_METAL.md`.
 
 Use `surface_bezier`/`surface_bspline` for exact world-space rational patches,
 `surface_trim` for rectangular UV trimming, and `surface_shell` for connected

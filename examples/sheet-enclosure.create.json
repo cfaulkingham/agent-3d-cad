@@ -1,0 +1,180 @@
+{
+  "document_id": "sheetEnclosure",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "thickness": 1.5,
+      "k": 0.5,
+      "lip": 8
+    },
+    "features": [
+      {
+        "id": "profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "rectangle",
+          "width": 80,
+          "height": 60
+        }
+      },
+      {
+        "id": "formed",
+        "type": "sheet_metal",
+        "input": "profile",
+        "thickness": {
+          "parameter": "thickness"
+        },
+        "k_factor": {
+          "parameter": "k"
+        },
+        "flanges": [
+          {
+            "id": "wall",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  40,
+                  60,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": 20,
+            "start_gap": 3,
+            "end_gap": 3,
+            "relief": {
+              "width": 1,
+              "depth": 2
+            }
+          },
+          {
+            "id": "lip",
+            "parent": "wall",
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": {
+              "parameter": "lip"
+            }
+          },
+          {
+            "id": "safe",
+            "parent": "lip",
+            "inside_radius": 1,
+            "angle_deg": -180,
+            "hem": true,
+            "length": 3
+          },
+          {
+            "id": "opposite",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  40,
+                  0,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": 20,
+            "start_gap": 3,
+            "end_gap": 3,
+            "relief": {
+              "width": 1,
+              "depth": 2
+            }
+          },
+          {
+            "id": "left",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  0,
+                  30,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": 20,
+            "start_gap": 3,
+            "end_gap": 3,
+            "relief": {
+              "width": 1,
+              "depth": 2
+            }
+          },
+          {
+            "id": "right",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  80,
+                  30,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": 20,
+            "start_gap": 3,
+            "end_gap": 3,
+            "relief": {
+              "width": 1,
+              "depth": 2
+            }
+          }
+        ]
+      },
+      {
+        "id": "flat",
+        "type": "sheet_unfold",
+        "input": "formed"
+      }
+    ],
+    "output": "flat"
+  }
+}

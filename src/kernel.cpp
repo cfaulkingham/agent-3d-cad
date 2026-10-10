@@ -67,6 +67,10 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
 #include <ShapeUpgrade_ShapeDivideClosed.hxx>
+#include <BRepTools_Modifier.hxx>
+#include <BRepTools_Modification.hxx>
+#include <Geom_SurfaceOfLinearExtrusion.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
 #include <BRepCheck_Shell.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepGProp.hxx>
@@ -731,68 +735,63 @@ gp_Dir parameter_direction(const Json& value, const Json& parameters) {
 gp_Ax2 parameter_plane(const Json& value, const Json& parameters) {
   return gp_Ax2(parameter_point(value.at("origin"),parameters), parameter_direction(value.at("normal"),parameters), parameter_direction(value.at("x_direction"),parameters));
 }
+// Express a Bezier extrusion as an identical rational B-spline
+// surface. Every boundary curve and its UV parameterization remains unchanged.
+// This avoids OCCT's aborting swept-Bezier intersection path without fitting,
+// healing, increasing tolerances, or converting the analytic bend cylinders.
+class SheetBezierExtrusions final : public BRepTools_Modification {
+ public:
+  bool NewSurface(const TopoDS_Face& face,occ::handle<Geom_Surface>& result,TopLoc_Location& location,double& tolerance,bool& reverse_wires,bool& reverse_face) override {
+    auto surface=BRep_Tool::Surface(face,location);
+    while(const auto trimmed=occ::down_cast<Geom_RectangularTrimmedSurface>(surface))surface=trimmed->BasisSurface();
+    const auto extrusion=occ::down_cast<Geom_SurfaceOfLinearExtrusion>(surface);if(extrusion.IsNull())return false;
+    const auto source=occ::down_cast<Geom_BezierCurve>(extrusion->BasisCurve());if(source.IsNull())return false;
+    double u0,u1,v0,v1;BRepTools::UVBounds(face,u0,u1,v0,v1);
+    if(!std::isfinite(u0)||!std::isfinite(u1)||!std::isfinite(v0)||!std::isfinite(v1)||u1<=u0||v1<=v0)throw Error("invalid_shape","Swept-Bezier face requires finite nonempty parameter ranges");
+    auto curve=occ::down_cast<Geom_BezierCurve>(source->Copy());curve->Segment(u0,u1);
+    const auto n=curve->NbPoles();NCollection_Array2<gp_Pnt> poles(1,n,1,2);NCollection_Array2<double> weights(1,n,1,2);
+    for(int u=1;u<=n;++u)for(int v=1;v<=2;++v){poles.SetValue(u,v,curve->Pole(u).Translated(gp_Vec(extrusion->Direction())*(v==1?v0:v1)));weights.SetValue(u,v,curve->Weight(u));}
+    NCollection_Array1<double> uk(1,2),vk(1,2);uk.SetValue(1,u0);uk.SetValue(2,u1);vk.SetValue(1,v0);vk.SetValue(2,v1);
+    NCollection_Array1<int> um(1,2),vm(1,2);um.Init(n);vm.Init(2);
+    occ::handle<Geom_BSplineSurface> spline=new Geom_BSplineSurface(poles,weights,uk,vk,um,vm,n-1,1,false,false);
+    // Exact knot insertion supplies stable integration spans; the original
+    // swept-Bezier and one-span quadratures otherwise underresolve curved walls.
+    if(n>=3)for(int i=1;i<8;++i)spline->InsertUKnot(u0+(u1-u0)*i/8,1,1e-12);
+    result=spline;
+    // The coefficient construction proves identity; these evaluations catch
+    // an incorrect domain/location assumption before the native shape checker.
+    for(int i=0;i<=4;++i)for(int j=0;j<=2;++j){const auto u=u0+(u1-u0)*i/4,v=v0+(v1-v0)*j/2;if(surface->Value(u,v).Distance(result->Value(u,v))>1e-8)throw Error("invalid_shape","Swept-Bezier basis conversion changed its parameterized surface");}
+    tolerance=BRep_Tool::Tolerance(face);reverse_wires=false;reverse_face=false;return true;
+  }
+  bool NewCurve(const TopoDS_Edge&,occ::handle<Geom_Curve>&,TopLoc_Location&,double&) override {return false;}
+  bool NewPoint(const TopoDS_Vertex&,gp_Pnt&,double&) override {return false;}
+  bool NewCurve2d(const TopoDS_Edge& edge,const TopoDS_Face& face,const TopoDS_Edge&,const TopoDS_Face&,occ::handle<Geom2d_Curve>& curve,double& tolerance) override {
+    BRepAdaptor_Surface surface(face);if(surface.GetType()!=GeomAbs_SurfaceOfExtrusion||surface.BasisCurve()->GetType()!=GeomAbs_BezierCurve)return false;
+    double first,last;curve=BRep_Tool::CurveOnSurface(edge,face,first,last);if(curve.IsNull())throw Error("invalid_shape","Swept-Bezier boundary has no source pcurve");
+    curve=occ::down_cast<Geom2d_Curve>(curve->Copy());tolerance=BRep_Tool::Tolerance(edge);return true;
+  }
+  bool NewParameter(const TopoDS_Vertex&,const TopoDS_Edge&,double&,double&) override {return false;}
+  GeomAbs_Shape Continuity(const TopoDS_Edge& edge,const TopoDS_Face& f1,const TopoDS_Face& f2,const TopoDS_Edge&,const TopoDS_Face&,const TopoDS_Face&) override {return BRep_Tool::Continuity(edge,f1,f2);}
+};
+struct SheetFrame {gp_Pnt start;gp_Dir axis,outward,normal;};
+struct SheetCut {double offset,width,from,to;};
 struct SheetFlange {
-  std::string id;
-  int edge_index;
-  gp_Pnt start;
-  gp_Dir axis,outward,normal;
-  double width,radius,angle,length,allowance;
+  std::string id,parent,attachment;
+  SheetFrame formed,flat;
+  double width,radius,angle,length,allowance,miter_start=0,miter_end=0;
+  bool fold=false;
+  std::vector<SheetCut> cuts;
 };
 struct SheetPlan {
-  TopoDS_Face face;
+  TopoDS_Shape face;
   gp_Dir normal;
   double thickness,k_factor,base_area;
   std::vector<SheetFlange> flanges;
 };
-SheetPlan sheet_plan(const Json& feature,const Json& parameters,const FeatureGeometry& source) {
-  const auto input=text_field(feature,"input");
-  if(source.faces.Extent()!=1)throw Error("invalid_model","Sheet metal requires one connected planar profile region",{{"source_feature_id",input},{"face_count",source.faces.Extent()}});
-  const auto face=TopoDS::Face(source.faces(1));BRepAdaptor_Surface surface(face);
-  if(surface.GetType()!=GeomAbs_Plane)throw Error("invalid_model","Sheet-metal base profile must be planar",{{"source_feature_id",input}});
-  auto normal=surface.Plane().Axis().Direction();if(face.Orientation()==TopAbs_REVERSED)normal.Reverse();
-  GProp_GProps properties;BRepGProp::SurfaceProperties(face,properties,1e-9);
-  SheetPlan result{face,normal,scalar(feature.at("thickness"),parameters),scalar(feature.at("k_factor"),parameters,"dimensionless"),properties.Mass(),{}};
-  ShapeMap outer;TopExp::MapShapes(BRepTools::OuterWire(face),TopAbs_EDGE,outer);std::set<int> selected;
-  for(const auto& flange:feature.at("flanges")) {
-    const auto id=text_field(flange,"id");
-    try {
-      const auto& selector=flange.at("edge");std::vector<int> matches;Json candidates=Json::array();
-      for(int i=1;i<=source.edges.Extent();++i) {
-        const auto descriptor=edge_descriptor(TopoDS::Edge(source.edges(i)),i);
-        if(candidates.size()<64)candidates.push_back(descriptor);
-        if(agentcad::matches(descriptor,selector,parameters))matches.push_back(i);
-      }
-      if(matches.size()!=1)throw Error(matches.empty()?"selection_missing":"selection_ambiguous","Sheet flange must resolve one source profile edge",{{"source_feature_id",input},{"actual_count",matches.size()},{"candidates",candidates},{"candidates_truncated",source.edges.Extent()>64}});
-      const auto index=matches.front(),outer_index=outer.FindIndex(source.edges(index));
-      if(!outer_index)throw Error("invalid_model","Sheet flanges require an outer boundary edge; interior holes cannot carry a flange",{{"source_feature_id",input}});
-      if(!selected.insert(index).second)throw Error("invalid_model","Two flanges cannot reuse the same source edge",{{"source_feature_id",input}});
-      const auto edge=TopoDS::Edge(outer(outer_index));TopoDS_Vertex first,last;TopExp::Vertices(edge,first,last,true);
-      auto start=BRep_Tool::Pnt(first);const auto end=BRep_Tool::Pnt(last);auto axis=gp_Dir(gp_Vec(start,end));
-      auto outward=gp_Dir(gp_Vec(axis).Crossed(gp_Vec(normal)));const auto edge_length=start.Distance(end);
-      const auto center=start.Translated(gp_Vec(start,end)*.5);
-      bool oriented=false;double step=std::min({.001,edge_length*.01,result.thickness*.1});
-      for(int attempt=0;attempt<8&&step>1e-7;++attempt,step*=.25) {
-        BRepClass_FaceClassifier outside(face,center.Translated(gp_Vec(outward)*step),1e-7),inside(face,center.Translated(gp_Vec(outward)*-step),1e-7);
-        if(outside.State()==TopAbs_OUT&&inside.State()==TopAbs_IN){oriented=true;break;}
-        if(outside.State()==TopAbs_IN&&inside.State()==TopAbs_OUT){outward.Reverse();axis.Reverse();start=end;oriented=true;break;}
-      }
-      if(!oriented)throw Error("invalid_model","Could not establish the material side of the selected sheet edge",{{"source_feature_id",input}});
-      const auto start_gap=flange.contains("start_gap")?scalar(flange.at("start_gap"),parameters):0;
-      const auto end_gap=flange.contains("end_gap")?scalar(flange.at("end_gap"),parameters):0;
-      const auto width=edge_length-start_gap-end_gap;
-      if(width<1e-5)throw Error("invalid_model","Flange gaps consume its entire selected edge",{{"source_feature_id",input},{"edge_length_mm",edge_length}});
-      start.Translate(gp_Vec(axis)*start_gap);
-      const auto radius=scalar(flange.at("inside_radius"),parameters),angle=scalar(flange.at("angle_deg"),parameters,"deg")*std::numbers::pi/180;
-      const auto length=scalar(flange.at("length"),parameters),allowance=std::abs(angle)*(radius+result.k_factor*result.thickness);
-      result.flanges.push_back({id,index,start,axis,outward,normal,width,radius,angle,length,allowance});
-    }catch(const Error& e){auto details=e.details;details["flange_id"]=id;throw Error(e.code,e.what(),details);}
-  }
-  return result;
+gp_Pnt sheet_point(const SheetFrame& frame,double x,double y,double z=0) {
+  return frame.start.Translated(gp_Vec(frame.outward)*x+gp_Vec(frame.normal)*y+gp_Vec(frame.axis)*z);
 }
-gp_Pnt sheet_point(const SheetFlange& flange,double x,double y,double z=0) {
-  return flange.start.Translated(gp_Vec(flange.outward)*x+gp_Vec(flange.normal)*y+gp_Vec(flange.axis)*z);
-}
-TopoDS_Shape sheet_prism(const TopoDS_Face& profile,const gp_Vec& direction) {
+TopoDS_Shape sheet_prism(const TopoDS_Shape& profile,const gp_Vec& direction) {
   BRepPrimAPI_MakePrism prism(profile,direction,true);
   if(!prism.IsDone())throw Error("kernel_failure","Sheet-metal region extrusion failed");
   const auto shape=prism.Shape();check_shape(shape);return shape;
@@ -804,23 +803,109 @@ TopoDS_Face sheet_polygon(const std::vector<gp_Pnt>& points) {
   if(!face.IsDone())throw Error("kernel_failure","Sheet-metal planar region construction failed");
   return face.Face();
 }
-std::pair<TopoDS_Shape,TopoDS_Shape> sheet_bend_and_flange(const SheetFlange& flange,double thickness) {
+double sheet_area(const TopoDS_Shape& shape) {GProp_GProps p;BRepGProp::SurfaceProperties(shape,p,1e-9);return p.Mass();}
+TopoDS_Face sheet_rectangle(const SheetFrame& frame,double from,double to,double offset,double width) {
+  return sheet_polygon({sheet_point(frame,from,0,offset),sheet_point(frame,to,0,offset),sheet_point(frame,to,0,offset+width),sheet_point(frame,from,0,offset+width)});
+}
+TopoDS_Shape sheet_subtract(const TopoDS_Shape& source,const TopoDS_Shape& tool) {
+  BRepAlgoAPI_Cut operation;NCollection_List<TopoDS_Shape> a,b;a.Append(source);b.Append(tool);
+  operation.SetArguments(a);operation.SetTools(b);operation.SetNonDestructive(true);operation.SetRunParallel(false);operation.Build();
+  if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Sheet-metal intent cut failed");
+  return operation.Shape();
+}
+SheetFrame sheet_leg_frame(const SheetFlange& flange,double thickness,bool flat) {
+  if(flat){auto frame=flange.flat;frame.start=sheet_point(frame,flange.allowance,0);return frame;}
   const auto angle=std::abs(flange.angle),sign=flange.angle>0?1.0:-1.0;
   const auto center=sign>0?flange.radius:-flange.radius-thickness;
-  const auto arcpoint=[&](double radius,double theta){return sheet_point(flange,radius*std::sin(theta),center-sign*radius*std::cos(theta));};
-  const auto inner_start=arcpoint(flange.radius,0),inner_end=arcpoint(flange.radius,angle);
-  const auto outer_start=arcpoint(flange.radius+thickness,0),outer_end=arcpoint(flange.radius+thickness,angle);
-  GC_MakeArcOfCircle inner(inner_start,arcpoint(flange.radius,angle*.5),inner_end),outer(outer_end,arcpoint(flange.radius+thickness,angle*.5),outer_start);
-  if(!inner.IsDone()||!outer.IsDone())throw Error("kernel_failure","Sheet-metal bend arcs failed");
-  BRepBuilderAPI_MakeWire wire;wire.Add(BRepBuilderAPI_MakeEdge(inner.Value()).Edge());wire.Add(BRepBuilderAPI_MakeEdge(inner_end,outer_end).Edge());
-  wire.Add(BRepBuilderAPI_MakeEdge(outer.Value()).Edge());wire.Add(BRepBuilderAPI_MakeEdge(outer_start,inner_start).Edge());
-  if(!wire.IsDone())throw Error("kernel_failure","Sheet-metal bend wire failed");
-  BRepBuilderAPI_MakeFace cross_section(wire.Wire(),true);
-  if(!cross_section.IsDone())throw Error("kernel_failure","Sheet-metal annular sector failed");
-  const auto bend=sheet_prism(cross_section.Face(),gp_Vec(flange.axis)*flange.width);
-  const auto tangent=(gp_Vec(flange.outward)*std::cos(angle)+gp_Vec(flange.normal)*sign*std::sin(angle))*flange.length;
-  const auto leg=sheet_prism(sheet_polygon({inner_end,inner_end.Translated(tangent),outer_end.Translated(tangent),outer_end}),gp_Vec(flange.axis)*flange.width);
-  return {bend,leg};
+  const auto top_radius=sign>0?flange.radius:flange.radius+thickness;
+  return {sheet_point(flange.formed,top_radius*std::sin(angle),center-sign*top_radius*std::cos(angle)),flange.formed.axis,
+    gp_Dir(gp_Vec(flange.formed.outward)*std::cos(angle)+gp_Vec(flange.formed.normal)*sign*std::sin(angle)),
+    gp_Dir(gp_Vec(flange.formed.normal)*std::cos(angle)-gp_Vec(flange.formed.outward)*sign*std::sin(angle))};
+}
+SheetFrame sheet_attachment(const SheetFlange& parent,double thickness,bool flat,const std::string& attachment,double& width) {
+  const auto leg=sheet_leg_frame(parent,thickness,flat);
+  gp_Pnt start,end;
+  if(attachment=="tip"){start=sheet_point(leg,parent.length,0,parent.length*parent.miter_start);end=sheet_point(leg,parent.length,0,parent.width-parent.length*parent.miter_end);}
+  else if(attachment=="start"){start=sheet_point(leg,0,0);end=sheet_point(leg,parent.length,0,parent.length*parent.miter_start);}
+  else {start=sheet_point(leg,parent.length,0,parent.width-parent.length*parent.miter_end);end=sheet_point(leg,0,0,parent.width);}
+  const auto axis=gp_Dir(gp_Vec(start,end));width=start.Distance(end);
+  return {start,axis,gp_Dir(gp_Vec(axis).Crossed(gp_Vec(leg.normal))),leg.normal};
+}
+SheetPlan sheet_plan(const Json& feature,const Json& parameters,const FeatureGeometry& source) {
+  const auto input=text_field(feature,"input");
+  if(source.faces.Extent()!=1)throw Error("invalid_model","Sheet metal requires one connected planar profile region",{{"source_feature_id",input},{"face_count",source.faces.Extent()}});
+  const auto face=TopoDS::Face(source.faces(1));BRepAdaptor_Surface surface(face);
+  if(surface.GetType()!=GeomAbs_Plane)throw Error("invalid_model","Sheet-metal base profile must be planar",{{"source_feature_id",input}});
+  auto normal=surface.Plane().Axis().Direction();if(face.Orientation()==TopAbs_REVERSED)normal.Reverse();
+  SheetPlan result{face,normal,scalar(feature.at("thickness"),parameters),scalar(feature.at("k_factor"),parameters,"dimensionless"),sheet_area(face),{}};
+  ShapeMap outer;TopExp::MapShapes(BRepTools::OuterWire(face),TopAbs_EDGE,outer);std::set<int> selected;std::set<std::string> attachments;
+  for(const auto& flange:feature.at("flanges")) {
+    const auto id=text_field(flange,"id");
+    try {
+      SheetFrame frame;SheetFrame flat;double edge_length=0;
+      const auto parent_id=flange.value("parent",std::string()),attachment=flange.value("attachment",std::string("tip"));
+      if(!parent_id.empty()) {
+        const auto found=std::find_if(result.flanges.begin(),result.flanges.end(),[&](const auto& f){return f.id==parent_id;});
+        if(found==result.flanges.end())throw Error("invalid_model","Missing parent bend");
+        if(!attachments.insert(parent_id+":"+attachment).second)throw Error("invalid_model","A parent attachment edge can carry only one bend");
+        for(const auto& cut:found->cuts)if((attachment=="tip"&&cut.to>=found->allowance+found->length-1e-7)||
+          (attachment=="start"&&cut.offset<=1e-7&&cut.to>found->allowance)||(attachment=="end"&&cut.offset+cut.width>=found->width-1e-7&&cut.to>found->allowance))throw Error("invalid_model","A parent attachment crosses a removed cut");
+        frame=sheet_attachment(*found,result.thickness,false,attachment,edge_length);flat=sheet_attachment(*found,result.thickness,true,attachment,edge_length);
+      }else if(flange.contains("fold_line")) {
+        const auto start=parameter_point(flange.at("fold_line")[0],parameters),end=parameter_point(flange.at("fold_line")[1],parameters);
+        edge_length=start.Distance(end);if(edge_length<1e-5)throw Error("invalid_model","Fold-line endpoints must differ");
+        if(surface.Plane().Distance(start)>1e-7||surface.Plane().Distance(end)>1e-7)throw Error("invalid_model","Fold line must lie in the source sketch plane");
+        const auto axis=gp_Dir(gp_Vec(start,end));frame={start,axis,gp_Dir(gp_Vec(axis).Crossed(gp_Vec(normal))),normal};flat=frame;
+      }else {
+        const auto& selector=flange.at("edge");std::vector<int> matches;Json candidates=Json::array();
+        for(int i=1;i<=source.edges.Extent();++i) {const auto descriptor=edge_descriptor(TopoDS::Edge(source.edges(i)),i);if(candidates.size()<64)candidates.push_back(descriptor);if(agentcad::matches(descriptor,selector,parameters))matches.push_back(i);}
+        if(matches.size()!=1)throw Error(matches.empty()?"selection_missing":"selection_ambiguous","Sheet flange must resolve one source profile edge",{{"source_feature_id",input},{"actual_count",matches.size()},{"candidates",candidates},{"candidates_truncated",source.edges.Extent()>64}});
+        const auto index=matches.front(),outer_index=outer.FindIndex(source.edges(index));
+        if(!outer_index)throw Error("invalid_model","Sheet flanges require an outer boundary edge; interior holes cannot carry a flange",{{"source_feature_id",input}});
+        if(!selected.insert(index).second)throw Error("invalid_model","Two flanges cannot reuse the same source edge",{{"source_feature_id",input}});
+        const auto edge=TopoDS::Edge(outer(outer_index));TopoDS_Vertex first,last;TopExp::Vertices(edge,first,last,true);
+        auto start=BRep_Tool::Pnt(first);const auto end=BRep_Tool::Pnt(last);auto axis=gp_Dir(gp_Vec(start,end));auto outward=gp_Dir(gp_Vec(axis).Crossed(gp_Vec(normal)));edge_length=start.Distance(end);
+        const auto center=start.Translated(gp_Vec(start,end)*.5);bool oriented=false;double step=std::min({.001,edge_length*.01,result.thickness*.1});
+        for(int attempt=0;attempt<8&&step>1e-7;++attempt,step*=.25) {
+          BRepClass_FaceClassifier outside(face,center.Translated(gp_Vec(outward)*step),1e-7),inside(face,center.Translated(gp_Vec(outward)*-step),1e-7);
+          if(outside.State()==TopAbs_OUT&&inside.State()==TopAbs_IN){oriented=true;break;}
+          if(outside.State()==TopAbs_IN&&inside.State()==TopAbs_OUT){outward.Reverse();axis.Reverse();start=end;oriented=true;break;}
+        }
+        if(!oriented)throw Error("invalid_model","Could not establish the material side of the selected sheet edge",{{"source_feature_id",input}});
+        frame={start,axis,outward,normal};flat=frame;
+      }
+      auto start_gap=flange.contains("start_gap")?scalar(flange.at("start_gap"),parameters):0.0;
+      auto end_gap=flange.contains("end_gap")?scalar(flange.at("end_gap"),parameters):0.0;
+      double relief_width=0,relief_depth=0;
+      if(flange.contains("relief")){relief_width=scalar(flange.at("relief").at("width"),parameters);relief_depth=scalar(flange.at("relief").at("depth"),parameters);start_gap+=relief_width;end_gap+=relief_width;}
+      const auto width=edge_length-start_gap-end_gap;if(width<1e-5)throw Error("invalid_model","Flange gaps and relief consume its entire attachment",{{"edge_length_mm",edge_length}});
+      frame.start.Translate(gp_Vec(frame.axis)*start_gap);flat.start.Translate(gp_Vec(flat.axis)*start_gap);
+      const auto radius=scalar(flange.at("inside_radius"),parameters),angle=scalar(flange.at("angle_deg"),parameters,"deg")*std::numbers::pi/180;
+      const auto length=scalar(flange.at("length"),parameters),allowance=std::abs(angle)*(radius+result.k_factor*result.thickness);
+      SheetFlange planned{id,parent_id,attachment,frame,flat,width,radius,angle,length,allowance,0,0,false,{}};planned.fold=flange.contains("fold_line");
+      if(flange.contains("miter")){planned.miter_start=std::tan(scalar(flange.at("miter").at("start_deg"),parameters,"deg")*std::numbers::pi/180);planned.miter_end=std::tan(scalar(flange.at("miter").at("end_deg"),parameters,"deg")*std::numbers::pi/180);if(length*(planned.miter_start+planned.miter_end)>=width-1e-5)throw Error("invalid_model","Miter consumes the complete flange tip");}
+      if(planned.fold) {
+        // The authored line and length identify a complete rectangular developed tab.
+        // Its area must exist in the original blank; holes/cutouts are separate mapped cut intent.
+        const auto rectangle=sheet_rectangle(flat,0,allowance+length,0,width);
+        const auto trimmed=sheet_subtract(result.face,rectangle);const auto removed=sheet_area(result.face)-sheet_area(trimmed);
+        if(std::abs(removed-width*(allowance+length))>1e-7*std::max(1.0,width*(allowance+length)))throw Error("invalid_model","Fold region must be fully contained and unperforated in the existing blank",{{"required_area_mm2",width*(allowance+length)},{"available_area_mm2",removed}});
+        result.face=trimmed;
+      }
+      if(relief_width>0)for(const auto offset:{-relief_width,width})result.face=sheet_subtract(result.face,sheet_rectangle(flat,-relief_depth,1e-7,offset,relief_width));
+      if(flange.contains("cuts"))for(const auto& cut:flange.at("cuts")) {
+        SheetCut c{scalar(cut.at("offset"),parameters),scalar(cut.at("width"),parameters),scalar(cut.at("from"),parameters),scalar(cut.at("to"),parameters)};
+        if(c.offset+c.width>width+1e-7||c.to>allowance+length+1e-7)throw Error("invalid_model","Developed cut exceeds its named flange region");
+        const auto leg_to=std::max(0.0,c.to-allowance);
+        if(c.offset<leg_to*planned.miter_start-1e-7||c.offset+c.width>width-leg_to*planned.miter_end+1e-7)throw Error("invalid_model","A rectangular cut crosses its flange miter");
+        for(const auto& previous:planned.cuts)if(std::min(c.to,previous.to)-std::max(c.from,previous.from)>1e-7&&std::min(c.offset+c.width,previous.offset+previous.width)-std::max(c.offset,previous.offset)>1e-7)throw Error("invalid_model","Developed cuts must not overlap");
+        planned.cuts.push_back(c);
+      }
+      result.flanges.push_back(planned);
+    }catch(const Error& e){auto details=e.details;details["flange_id"]=id;throw Error(e.code,e.what(),details);}
+  }
+  result.base_area=sheet_area(result.face);if(result.base_area<1e-5)throw Error("invalid_model","Fold and relief intent must leave a stationary base region");
+  return result;
 }
 TopoDS_Shape join_sheet_region(const TopoDS_Shape& source,const TopoDS_Shape& addition,const std::string& flange_id) {
   BRepAlgoAPI_Common overlap;NCollection_List<TopoDS_Shape> arguments,tools;arguments.Append(source);tools.Append(addition);
@@ -834,15 +919,46 @@ TopoDS_Shape join_sheet_region(const TopoDS_Shape& source,const TopoDS_Shape& ad
   if(count(shape,TopAbs_SOLID)!=1)throw Error("invalid_shape","Sheet-metal regions must form one connected solid",{{"flange_id",flange_id}});
   return shape;
 }
+TopoDS_Shape sheet_bend_region(const SheetFlange& flange,double thickness,double from,double to,double offset,double width) {
+  const auto sign=flange.angle>0?1.0:-1.0,center=sign>0?flange.radius:-flange.radius-thickness;
+  const auto arcpoint=[&](double radius,double theta){return sheet_point(flange.formed,radius*std::sin(theta),center-sign*radius*std::cos(theta),offset);};
+  const auto inner_start=arcpoint(flange.radius,from),inner_end=arcpoint(flange.radius,to),outer_start=arcpoint(flange.radius+thickness,from),outer_end=arcpoint(flange.radius+thickness,to);
+  GC_MakeArcOfCircle inner(inner_start,arcpoint(flange.radius,(from+to)*.5),inner_end),outer(outer_end,arcpoint(flange.radius+thickness,(from+to)*.5),outer_start);
+  if(!inner.IsDone()||!outer.IsDone())throw Error("kernel_failure","Sheet-metal bend arcs failed");
+  BRepBuilderAPI_MakeWire wire;wire.Add(BRepBuilderAPI_MakeEdge(inner.Value()).Edge());wire.Add(BRepBuilderAPI_MakeEdge(inner_end,outer_end).Edge());wire.Add(BRepBuilderAPI_MakeEdge(outer.Value()).Edge());wire.Add(BRepBuilderAPI_MakeEdge(outer_start,inner_start).Edge());
+  if(!wire.IsDone())throw Error("kernel_failure","Sheet-metal bend wire failed");BRepBuilderAPI_MakeFace cross_section(wire.Wire(),true);if(!cross_section.IsDone())throw Error("kernel_failure","Sheet-metal annular sector failed");
+  return sheet_prism(cross_section.Face(),gp_Vec(flange.formed.axis)*width);
+}
+std::vector<TopoDS_Shape> sheet_regions(const SheetFlange& flange,double thickness,bool flat) {
+  std::vector<TopoDS_Shape> regions;
+  if(flat)regions.push_back(sheet_prism(sheet_rectangle(flange.flat,0,flange.allowance,0,flange.width),gp_Vec(flange.flat.normal)*-thickness));
+  else regions.push_back(sheet_bend_region(flange,thickness,0,std::abs(flange.angle),0,flange.width));
+  const auto leg=sheet_leg_frame(flange,thickness,flat);
+  regions.push_back(sheet_prism(sheet_polygon({sheet_point(leg,0,0),sheet_point(leg,flange.length,0,flange.length*flange.miter_start),
+    sheet_point(leg,flange.length,0,flange.width-flange.length*flange.miter_end),sheet_point(leg,0,0,flange.width)}),gp_Vec(leg.normal)*-thickness));
+  // Map cuts by neutral-axis arclength. A crossing cut becomes an exact annular
+  // sector and a planar prism, sharing the physical tangent boundary.
+  for(const auto& cut:flange.cuts) {
+    if(cut.from<flange.allowance-1e-8) {
+      const auto end=std::min(cut.to,flange.allowance);
+      const auto tool=flat?sheet_prism(sheet_rectangle(flange.flat,cut.from,end,cut.offset,cut.width),gp_Vec(flange.flat.normal)*-thickness):
+        sheet_bend_region(flange,thickness,cut.from/flange.allowance*std::abs(flange.angle),end/flange.allowance*std::abs(flange.angle),cut.offset,cut.width);
+      regions[0]=sheet_subtract(regions[0],tool);
+    }
+    if(cut.to>flange.allowance+1e-8)regions[1]=sheet_subtract(regions[1],sheet_prism(sheet_rectangle(leg,std::max(0.0,cut.from-flange.allowance),cut.to-flange.allowance,cut.offset,cut.width),gp_Vec(leg.normal)*-thickness));
+  }
+  return regions;
+}
 Json sheet_report(const SheetPlan& plan,const std::string& source,bool flat) {
   Json bends=Json::array();auto flat_area=plan.base_area,formed_volume=plan.base_area*plan.thickness;
   for(const auto& flange:plan.flanges) {
-    const auto allowance=flange.allowance;
-    flat_area+=flange.width*(allowance+flange.length);
-    formed_volume+=flange.width*plan.thickness*(std::abs(flange.angle)*(flange.radius+.5*plan.thickness)+flange.length);
-    const auto line=[&](double x){return Json::array({point(sheet_point(flange,x,0)),point(sheet_point(flange,x,0,flange.width))});};
+    const auto allowance=flange.allowance,geometric_allowance=std::abs(flange.angle)*(flange.radius+.5*plan.thickness);
+    const auto leg_area=flange.width*flange.length-.5*flange.length*flange.length*(flange.miter_start+flange.miter_end);
+    flat_area+=flange.width*allowance+leg_area;formed_volume+=(flange.width*geometric_allowance+leg_area)*plan.thickness;
+    for(const auto& cut:flange.cuts){flat_area-=cut.width*(cut.to-cut.from);const auto bend_length=std::max(0.0,std::min(cut.to,allowance)-cut.from),leg_length=std::max(0.0,cut.to-std::max(cut.from,allowance));formed_volume-=cut.width*plan.thickness*(bend_length*geometric_allowance/allowance+leg_length);}
+    const auto line=[&](double x){return Json::array({point(sheet_point(flange.flat,x,0)),point(sheet_point(flange.flat,x,0,flange.width))});};
     bends.push_back({{"id",flange.id},{"width_mm",flange.width},{"inside_radius_mm",flange.radius},{"angle_deg",flange.angle*180/std::numbers::pi},
-      {"straight_length_mm",flange.length},{"bend_allowance_mm",allowance},{"bend_deduction_mm",2*(flange.radius+plan.thickness)*std::tan(std::abs(flange.angle)*.5)-allowance},
+      {"straight_length_mm",flange.length},{"bend_allowance_mm",allowance},{"bend_deduction_mm",std::abs(std::abs(flange.angle)-std::numbers::pi)<1e-9?Json(nullptr):Json(2*(flange.radius+plan.thickness)*std::tan(std::abs(flange.angle)*.5)-allowance)},
       {"bend_start_line_mm",line(0)},{"bend_center_line_mm",line(allowance*.5)},{"bend_end_line_mm",line(allowance)}});
   }
   return {{"mode",flat?"flat":"formed"},{"source_feature_id",source},{"thickness_mm",plan.thickness},{"k_factor",plan.k_factor},
@@ -2294,22 +2410,38 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         }
         const auto profile=text_field(*sheet,"input");const auto& source=impl_->features.at(profile);
         const auto plan=sheet_plan(*sheet,parameters,source);
-        BRepBuilderAPI_Copy copy(source.shape);
+        BRepBuilderAPI_Copy copy(plan.face);
         BRepPrimAPI_MakePrism base(copy.Shape(),gp_Vec(plan.normal)*-plan.thickness,true);
         if(!base.IsDone())throw Error("kernel_failure","Sheet-metal base extrusion failed");
         shape=base.Shape();check_shape(shape);
-        for(const auto& flange:plan.flanges) {
-          if(type=="sheet_unfold") {
-            const auto length=flange.allowance+flange.length;
-            const auto blank=sheet_polygon({sheet_point(flange,0,0),sheet_point(flange,length,0),
-              sheet_point(flange,length,0,flange.width),sheet_point(flange,0,0,flange.width)});
-            shape=join_sheet_region(shape,sheet_prism(blank,gp_Vec(plan.normal)*-plan.thickness),flange.id);
-          } else {
-            const auto [bend,leg]=sheet_bend_and_flange(flange,plan.thickness);
-            shape=join_sheet_region(shape,bend,flange.id);shape=join_sheet_region(shape,leg,flange.id);
+        for(const auto& flange:plan.flanges)for(const auto& region:sheet_regions(flange,plan.thickness,type=="sheet_unfold"))shape=join_sheet_region(shape,region,flange.id);
+        BRepAlgoAPI_Check interference(shape,false,true);
+        if(!interference.IsValid()) {
+          bool aborted=!interference.Result().IsEmpty(),bezier_extrusion=false;
+          for(const auto& issue:interference.Result())aborted=aborted&&issue.GetCheckStatus()==BOPAlgo_OperationAborted;
+          for(TopExp_Explorer it(shape,TopAbs_FACE);it.More();it.Next()) {
+            BRepAdaptor_Surface surface(TopoDS::Face(it.Current()));
+            if(surface.GetType()==GeomAbs_SurfaceOfExtrusion&&surface.BasisCurve()->GetType()==GeomAbs_BezierCurve)bezier_extrusion=true;
+          }
+          if(aborted&&bezier_extrusion) {
+            // OCCT's swept-Bezier intersection path can abort. This is an exact
+            // polynomial basis conversion, not approximation or tolerance healing.
+            // Preserve analytic planes/cylinders and require the full native check.
+            BRepTools_Modifier modifier(shape,new SheetBezierExtrusions);
+            if(!modifier.IsDone())throw Error("invalid_shape","Swept-Bezier basis conversion did not complete");
+            auto normalized=modifier.ModifiedShape(shape);
+            check_shape(normalized);
+            GProp_GProps before_volume,after_volume;
+            BRepGProp::VolumeProperties(shape,before_volume,1e-9);BRepGProp::VolumeProperties(normalized,after_volume,1e-9);
+            const auto before_bounds=bounds(shape),after_bounds=bounds(normalized);
+            bool equivalent=count(shape,TopAbs_FACE)==count(normalized,TopAbs_FACE)&&count(shape,TopAbs_EDGE)==count(normalized,TopAbs_EDGE);
+            for(const auto* key:{"min","max"})for(std::size_t axis=0;axis<3;++axis)equivalent=equivalent&&std::abs(before_bounds.at(key)[axis].get<double>()-after_bounds.at(key)[axis].get<double>())<1e-6;
+            equivalent=equivalent&&std::abs(before_volume.Mass()-after_volume.Mass())<1e-7*std::max(1.0,before_volume.Mass());
+            if(!equivalent)throw Error("invalid_shape","Exact swept-Bezier normalization failed geometric equivalence checks",{{"original_bounds",before_bounds},{"normalized_bounds",after_bounds},{"original_volume",before_volume.Mass()},{"normalized_volume",after_volume.Mass()},{"original_faces",count(shape,TopAbs_FACE)},{"normalized_faces",count(normalized,TopAbs_FACE)},{"original_edges",count(shape,TopAbs_EDGE)},{"normalized_edges",count(normalized,TopAbs_EDGE)}});
+            BRepAlgoAPI_Check normalized_check(normalized,false,true);
+            if(normalized_check.IsValid()){shape=normalized;interference.SetData(shape,false,true);interference.Perform();}
           }
         }
-        BRepAlgoAPI_Check interference(shape,false,true);
         if(!interference.IsValid()) {
           Json faults=Json::array();const std::vector<std::string> names={"unknown","bad_type","self_intersect","too_small_edge","nonrecoverable_face","incompatible_vertex","incompatible_edge","incompatible_face","operation_aborted","C0_geometry","invalid_curve_on_surface","not_valid"};
           for(const auto& issue:interference.Result()) {
@@ -2328,7 +2460,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto expected=report.at(type=="sheet_unfold"?"flat_volume_mm3":"formed_volume_mm3").get<double>();
         GProp_GProps volume;BRepGProp::VolumeProperties(shape,volume,1e-9);
         if(std::abs(volume.Mass()-expected)>1e-7*std::max(1.0,expected))throw Error("invalid_shape","Sheet-metal geometry did not preserve its exact region and bend volumes",{{"expected_volume_mm3",expected},{"actual_volume_mm3",volume.Mass()}});
-        if(type=="sheet_metal")record_history(base,source,profile,shape,history,history_truncated,&copy);
+        if(type=="sheet_metal"&&plan.face.IsSame(source.shape))record_history(base,source,profile,shape,history,history_truncated,&copy);
       } else if(type=="shell"||type=="offset"||type=="thicken") {
         const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
         BRepBuilderAPI_Copy copy(source.shape);

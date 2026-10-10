@@ -75,10 +75,17 @@ void geometry(){
   holed["features"][1]["flanges"][0]["edge"]=selector({7,5,0});fails({"invalid_model"},[&]{BuiltModel invalid(holed);});
   auto curved=model(Json::array({flange("bottom",selector({10,0,0}))}),true);curved["features"][0]["profile"]={{"type","wire"},{"segments",Json::array({{{"type","arc"},{"start",{0,0}},{"mid",{10,10}},{"end",{20,0}}},{{"type","line"},{"start",{20,0}},{"end",{0,0}}}})}};
   const auto curved_built=BuiltModel(curved);near(curved_built.summary().at("sheet_metal").at("flat_area_mm2"),expected()/2-600+50*std::numbers::pi);near(curved_built.summary().at("volume_mm3"),expected()-1200+100*std::numbers::pi,1e-4);
-  // OCCT 8.0.1 aborts the self-interference checker for this Bezier-based result.
-  // Keep that limitation an explicit rejected candidate, without relaxing checks.
+  // Exact swept-Bezier normalization must retain the authored curve and pass
+  // the same complete native self-interference validation as other sheet bases.
   curved["features"][0]["profile"]["segments"][0]={{"type","bezier"},{"points",{{0,0},{0,10},{20,10},{20,0}}}};
-  const auto unsupported=fails({"invalid_shape"},[&]{BuiltModel invalid(curved);});require(unsupported.details.at("native_faults")[0].at("status")=="operation_aborted","Unverified Bezier sheet fails with honest native-check diagnostics");
+  const BuiltModel bezier(curved);near(bezier.summary().at("volume_mm3"),expected()-1200+240,1e-4);near(bezier.summary("formed").at("volume_mm3"),expected()-1200+240,1e-4);
+  // Independent Simpson integration of the authored cubic derivative checks
+  // surface area without relying on OCCT's swept-Bezier quadrature.
+  double perimeter=0;constexpr int samples=10000;for(int i=0;i<=samples;++i){const auto t=static_cast<double>(i)/samples;const auto speed=std::hypot(120*t*(1-t),30*(1-2*t));perimeter+=(i==0||i==samples?1:i%2?4:2)*speed;}perimeter/=3*samples;
+  near(bezier.summary("formed").at("area_mm2"),720+88*std::numbers::pi+2*perimeter,1e-5);near(bezier.summary().at("area_mm2"),720+88*std::numbers::pi+2*perimeter,1e-5);
+  auto moved_bezier=curved;moved_bezier["features"][0]["workplane"]={{"origin",{7,11,13}},{"normal",{1,0,0}},{"x_direction",{0,1,0}}};moved_bezier["features"][1]["flanges"][0]["edge"]=selector({7,21,13},{0,1,0});near(BuiltModel(moved_bezier).summary().at("volume_mm3"),expected()-1200+240,1e-4);
+
+
 }
 void failures(){
   auto bad=model();bad["parameters"]["thickness"]=0;fails({"invalid_model"},[&]{validate_model(bad);});

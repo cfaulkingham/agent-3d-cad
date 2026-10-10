@@ -169,9 +169,16 @@ Json model_definitions() {
     {"tolerance",{{"type","number"},{"minimum",1e-9},{"maximum",1e-3}}},{"closed",{{"type","boolean"}}}}, {"id","type","inputs","tolerance","closed"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_solid"}}},{"input",id},{"reverse",{{"type","boolean"}}}}, {"id","type","input"}));
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
-  const Json sheet_flange=object({{"id",id},{"edge",{{"$ref","#/$defs/selector"}}},{"inside_radius",scalar_ref},
-    {"angle_deg",scalar_ref},{"length",scalar_ref},{"start_gap",scalar_ref},{"end_gap",scalar_ref}},
-    {"id","edge","inside_radius","angle_deg","length"});
+  const Json sheet_cut=object({{"offset",scalar_ref},{"width",scalar_ref},{"from",scalar_ref},{"to",scalar_ref}}, {"offset","width","from","to"});
+  Json sheet_flange=object({{"id",id},{"edge",{{"$ref","#/$defs/selector"}}},{"parent",id},
+    {"attachment",{{"enum",{"tip","start","end"}}}},{"fold_line",{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",2}}},
+    {"inside_radius",scalar_ref},{"angle_deg",scalar_ref},{"length",scalar_ref},{"start_gap",scalar_ref},{"end_gap",scalar_ref},
+    {"hem",{{"type","boolean"}}},{"relief",object({{"width",scalar_ref},{"depth",scalar_ref}},{"width","depth"})},
+    {"miter",object({{"start_deg",scalar_ref},{"end_deg",scalar_ref}},{"start_deg","end_deg"})},
+    {"cuts",{{"type","array"},{"items",sheet_cut},{"maxItems",32}}}},
+    {"id","inside_radius","angle_deg","length"});
+  sheet_flange["oneOf"]=Json::array({Json{{"required",{"edge"}}},Json{{"required",{"parent"}}},Json{{"required",{"fold_line"}}}});
+  sheet_flange["dependentRequired"]={{"attachment",{"parent"}}};
   features.push_back(object({{"id",id},{"type",{{"const","sheet_metal"}}},{"input",id},{"thickness",scalar_ref},
     {"k_factor",scalar_ref},{"flanges",{{"type","array"},{"items",sheet_flange},{"maxItems",32}}}},
     {"id","type","input","thickness","k_factor","flanges"}));
@@ -339,7 +346,7 @@ Json model_definitions() {
     {"neutral_axis_basis",{{"const","caller_supplied_k_factor"}}},{"flat_area_mm2",nonnegative},{"flat_volume_mm3",nonnegative},{"formed_volume_mm3",nonnegative},
     {"volume_preservation_assumed",{{"const",false}}},
     {"bends",{{"type","array"},{"maxItems",32},{"items",object({{"id",id},{"width_mm",nonnegative},{"inside_radius_mm",nonnegative},{"angle_deg",real},
-      {"straight_length_mm",nonnegative},{"bend_allowance_mm",nonnegative},{"bend_deduction_mm",real},
+      {"straight_length_mm",nonnegative},{"bend_allowance_mm",nonnegative},{"bend_deduction_mm",{{"type",{"number","null"}}}},
       {"bend_start_line_mm",line_output},{"bend_center_line_mm",line_output},{"bend_end_line_mm",line_output}},
       {"id","width_mm","inside_radius_mm","angle_deg","straight_length_mm","bend_allowance_mm","bend_deduction_mm","bend_start_line_mm","bend_center_line_mm","bend_end_line_mm"})}}}
   },{"mode","source_feature_id","thickness_mm","k_factor","neutral_axis_basis","flat_area_mm2","flat_volume_mm3","formed_volume_mm3","volume_preservation_assumed","bends"});
@@ -831,19 +838,31 @@ void validate_model(const Json& model) {
       fields(feature,{"id","type","input","thickness","k_factor","flanges"});sketch_dependency(text_field(feature,"input"));
       positive(feature.at("thickness"));const auto k=scalar(feature.at("k_factor"),parameters,"dimensionless");
       if(k<0||k>1)throw Error("invalid_model","Sheet-metal k_factor must be between zero and one");
-      const auto& flanges=feature.at("flanges");if(!flanges.is_array()||flanges.size()>32)throw Error("invalid_model","Sheet metal allows at most 32 base-edge flanges");
+      const auto& flanges=feature.at("flanges");if(!flanges.is_array()||flanges.size()>32)throw Error("invalid_model","Sheet metal allows at most 32 ordered bends");
       std::set<std::string> flange_ids;
       for(const auto& flange:flanges) {
         const auto flange_id=text_field(flange,"id");
         try {
-          fields(flange,{"id","edge","inside_radius","angle_deg","length"},{"start_gap","end_gap"});model_identifier(flange_id);
-          if(!flange_ids.insert(flange_id).second)throw Error("invalid_model","Sheet-metal flange IDs must be unique");
-          validate_selector(flange.at("edge"),parameters,text_field(feature,"input"));
-          if(flange.at("edge").at("curve_kind")!="line"||flange.at("edge").at("expected_count")!=1)throw Error("invalid_model","A flange must select exactly one straight outer profile edge");
+          fields(flange,{"id","inside_radius","angle_deg","length"},{"edge","parent","attachment","fold_line","start_gap","end_gap","hem","relief","miter","cuts"});model_identifier(flange_id);
+          if(flange_ids.contains(flange_id))throw Error("invalid_model","Sheet-metal flange IDs must be unique");
+          if(static_cast<int>(flange.contains("edge"))+static_cast<int>(flange.contains("parent"))+static_cast<int>(flange.contains("fold_line"))!=1)throw Error("invalid_model","A flange needs exactly one edge, parent or fold_line attachment");
+          if(flange.contains("edge")) {
+            validate_selector(flange.at("edge"),parameters,text_field(feature,"input"));
+            if(flange.at("edge").at("curve_kind")!="line"||flange.at("edge").at("expected_count")!=1)throw Error("invalid_model","A flange must select exactly one straight outer profile edge");
+          }
+          if(flange.contains("parent")&&!flange_ids.contains(text_field(flange,"parent")))throw Error("invalid_model","Flange parent must name an earlier flange");
+          if(flange.contains("attachment")&&(!flange.contains("parent")||(flange.at("attachment")!="tip"&&flange.at("attachment")!="start"&&flange.at("attachment")!="end")))throw Error("invalid_model","Attachment must be tip, start or end of a named parent");
+          if(flange.contains("fold_line")){const auto& line=flange.at("fold_line");if(!line.is_array()||line.size()!=2)throw Error("invalid_model","A fold line has two endpoints");for(const auto& point:line)vector3(point,parameters);}
+          flange_ids.insert(flange_id);
           positive(flange.at("inside_radius"));positive(flange.at("length"));
           const auto angle=std::abs(scalar(flange.at("angle_deg"),parameters,"deg"));
-          if(angle<0.01||angle>=179.99)throw Error("invalid_model","Flange bend angle magnitude must be at least 0.01 and below 179.99 degrees");
+          if(flange.contains("hem")&&!flange.at("hem").is_boolean())throw Error("invalid_model","Hem is a boolean");
+          const bool hem=flange.value("hem",false);
+          if(angle<0.01||(hem?std::abs(angle-180)>1e-9:angle>=179.99))throw Error("invalid_model","Hem bends require exactly 180 degrees; other bends require magnitude at least 0.01 and below 179.99 degrees");
           for(const auto* gap:{"start_gap","end_gap"})if(flange.contains(gap)&&scalar(flange.at(gap),parameters)<0)throw Error("invalid_model","Flange endpoint gaps must be nonnegative");
+          if(flange.contains("relief")){const auto& relief=flange.at("relief");fields(relief,{"width","depth"});positive(relief.at("width"));positive(relief.at("depth"));if(flange.contains("parent"))throw Error("invalid_model","Endpoint relief belongs to base-edge or internal folds");}
+          if(flange.contains("miter")){const auto& miter=flange.at("miter");fields(miter,{"start_deg","end_deg"});for(const auto* key:{"start_deg","end_deg"}){const auto angle=scalar(miter.at(key),parameters,"deg");if(angle<0||angle>=89)throw Error("invalid_model","Miter endpoint angles must be in [0,89) degrees");}}
+          if(flange.contains("cuts")){const auto& cuts=flange.at("cuts");if(!cuts.is_array()||cuts.size()>32)throw Error("invalid_model","A flange allows at most 32 developed rectangular cuts");for(const auto& cut:cuts){fields(cut,{"offset","width","from","to"});positive(cut.at("width"));if(scalar(cut.at("offset"),parameters)<0||scalar(cut.at("from"),parameters)<0||scalar(cut.at("to"),parameters)-scalar(cut.at("from"),parameters)<1e-5)throw Error("invalid_model","Cut ranges must be nonnegative with length at least 0.00001 mm");}}
         }catch(const Error& e){auto details=e.details;details["flange_id"]=flange_id;throw Error(e.code,e.what(),details);}
       }
     } else if(type=="sheet_unfold") {

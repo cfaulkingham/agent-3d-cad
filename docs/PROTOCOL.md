@@ -112,7 +112,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `import_step_surface` | `content`, `sha256` | Explicit captured nonmaterial STEP faces/shells |
 | `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |
 | `surface_solid` | `input` | Closed shell materialization; optional explicit `reverse` |
-| `sheet_metal` | `input`, `thickness`, `k_factor`, `flanges` | One planar sketch region with holes; exact signed cylindrical bends and direct base-edge flanges |
+| `sheet_metal` | `input`, `thickness`, `k_factor`, `flanges` | One planar sketch region with holes; exact signed cylindrical bends, named flange trees, in-blank folds, hems, reliefs, miters and mapped cuts; see [PARITY_SHEET_METAL.md](PARITY_SHEET_METAL.md) |
 | `sheet_unfold` | `input` | Developed solid blank from unchanged sheet-metal intent |
 | `extrude` | `input`, either `distance` or `until` + `target` | Signed travel; optional `direction`, `both`, `taper_deg`; first/last exact target termination excludes distance/both/taper |
 | `twist_extrude` | `input`, `distance`, `angle_deg` | Signed travel along sketch normal with rotation about that normal; optional world `center` in the sketch plane |
