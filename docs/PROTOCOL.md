@@ -69,8 +69,11 @@ matching unit; no strings, scripts or implicit conversion are evaluated.
 ```
 
 `add` and `subtract` use two operands in the result unit. `multiply` and `divide`
-scale the first operand by a dimensionless second operand. Each tree permits
-128 nodes and 16 levels, rejects division by zero, and bounds intermediate results.
+scale the first operand by a dimensionless second operand. Bounded unary math,
+trigonometry, comparisons and conditional expressions are also supported; exact
+arities, units, domains and lazy conditional semantics are in
+[PARAMETRIC_EXPRESSIONS.md](PARAMETRIC_EXPRESSIONS.md). Each tree permits
+128 nodes and 16 levels, rejects undefined arithmetic, and bounds intermediate results.
 Primitive dimensions and radii are at least 0.00001 mm. Vectors have three scalars.
 
 ## Features
@@ -109,8 +112,8 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
 | `sweep` | Either `input` or `sections`, plus `path` | Exact path; optional orientation/binormal/guide and transition controls; 2–32 varying sketch stations with matching holes |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
-| `pattern` | `input`, `count`, `step` | 2–64 translated copies including original; replication budget below |
-| `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | 2–64 rotated copies; signed angular step, including original |
+| `pattern` | `input`, `count`, `step` | Count is a dimensionless scalar evaluating to an integer 2–64; translated copies including original; replication budget below |
+| `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | Same parameterized count; rotated copies with signed angular step, including original |
 | `hole` | `input`, `origin`, `axis`, `radius`, `depth` | Cylinder cut along explicit direction; must remove material |
 | `import_step` | `content`, `sha256` | Nonempty embedded STEP text with matching SHA-256; optional explicit `solid_indices` subset, no fixed source byte cap |
 | `assembly` | `parts` | 1–64 named instances of earlier solids or assemblies; optional acyclic rigid/articulated `mates`, `couplings`, `poses`, and source-keyed `bom` metadata |

@@ -1869,7 +1869,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         TopoDS_Compound compound; builder.MakeCompound(compound);
         const auto delta=type=="pattern"?vector3(feature.at("step"),parameters):std::array<double,3>{0,0,0};
         const auto input=text_field(feature,"input");
-        const auto copies=feature.at("count").get<int>();
+        const auto copies=pattern_count(feature.at("count"),parameters);
         const auto& source=impl_->features.at(input);
         replication_budget(static_cast<std::size_t>(count(source.shape,TopAbs_SOLID))*copies,static_cast<std::size_t>(source.faces.Extent())*copies);
         std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> instances;

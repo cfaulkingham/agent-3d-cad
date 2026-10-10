@@ -221,9 +221,9 @@ Json model_definitions() {
   sweep_schema["not"]["anyOf"]=Json::array({Json{{"required",{"orientation","binormal"}}},Json{{"required",{"orientation","guide"}}},Json{{"required",{"binormal","guide"}}}});
   features.push_back(sweep_schema);
   features.push_back(object({{"id",id},{"type",{{"enum",{"transform","instance"}}}},{"input",id},{"translation",vector_ref},{"rotation",rotation_schema}}, {"id","type","input"}));
-  features.push_back(object({{"id",id},{"type",{{"const","pattern"}}},{"input",id},{"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"step",vector_ref}}, {"id","type","input","count","step"}));
+  features.push_back(object({{"id",id},{"type",{{"const","pattern"}}},{"input",id},{"count",{{"$ref","#/$defs/pattern_count"}}},{"step",vector_ref}}, {"id","type","input","count","step"}));
   features.push_back(object({{"id",id},{"type",{{"const","circular_pattern"}}},{"input",id},
-    {"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"axis",axis_schema},{"angle_deg",scalar_ref}},
+    {"count",{{"$ref","#/$defs/pattern_count"}}},{"axis",axis_schema},{"angle_deg",scalar_ref}},
     {"id","type","input","count","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","hole"}}},{"input",id},{"origin",vector_ref},{"axis",vector_ref},{"radius",scalar_ref},{"depth",scalar_ref}}, {"id","type","input","origin","axis","radius","depth"}));
   features.push_back(object({{"id",id},{"type",{{"const","import_step"}}},{"content",{{"type","string"},{"minLength",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
@@ -236,11 +236,7 @@ Json model_definitions() {
     {"couplings",{{"type","array"},{"items",{{"$ref","#/$defs/coupling"}}},{"maxItems",126}}},
     {"poses",{{"type","array"},{"items",{{"$ref","#/$defs/pose"}}},{"maxItems",64}}},
     {"bom",{{"type","array"},{"items",{{"$ref","#/$defs/bom_item"}}},{"maxItems",64}}}}, {"id","type","parts"}));
-  const Json expression = object({{"expression", object({
-    {"op",{{"enum",{"add","subtract","multiply","divide"}}}},
-    {"args",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}},
-    {"unit",{{"enum",{"mm","mm2","deg","rad","dimensionless"}}}}
-  }, {"op","args","unit"})}}, {"expression"});
+  const Json expression = scalar_expression_schema(scalar_ref);
   const Json operations = Json::array({
     object({{"op", {{"const", "set_parameter"}}}, {"name", id}, {"value", numeric}}, {"op", "name", "value"}),
     object({{"op", {{"const", "add_feature"}}}, {"feature", feature_ref}}, {"op", "feature"}),
@@ -267,6 +263,7 @@ Json model_definitions() {
     {"workplane",workplane_schema},{"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},{"purchase",purchase},
     {"coupling",coupling_schema},{"pose",pose_schema},
     {"scalar", {{"oneOf", Json::array({numeric, object({{"parameter", id}}, {"parameter"}), expression})}}},
+    {"pattern_count", {{"oneOf",Json::array({Json{{"type","integer"},{"minimum",2},{"maximum",64}},object({{"parameter",id}},{"parameter"}),expression})}}},
     {"vector3", {{"type", "array"}, {"items", scalar_ref}, {"minItems", 3}, {"maxItems", 3}}},
     {"feature", {{"oneOf", features}}},
     {"operation", {{"oneOf", operations}}},
@@ -402,39 +399,6 @@ void prune_definitions(Json& schema) {
   Json used = Json::object();
   for (const auto& name : names) used[name] = available.at(name);
   schema["$defs"] = std::move(used);
-}
-
-namespace {
-double evaluate_scalar(const Json& value, const Json& parameters, const std::string& unit, int depth, int& nodes) {
-  if (++nodes > 128 || depth > 16) throw Error("limit_exceeded", "Expressions permit at most 128 nodes and 16 levels");
-  if (value.is_number()) return number(value);
-  if (value.is_object() && value.contains("expression")) {
-    fields(value, {"expression"});
-    const auto& expression = value.at("expression");
-    fields(expression, {"op", "args", "unit"});
-    if (text_field(expression, "unit") != unit)
-      throw Error("invalid_model", "Expression unit does not match its argument context", {{"expected_unit", unit}});
-    const auto op = text_field(expression, "op");
-    const auto& args = expression.at("args");
-    if (!args.is_array() || args.size() != 2) throw Error("invalid_model", "Arithmetic expressions require two arguments");
-    if (op != "add" && op != "subtract" && op != "multiply" && op != "divide")
-      throw Error("invalid_model", "Unsupported arithmetic expression operation");
-    const auto a = evaluate_scalar(args[0], parameters, unit, depth+1, nodes);
-    // Multiplication/division scale a dimensional value by a dimensionless
-    // factor; they do not implicitly invent compound units.
-    const auto b = evaluate_scalar(args[1], parameters, op == "multiply" || op == "divide" ? "dimensionless" : unit, depth+1, nodes);
-    if (op == "divide" && b == 0) throw Error("invalid_model", "Expression division by zero");
-    return number(op == "add" ? a+b : op == "subtract" ? a-b : op == "multiply" ? a*b : a/b);
-  }
-  fields(value, {"parameter"});
-  const auto name = text_field(value, "parameter");
-  if (!parameters.contains(name)) throw Error("invalid_model", "Unknown parameter: " + name);
-  return number(parameters.at(name));
-}
-}
-double scalar(const Json& value, const Json& parameters, const std::string& unit) {
-  int nodes = 0;
-  return evaluate_scalar(value, parameters, unit, 0, nodes);
 }
 
 std::array<double, 3> vector3(const Json& value, const Json& parameters, const std::string& unit) {
@@ -968,15 +932,14 @@ void validate_model(const Json& model) {
       else fields(feature,{"id","type","input","count","axis","angle_deg"});
       dependency("input");
       if (is_sketch_feature_type(types.at(text_field(feature,"input")))) throw Error("invalid_model", "Patterns currently require solid inputs");
-      if (!feature.at("count").is_number_integer() || feature.at("count") < 2 || feature.at("count") > 64)
-        throw Error("invalid_model", "Pattern count must be an integer from 2 to 64");
+      const auto copies=pattern_count(feature.at("count"),parameters);
       if (type=="pattern") {
         const auto step = vector3(feature.at("step"),parameters);
         if (std::hypot(step[0],step[1],step[2]) < 1e-5) throw Error("invalid_model", "Pattern step must be nonzero");
       } else {
         axis(feature.at("axis"),parameters,"direction");
         const auto angle=scalar(feature.at("angle_deg"),parameters,"deg");
-        if (std::abs(angle)<1e-5 || std::abs(angle)>=360 || std::abs(angle)*(feature.at("count").get<int>()-1)>=360-1e-9)
+        if (std::abs(angle)<1e-5 || std::abs(angle)>=360 || std::abs(angle)*(copies-1)>=360-1e-9)
           throw Error("invalid_model","Circular pattern angle is the signed step; instances must span less than 360 degrees");
       }
     } else if (type == "hole") {

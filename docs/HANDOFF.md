@@ -7,6 +7,39 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Comprehensive comparison gaps — active, 2026-10-10
+
+The user authorized tackling the full comparison gap list with parallel agents.
+The integration branch is `codex/build123d-gap-closure`, based on `f90033f`;
+isolated managed worktrees cover solids/lofts, surfaces and sheet metal.
+[GAP_CLOSURE_PLAN.md](GAP_CLOSURE_PLAN.md) preserves every required area and its
+acceptance obligations. This work is in progress; no release or installed app
+has changed and no full parity/release claim is made.
+
+The integration checkout now implements bounded trigonometric, square-root,
+inverse-trig, rounding, min/max/clamp, power/logarithm, comparison and conditional
+expressions, plus parameter/expression-driven pattern counts. Every tree is
+structurally checked (including inactive branches); `if` evaluates only its
+selected branch. Unit/domain errors and noninteger/out-of-range counts fail
+before publication. Dependencies and portable components retain all referenced
+parameters. [PARAMETRIC_EXPRESSIONS.md](PARAMETRIC_EXPRESSIONS.md) records the
+contract; geometry remains native and model source is never executed.
+
+Validation: native build succeeded. The final focused run passed **4/4 CTest
+suites** (`parametric`, `modeling`, `dependency_cache`, `component`) in **26.43 s**.
+It covers analytic expressions/count geometry, independent STEP validation,
+count edits, invalid-count rollback, cold reopen and portable components.
+The first new test omitted its service-worker executable configuration and
+recursively launched the test itself; those test processes were stopped and the
+harness setup was corrected before the passing run. Production behavior was not
+changed for that harness failure. Independent Draft 2020-12 validation passed
+all **62 live schemas** and **11 accepted/rejected expression/count requests**.
+
+Known integration task: the extended catalog is **490,560 bytes**, above the
+unchanged **476,160-byte** discovery budget. Lossless structural compaction is
+required after feature integration; the budget and validation must not be
+weakened. Full native/SDK/package/platform/host acceptance remains outstanding.
+
 ## Standalone UI synchronized and installed — 2026-10-10
 
 Rebuilt and installed the standalone app at the user's request. The prior

@@ -31,6 +31,8 @@ void validate_purchase(const Json& purchase, bool require_artifact = false);
 // unchanged purchased-part identity. The caller owns the validated model.
 const Json* imported_step_source(const Json& model, const std::string& feature_id);
 double scalar(const Json& value, const Json& parameters, const std::string& unit = "mm");
+Json scalar_expression_schema(const Json& scalar_ref);
+int pattern_count(const Json& value, const Json& parameters);
 std::array<double, 3> vector3(const Json& value, const Json& parameters, const std::string& unit = "mm");
 Json apply_operations(const Json& model, const Json& operations, const ComponentResolver& resolve = {});
 // Pure document semantics: validates motion declarations, resolves coupled
