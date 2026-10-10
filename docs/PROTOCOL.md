@@ -1072,7 +1072,14 @@ it neither creates a workspace nor modifies client settings. `--help` is human
 readable. `serve` stdout remains exclusively newline-delimited JSON.
 
 The Tauri shell is an adapter to the same MCP stdio service. Its page can call
-only library/show/context/viewer tools for its window’s view. Native export IPC
+library/show/context/viewer tools for its window’s view, read saved revisions of
+that view's native document for parameter comparison, and submit one bounded
+`set_parameter` operation through `cad_job`/`cad_apply`. Parameter submissions
+require the current saved displayed revision, use at most 30 seconds / 2048 MiB,
+and preserve the native expected-revision and rollback checks. Page job polling
+is limited to parameter requests submitted by the current workspace session;
+changing workspaces clears that ownership. Other job tools and edits remain
+unavailable through page IPC. Native export IPC
 accepts a document, committed revision and one of `step`, `stl`, `3mf`, `pdf`, `svg`,
 `dxf`; the shell uses `cad_job` and OS save dialogs. Workspace dialogs and recent
 paths are local UI state. This adds no modeling tool or document schema, HTTP

@@ -3,11 +3,11 @@ mod client;
 use client::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
+use std::{collections::HashSet, fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 use tauri::{Manager, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 
-struct Session { client: Client, workspace: PathBuf, launch: Value }
+struct Session { client: Client, workspace: PathBuf, launch: Value, parameter_jobs: HashSet<String> }
 struct Desktop {
     session: Mutex<Option<Session>>, busy: AtomicBool, exe: PathBuf, initial: PathBuf, view: String, preferences: PathBuf,
 }
@@ -40,11 +40,76 @@ fn open(state: &Desktop, path: PathBuf) -> Result<Value> {
     let mut history = recent(state); history.retain(|folder| folder != &path); history.insert(0, path.clone()); history.truncate(12);
     fs::create_dir_all(state.preferences.parent().ok_or("No settings folder")?).map_err(|e| e.to_string())?;
     fs::write(&state.preferences, serde_json::to_vec(&history).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    *state.session.lock().map_err(|e| e.to_string())? = Some(Session { client, workspace: path, launch: launch.clone() });
+    *state.session.lock().map_err(|e| e.to_string())? = Some(Session { client, workspace: path, launch: launch.clone(), parameter_jobs: HashSet::new() });
     Ok(launch)
 }
 fn tool(state: &Desktop, name: &str, args: Value) -> Result<Value> {
     state.session.lock().map_err(|e| e.to_string())?.as_mut().ok_or("Open a workspace first")?.client.value(name, args)
+}
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum ParameterJob {
+    Submit { request_id: String, tool: String, arguments: ParameterEdit, budget: ParameterBudget },
+    Get { job_id: String },
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterEdit { document_id: String, expected_revision: u64, operations: Vec<ParameterOperation> }
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
+enum ParameterOperation { SetParameter { name: String, value: f64 } }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParameterBudget { timeout_ms: u64, memory_mb: u64 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ComparisonRead { document_id: String, revision: u64 }
+
+fn native_document(session: &mut Session, view: &str, document: &str) -> Result<Value> {
+    let context = session.client.value("cad_context", json!({"view_id":view}))?;
+    if context["document_id"] != document || context["read_only"] == true {
+        return Err("Document does not belong to this window's editable view".into());
+    }
+    Ok(context)
+}
+fn viewer_tool(state: &Desktop, name: &str, args: Value) -> Result<Value> {
+    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+    let session = guard.as_mut().ok_or("Open a workspace first")?;
+    match name {
+        "cad_list" => {},
+        "cad_show" | "cad_context" | "cad_viewer" => {
+            if args["view_id"] != state.view { return Err("View does not belong to this window".into()); }
+        },
+        "cad_read" => {
+            let read: ComparisonRead = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+            if read.revision == 0 { return Err("Choose a saved revision to compare".into()); }
+            native_document(session, &state.view, &read.document_id)?;
+        },
+        "cad_job" => match serde_json::from_value::<ParameterJob>(args.clone()).map_err(|e| e.to_string())? {
+            ParameterJob::Submit { request_id, tool, arguments, budget } => {
+                if tool != "cad_apply" || arguments.operations.len() != 1 ||
+                    budget.timeout_ms == 0 || budget.timeout_ms > 30000 || budget.memory_mb == 0 || budget.memory_mb > 2048 {
+                    return Err("The viewer can submit only one bounded parameter edit".into());
+                }
+                let ParameterOperation::SetParameter { name, value } = &arguments.operations[0];
+                if name.is_empty() || !value.is_finite() || value.abs() > 1000000.0 {
+                    return Err("Choose a finite parameter value between -1,000,000 and 1,000,000".into());
+                }
+                let context = native_document(session, &state.view, &arguments.document_id)?;
+                if arguments.expected_revision == 0 || context["revision"] != arguments.expected_revision ||
+                    context["head_revision"] != arguments.expected_revision || context["stale"] != false || context["draft"] == true {
+                    return Err("Wait for current saved geometry before changing a parameter".into());
+                }
+                // Retain ownership even if the submit acknowledgment is lost. Never resubmit here.
+                session.parameter_jobs.insert(request_id);
+            },
+            ParameterJob::Get { job_id } => {
+                if !session.parameter_jobs.contains(&job_id) { return Err("Job does not belong to this window".into()); }
+            },
+        },
+        _ => return Err("This tool is not available in the viewer".into()),
+    }
+    session.client.call(name, args)
 }
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -61,10 +126,8 @@ async fn initialize(window: WebviewWindow, state: tauri::State<'_, Shared>) -> R
 #[tauri::command]
 async fn call_tool(window: WebviewWindow, state: tauri::State<'_, Shared>, name: String, args: Value) -> Result<Value> {
     check(&window)?;
-    if !["cad_list", "cad_show", "cad_context", "cad_viewer"].contains(&name.as_str()) { return Err("This tool is not available in the viewer".into()); }
-    if name != "cad_list" && args["view_id"] != state.view { return Err("View does not belong to this window".into()); }
     let state = state.inner().clone();
-    blocking(move || state.session.lock().map_err(|e| e.to_string())?.as_mut().ok_or("Open a workspace first")?.client.call(&name, args)).await
+    blocking(move || viewer_tool(&state, &name, args)).await
 }
 #[tauri::command]
 fn recent_workspaces(window: WebviewWindow, state: tauri::State<'_, Shared>) -> Result<Vec<PathBuf>> { check(&window)?; Ok(recent(&state)) }
@@ -171,6 +234,87 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn page(state: &Desktop, name: &str, args: Value) -> Value {
+        let result = viewer_tool(state, name, args.clone()).unwrap();
+        assert_ne!(result["isError"], true, "{name} {args}: {result}");
+        result["structuredContent"].clone()
+    }
+    fn ready(state: &Desktop, revision: u64) {
+        for _ in 0..400 {
+            let reply = viewer_tool(state, "cad_viewer", json!({"action":"sync","view_id":"main"})).unwrap();
+            // The shared live renderer retries sync on transient publication locks.
+            if reply["isError"] == true && reply["structuredContent"]["error"]["code"] == "workspace_busy" {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            assert_ne!(reply["isError"], true, "{reply}");
+            let result = &reply["structuredContent"];
+            if result["state"] == "ready" && result["revision"] == revision { return; }
+            assert_ne!(result["state"], "failed", "{result}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("Saved geometry did not become ready");
+    }
+    fn finish(state: &Desktop, id: &str) -> Value {
+        for _ in 0..400 {
+            let job = page(state, "cad_job", json!({"action":"get","job_id":id}));
+            if !["queued", "running", "cancelling"].contains(&job["state"].as_str().unwrap()) { return job; }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("Parameter job did not finish");
+    }
+    #[test]
+    fn viewer_parameters_compare_and_rollback_through_the_restricted_bridge() {
+        let root = std::env::temp_dir().join(format!("cad-desktop-parameters-{}", uuid::Uuid::new_v4()));
+        let state = Desktop { session: Mutex::new(None), busy: AtomicBool::new(false),
+            exe: std::env::var_os("CAD_SERVICE_EXE").expect("Set CAD_SERVICE_EXE").into(),
+            initial: root.join("workspace"), view: "main".into(), preferences: root.join("settings/workspaces.json") };
+        open(&state, state.initial.clone()).unwrap();
+        for id in ["part", "other"] {
+            tool(&state, "cad_create", json!({"document_id":id,"model":{"schema_version":1,"units":"mm","parameters":{"width":20},
+                "features":[{"id":"box","type":"box","size":[{"parameter":"width"},10,5]}],"output":"box"}})).unwrap();
+        }
+        page(&state, "cad_show", json!({"view_id":"main","document_id":"part"}));
+        ready(&state, 1);
+        let edit = json!({"action":"submit","request_id":"parameter_valid","tool":"cad_apply",
+            "arguments":{"document_id":"part","expected_revision":1,"operations":[{"op":"set_parameter","name":"width","value":25}]},
+            "budget":{"timeout_ms":30000,"memory_mb":2048}});
+        for (name, args) in [
+            ("cad_read", json!({"document_id":"other","revision":1})),
+            ("cad_context", json!({"view_id":"other"})),
+            ("cad_job", json!({"action":"get","job_id":"foreign"})),
+            ("cad_job", json!({"action":"list"})),
+            ("cad_apply", edit["arguments"].clone()),
+        ] { assert!(viewer_tool(&state, name, args).is_err()); }
+        for (pointer, value) in [
+            ("/tool", json!("cad_export")), ("/arguments/document_id", json!("other")),
+            ("/arguments/expected_revision", json!(2)), ("/budget/timeout_ms", json!(30001)),
+            ("/arguments/operations/0/op", json!("remove_feature")),
+            ("/arguments/operations/0/value", json!(1000001)),
+        ] {
+            let mut rejected = edit.clone(); *rejected.pointer_mut(pointer).unwrap() = value;
+            assert!(viewer_tool(&state, "cad_job", rejected).is_err(), "{pointer}");
+        }
+        page(&state, "cad_job", edit.clone());
+        assert_eq!(finish(&state, "parameter_valid")["state"], "succeeded");
+        ready(&state, 2);
+        let old = page(&state, "cad_read", json!({"document_id":"part","revision":1}));
+        let current = page(&state, "cad_read", json!({"document_id":"part","revision":2}));
+        assert_eq!(old["model"]["parameters"]["width"], 20);
+        assert_eq!(current["model"]["parameters"]["width"], 25.0);
+        assert!(viewer_tool(&state, "cad_job", edit.clone()).is_err(), "Stale revision must be rejected");
+        let mut invalid = edit;
+        invalid["request_id"] = json!("parameter_invalid");
+        invalid["arguments"]["expected_revision"] = json!(2);
+        invalid["arguments"]["operations"][0]["value"] = json!(-1);
+        page(&state, "cad_job", invalid);
+        assert_eq!(finish(&state, "parameter_invalid")["state"], "failed");
+        assert_eq!(tool(&state, "cad_read", json!({"document_id":"part"})).unwrap(), current);
+        open(&state, root.join("other-workspace")).unwrap();
+        assert!(viewer_tool(&state, "cad_job", json!({"action":"get","job_id":"parameter_valid"})).is_err());
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn desktop_exports_all_formats_without_changing_saved_source() {
         let root = std::env::temp_dir().join(format!("cad-desktop-{}", uuid::Uuid::new_v4()));

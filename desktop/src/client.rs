@@ -53,20 +53,20 @@ impl Client {
         Ok(response["result"].clone())
     }
     pub fn call(&mut self, name: &str, args: Value) -> Result<Value, String> {
-        self.request("tools/call", json!({"name":name, "arguments":args}))
-    }
-    pub fn value(&mut self, name: &str, args: Value) -> Result<Value, String> {
-        let retryable = ["cad_list", "cad_context", "cad_open"].contains(&name) ||
+        let retryable = ["cad_list", "cad_context", "cad_open", "cad_read"].contains(&name) ||
             (name == "cad_job" && args["action"] == "get");
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        let result = loop {
-            let result = self.call(name, args.clone())?;
+        loop {
+            let result = self.request("tools/call", json!({"name":name, "arguments":args}))?;
             if retryable && result["isError"] == true && result["structuredContent"]["error"]["code"] == "workspace_busy" && std::time::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(50));
                 continue;
             }
-            break result;
-        };
+            return Ok(result);
+        }
+    }
+    pub fn value(&mut self, name: &str, args: Value) -> Result<Value, String> {
+        let result = self.call(name, args)?;
         if result["isError"] == true { return Err(result["structuredContent"]["error"]["message"].as_str().unwrap_or("CAD operation failed").into()); }
         Ok(result["structuredContent"].clone())
     }

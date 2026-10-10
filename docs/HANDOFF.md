@@ -7,6 +7,63 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Standalone UI synchronized and installed — 2026-10-10
+
+Rebuilt and installed the standalone app at the user's request. The prior
+October-8 app still had the earlier viewer. The new bundle is
+`~/Applications/Agent3DCAD/desktop-shared-ui-4cef546-20261010`, with the existing
+`~/Applications/Agent CAD.app` alias atomically updated after verification.
+The previous app remains intact. VERSION stays `0.1.0-preview.1`; no release/tag
+or plugin registration changed. This is a working-tree desktop increment over
+`4cef546`.
+
+Rebuilding exposed an adapter gap: the shared frontend's parameter sliders and
+revision comparison used tools excluded by the old desktop IPC allowlist. The
+standalone now permits saved-revision reads for its current native document and
+single bounded `set_parameter` jobs for its current saved displayed revision.
+Job polling is restricted to requests submitted by that workspace session, and
+workspace changes clear that ownership. Native expected-revision checks and
+rollback still govern geometry. The existing bounded read-only publication-lock
+retry now also covers raw desktop bridge calls and comparison reads; submissions
+are never automatically retried. General modeling jobs remain unavailable to
+the page. PROTOCOL records the adapter behavior; native contracts are unchanged.
+
+Validation on macOS arm64 / OCCT 8.0.1:
+
+- Native and locked/offline Rust release builds succeeded. **13/13 UI/native
+  CTest suites passed in 26.01 s**. Final **4/4 Rust integration tests passed in
+  2.58 s**, covering byte-equivalent UI, saved-project reopen, STEP/STL/3MF/
+  PDF/SVG/DXF exports, real restricted-bridge parameter edits/comparisons,
+  invalid-geometry rollback and rejection of wrong-view/document/job requests.
+  The first new bridge test hit a transient publication lock; the final tests
+  exercise the corrected read retries and the renderer's existing sync retry.
+- Packaging and installation verified **579 inventory files plus the manifest**,
+  all native/Rust dependency notices and the app's ad-hoc signature. Installed
+  desktop and plugin services both expose **31 tools** with PATH empty and
+  development loader overrides removed. Their native binaries are identical:
+  SHA-256 `290518c0b2ab29b0fff4b692becb79ca7cc4666befa604fbe173196493e95a39`.
+- Installed frontend bytes equal the actual installed plugin MCP resource after
+  removing only its host-specific CSP meta tag. Desktop frontend SHA-256 is
+  `291293604b235f7f5dc719c2d00781a4bd688ce6a3a1b5581beddb5b43e2a6ae`;
+  desktop executable SHA-256 is
+  `64fef211d962cfb0bf14d69a020a8054e376c85c7b0a845d25a50128b9d37193`.
+- Installation preserved all **102 saved model files**, recent-workspace
+  preferences and plugin configuration. The actual installed GUI reopened the
+  existing `l_bracket_40x40x3_m4` project and displayed Parts/Parameters cards,
+  sliders, comparison control and bottom Export button. During inspection the
+  user actively exercised the app; parameter changes saved revisions 4–6 and
+  the GUI reported `Saved revision 6`. Agent UI input stopped to avoid
+  interference. Follow-up hashes confirm all preexisting revision files remain
+  unchanged; the user's new revisions and updated HEAD/receipts are retained.
+- `git diff --check` passed. Reproducible installation script, build/test logs,
+  hashes and GUI observations are in `.local/evidence/standalone-sync-20261010/`.
+  The packaged archive is under `build/packages/standalone-sync-20261010/`.
+
+The installed app remains open on the user's workspace. Native Save dialogs and
+workspace switching remain intentional standalone differences. This increment
+does not establish additional platform or 1.0 host/signing/notarization gates;
+standalone remains deferred from the two-plugin 1.0 scope.
+
 ## Installed modeling plugin — 2026-10-10
 
 At the user's request, updated the enabled `agent-cad@agent-cad-local` plugin
