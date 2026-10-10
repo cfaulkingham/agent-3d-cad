@@ -447,7 +447,7 @@ std::unique_ptr<WorkspaceLock> wait_lock(const fs::path& path) {
 std::optional<Json> committed_result(const fs::path& workspace, const Json& state) {
   if (!mutation(state.at("tool").get<std::string>()) || !state.contains("document_id")) return {};
   auto result=Store(workspace).request_replay(state.at("document_id").get<std::string>(),
-    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());if(result&&state.at("tool")=="cad_import_sketch")result->erase("model");return result;
+    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());if(result)return committed_record_receipt(std::move(*result));return result;
 }
 // Recovery and reporting treat an unreadable receipt as no committed result.
 std::optional<Json> committed_result_or_none(const fs::path& workspace, const Json& state) {
@@ -485,8 +485,20 @@ void recover_job(const fs::path& workspace, const fs::path& path, JobRecord& rec
 Json job_view(const fs::path& workspace, const fs::path& path, const JobRecord& record) {
   auto view = public_job(record.state);
   if (record.state.at("state") != "succeeded") return view;
-  if (record.result) { view["result"] = *record.result; return view; }
-  try { view["result"] = read_stored_result(path, record.state).result; }
+  try {
+    auto result=record.result?*record.result:read_stored_result(path,record.state).result;
+    if(mutation(record.state.at("tool").get<std::string>())) {
+      // Older durable jobs may contain the former full-record reply. Project
+      // it without rewriting immutable result bytes. Legacy sketch receipts
+      // obtain the missing identity from their exact historical source.
+      if(result.contains("model"))result=committed_record_receipt(std::move(result));
+      else if(!result.contains("model_sha256")) {
+        const auto historical=Store(workspace).read(text_field(result,"document_id"),revision_number(result.at("revision")));
+        result["model_sha256"]=sha256(historical.at("model").dump());
+      }
+    }
+    view["result"]=std::move(result);
+  }
   catch (const std::exception& e) {
     if (const auto result = committed_result_or_none(workspace, record.state)) view["result"] = *result;
     else { view["state"] = "failed"; view["error"] = corrupt("Job result is missing or corrupt: " + std::string(e.what())).json(); }

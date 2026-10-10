@@ -150,7 +150,7 @@ def production(source, compiler, include, values):
     service = (source / "src/service.cpp").read_text(encoding="utf-8")
     marker = "    // Final local anchors shorten profitable whole-definition references."
     start = service.index(marker)
-    end = service.index("\n  }\n  return tools;", start)
+    end = service.index("    // Factor context-independent assertions into local reference siblings.", start)
     block = service[start:end]
     code = """#include <nlohmann/json.hpp>
 static_assert(NLOHMANN_JSON_VERSION_MAJOR==3 && NLOHMANN_JSON_VERSION_MINOR==12 && NLOHMANN_JSON_VERSION_PATCH==0);

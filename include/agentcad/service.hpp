@@ -4,6 +4,9 @@
 
 namespace agentcad {
 Json tool_definitions();
+// Commit responses carry source identity and summary. The complete immutable
+// editable source is retrieved through cad_read at this receipt's revision.
+Json committed_record_receipt(Json record);
 // Closed field sets and identity fields of a document tool's arguments. Shared
 // by Service::call and job submission so malformed input fails before queuing.
 void validate_tool_arguments(const std::string& tool, const Json& args);

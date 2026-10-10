@@ -363,16 +363,21 @@ Document operations require `document_id`. External artifact review/show and
 job/view management have separate document-free inputs. Revisions are positive
 JSON-safe integers. See runtime schemas for exact closed field definitions.
 
+Mutations return compact revision/hash/summary receipts. Retrieve full editable
+intent through `cad_read` at the returned revision; see
+[commit receipts](COMMIT_RECEIPTS.md) for the preview API change and durable
+replay behavior.
+
 | Tool | Arguments beyond document_id | Result |
 |---|---|---|
-| `cad_create` | `model`, optional `request_id` | Committed record + summary, revision 1 |
+| `cad_create` | `model`, optional `request_id` | Compact committed revision/hash/summary receipt, revision 1 |
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
 | `cad_capture_sketch` | No document ID; `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions and optional source hash | Worker-validated portable text/SVG/DXF sketch, captured bytes/hash and contour/segment counts |
 | `cad_import_sketch` | `expected_revision`, `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions; optional source hash and request ID | Atomic appended sketch, compact committed/source identity and existing output summary; retrieve editable bytes with `cad_read` |
-| `cad_apply` | `expected_revision`, `operations`, optional `request_id` | New committed record + summary |
-| `cad_restore` | `expected_revision`, `source_revision`, optional `request_id` | Historical intent rebuilt as a new revision |
+| `cad_apply` | `expected_revision`, `operations`, optional `request_id` | Compact committed revision/hash/summary receipt |
+| `cad_restore` | `expected_revision`, `source_revision`, optional `request_id` | Historical intent rebuilt as a new revision; compact receipt |
 | `cad_inspect_step` | No `document_id`; `path`, optional `expected_sha256` | Source-qualified per-solid validity, meshability, bounds and BRep diagnostics; no document creation |
-| `cad_import` | `path`, optional `request_id`, `expected_sha256`, `purchase`, `solid_indices` | New document with exact embedded STEP bytes; explicit subset requires the source hash and cannot carry `purchase`; see [sourced-part contract](PURCHASED_PARTS.md) |
+| `cad_import` | `path`, optional `request_id`, `expected_sha256`, `purchase`, `solid_indices` | Compact receipt for a new document with exact embedded STEP bytes; explicit subset requires the source hash and cannot carry `purchase`; see [sourced-part contract](PURCHASED_PARTS.md) |
 | `cad_artifact` | No `document_id`; `action: review` with absolute `path`, raw `expected_sha256`, explicit `format`, `units`, optional `references`, `native_source`; or `action: verify` with `review_path`, review `expected_sha256` | Portable captured read-only review, source/review hashes, parsed summary and explicit representation limits; `action: recognize` additionally accepts captured mesh `review_path`, `expected_sha256`, explicit fit `options` and optional reconstruction guides; see [artifact contract](ARTIFACT_REVIEW.md) and [mesh reconstruction](MESH_RECONSTRUCTION.md) |
 | `cad_artifact_show` | No `document_id`; `review_path`, review `expected_sha256`, optional `view_id` | Verify/reparse and display a frozen artifact in the MCP App; `{view_id,document_id:null,read_only:true,artifact,resource_uri}` |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |

@@ -16,6 +16,11 @@ Call `cad_open` once: the view follows saved revisions automatically. Use
 `cad_show` with that `view_id` when switching to a different document. View IDs
 are workspace-scoped; choose a distinct explicit ID for independent chats.
 
+Create/edit/import/restore replies are compact revision/hash/summary receipts.
+Use `cad_read` with the returned `document_id` and `revision` for complete
+editable source before inspecting or reusing it. See
+[commit receipts](COMMIT_RECEIPTS.md).
+
 Users select geometry in the viewer and enter requests in the main chat. When
 a request refers to the selected face/edge or “this edge,” read `cad_context`
 with the retained `view_id` before choosing an edit target. Use its current

@@ -57,6 +57,12 @@ def fixtures():
     standard = {"tag": ["a", "b", "c", "d", 1], "shared": ["abc", "a", "abcdefg", "ABCD", 3],
                 "local": [0, 1, "x"], "other": [0, "x"]}
     result = [fixture("closed_different_allowed_fields", branches(), standard)]
+    mixed_cardinality = branches()
+    first = mixed_cardinality["oneOf"][0]
+    first["required"] = list(first["properties"])
+    # The first branch will normalize to closed-field cardinality before the
+    # union is visited; mandatory tag must still be hoisted from both forms.
+    result.append(fixture("mixed_cardinality_and_explicit_required", mixed_cardinality, standard))
     both = branches("anyOf")
     result.append(fixture("anyof_different_allowed_fields", both, standard))
     different = branches()

@@ -286,6 +286,7 @@ async def smoke(executable, workspace):
                 {"op": "set_bom_item", "assembly_id": "assembly", "item": metadata}]})
         require(metadata_edit["revision"] == 2 and math.isclose(metadata_edit["summary"]["volume_mm3"], assembly["summary"]["volume_mm3"], abs_tol=1e-6),
                 "SDK BOM metadata edit changed geometry or failed to commit")
+        metadata_source = await call(client, definitions, "cad_read", {"document_id": aid, "revision": metadata_edit["revision"]})
         package_job = await call(client, definitions, "cad_job", {
             "action": "submit", "request_id": "sdk_manufacturing", "tool": "cad_manufacture",
             "arguments": {"document_id": aid, "revision": 2, "options": {
@@ -306,7 +307,7 @@ async def smoke(executable, workspace):
             content = (Path(package["directory"]) / artifact["path"]).read_bytes()
             require(len(content) == artifact["bytes"] and hashlib.sha256(content).hexdigest() == artifact["sha256"],
                     "SDK manufacturing artifact failed independent SHA-256 verification")
-        require(json.loads((Path(package["directory"]) / "source.json").read_text())["model"] == metadata_edit["model"],
+        require(json.loads((Path(package["directory"]) / "source.json").read_text())["model"] == metadata_source["model"],
                 "SDK package lost editable source")
         process_profile = {"process": "cnc", "orientation": {"build_direction": [0, 0, 1], "x_direction": [1, 0, 0]},
                            "tool_radius_mm": 1}
@@ -328,7 +329,7 @@ async def smoke(executable, workspace):
             findings = {c["id"]: c for c in part["checks"]}
             require(findings["global_minimum_wall"]["status"] == "unknown" and findings["cnc_toolpath_and_stock"]["status"] == "unknown",
                     "SDK review turned unsupported process checks into passes")
-        require((await call(client, definitions, "cad_read", {"document_id": aid}))["model"] == metadata_edit["model"],
+        require((await call(client, definitions, "cad_read", {"document_id": aid}))["model"] == metadata_source["model"],
                 "SDK measured review changed saved source intent")
         supplier_step = await call(client, definitions, "cad_export", {"document_id": aid, "revision": 2, "format": "step"})
         supplier_bytes = Path(supplier_step["path"]).read_bytes()
@@ -340,7 +341,8 @@ async def smoke(executable, workspace):
         supplier_done = await poll(client, definitions, supplier_job["job_id"])
         require(supplier_done["state"] == "succeeded", "SDK purchased import job failed")
         bound_supplier = dict(supplier, artifact_sha256=supplier_hash)
-        require(supplier_done["result"]["model"]["features"][0]["purchase"] == bound_supplier,
+        supplier_source = await call(client, definitions, "cad_read", {"document_id": "sdk_purchased", "revision": supplier_done["result"]["revision"]})
+        require(supplier_source["model"]["features"][0]["purchase"] == bound_supplier,
                 "SDK importer did not bind the measured raw artifact hash")
         await call(client, definitions, "cad_import", {"document_id": "sdk_purchase_mismatch", "path": supplier_step["path"],
             "purchase": supplier, "expected_sha256": "a" * 64}, expected_error="artifact_mismatch")
@@ -693,7 +695,7 @@ async def smoke(executable, workspace):
         current = await call(reopened, definitions, "cad_read", {"document_id": "part"})
         require(current["revision"] == 2, "Reopened SDK session lost committed HEAD")
         historical = await call(reopened, definitions, "cad_read", {"document_id": "part", "revision": 1})
-        require(historical["model"] == created["model"], "Historical revision changed after restart")
+        require(historical["model"] == box_model(), "Historical revision changed after restart")
         require(await call(reopened, definitions, "cad_create", {
             "document_id": "part", "model": box_model(), "request_id": "sdk_create"}) == created,
                 "Durable mutation deduplication failed across SDK sessions")

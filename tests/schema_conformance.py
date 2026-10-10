@@ -46,6 +46,14 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         checks += 2
         return result
 
+    def source_for(receipt):
+        assert "model" not in receipt and len(receipt["model_sha256"]) == 64
+        source_record = call("cad_read", {"document_id": receipt["document_id"], "revision": receipt["revision"]})
+        source_model = source_record["model"]
+        raw = json.dumps(source_model, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        assert hashlib.sha256(raw).hexdigest() == receipt["model_sha256"]
+        return source_model
+
     model = {"schema_version": 1, "units": "mm", "parameters": {"height": 6},
              "features": [{"id": "base", "type": "box", "size": [20, 10, {"parameter": "height"}]}], "output": "base"}
     created = call("cad_create", {"document_id": "part", "model": model, "request_id": "create_once"})
@@ -207,7 +215,7 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     large_path.write_bytes(large_bytes)
     large_import = call("cad_import", {"document_id": "large_schema", "path": str(large_path),
                                       "expected_sha256": hashlib.sha256(large_bytes).hexdigest()})
-    assert large_import["model"]["features"][0]["content"].encode() == large_bytes
+    assert source_for(large_import)["features"][0]["content"].encode() == large_bytes
     call("cad_read", {"document_id": "large_schema"})
     budget_args = {"action": "submit", "tool": "cad_import", "request_id": "large_budget_schema",
                    "arguments": {"document_id": "large_budget_schema", "path": str(large_path)},
@@ -219,8 +227,8 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     bought = call("cad_import", {"document_id": "purchased_schema", "path": exported["path"],
         "expected_sha256": step_hash, "purchase": purchase})
     bound_purchase = dict(purchase, artifact_sha256=step_hash)
-    assert bought["model"]["features"][0]["purchase"] == bound_purchase
-    purchased_assembly = json.loads(json.dumps(bought["model"]))
+    assert source_for(bought)["features"][0]["purchase"] == bound_purchase
+    purchased_assembly = json.loads(json.dumps(source_for(bought)))
     purchased_assembly["features"].append({"id": "assembly", "type": "assembly", "parts": [
         {"id": "one", "input": "imported"}, {"id": "two", "input": "imported", "placement": {"translation": [30, 0, 0]}}]})
     purchased_assembly["output"] = "assembly"
@@ -237,7 +245,7 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         assert not Draft202012Validator(tools["cad_import"]["inputSchema"]).is_valid(
             dict(document_id="bad_purchase", path=exported["path"], **bad))
         checks += 1
-    missing_hash = json.loads(json.dumps(bought["model"]))
+    missing_hash = json.loads(json.dumps(source_for(bought)))
     del missing_hash["features"][0]["purchase"]["artifact_sha256"]
     assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid({"document_id": "missing_hash", "model": missing_hash})
     checks += 5
@@ -321,6 +329,7 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     # Assemblies reuse the exact same tools, persisted document and live schemas.
     assembly = json.loads((source / "examples/assembly.create.json").read_text())
     assembled = call("cad_create", assembly)
+    assert source_for(assembled) == assembly["model"]
     aid = assembly["document_id"]
     inventory = assembled["summary"]["assembly"]["parts"]
     assert len(inventory) >= 2 and all(len(p["transform"]) == 16 for p in inventory)
@@ -466,7 +475,7 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         content = (package_root / artifact["path"]).read_bytes()
         assert len(content) == artifact["bytes"] and hashlib.sha256(content).hexdigest() == artifact["sha256"]
         checks += 2
-    assert call("cad_read", {"document_id": aid})["model"] == metadata_edit["model"]
+    assert call("cad_read", {"document_id": aid})["model"] == source_for(metadata_edit)
     checks += 5
     process_profile = {"process": "fdm", "orientation": {"build_direction": [0, 0, 1], "x_direction": [1, 0, 0]},
                        "minimum_wall_mm": 7, "overhang_angle_deg": 45}
@@ -589,9 +598,9 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     call("cad_preview", {"document_id": "component_schema", "expected_revision": 1, "kind": "mesh", "operations": component_edits})
     imported = call("cad_apply", {"document_id": "component_schema", "expected_revision": 1, "operations": component_edits})
     assert imported["summary"]["components"][0]["source"]["revision"] == 1 and not imported["summary"]["components"][0]["modified"]
-    assert imported["model"]["components"][0]["snapshot"] == nested_example["model"]
+    assert source_for(imported)["components"][0]["snapshot"] == nested_example["model"]
     call("cad_read", {"document_id": "component_schema"})
-    call("cad_create", {"document_id": "copied_component_schema", "model": imported["model"]})
+    call("cad_create", {"document_id": "copied_component_schema", "model": source_for(imported)})
     call("cad_open", {"document_id": "component_schema", "view_id": "component_schema"})
     for _ in range(300):
         component_view = call("cad_viewer", {"action": "sync", "view_id": "component_schema"})

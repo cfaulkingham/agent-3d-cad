@@ -82,6 +82,11 @@ Json save_evaluation(const fs::path& root,const Json& record,Json result,bool dr
 }
 }
 
+Json committed_record_receipt(Json record) {
+  record["model_sha256"]=sha256(record.at("model").dump());
+  record.erase("model");return record;
+}
+
 Json tool_definitions() {
   const Json id={{"$ref","#/$defs/model_id"}};
   const Json revision={{"$ref","#/$defs/revision"}};
@@ -130,6 +135,8 @@ Json tool_definitions() {
   const Json reference=object(reference_properties,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"});
   const Json record_properties={{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},
     {"kernel_version",{{"const","8.0.1"}}},{"model",{{"$ref","#/$defs/model"}}},{"summary",summary_schema()}};
+  auto receipt_properties=record_properties;receipt_properties.erase("model");receipt_properties["model_sha256"]=hash;
+  auto source_properties=record_properties;source_properties.erase("summary");
   const Json identity={{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},
     {"kernel_version",{{"const","8.0.1"}}},{"evaluation_id",id},{"feature_id",id},{"draft",{{"type","boolean"}}},
     {"selection_lifetime",{{"const","evaluation"}}},{"summary",summary_schema()},
@@ -144,18 +151,18 @@ Json tool_definitions() {
   preview_output["properties"]["draft"]={{"const",true}};
   preview_output["oneOf"]=Json::array({Json{{"required",{"path","data_path"}}},Json{{"required",{"mesh","topology"}}}});
   Json tools=Json::array({
-    tool("cad_create","Build editable parts or an assembly with rigid or articulated frame mates, and commit revision 1. Optional request_id deduplicates retries.",
+    tool("cad_create","Build editable parts or an assembly with rigid or articulated frame mates, and commit revision 1. Optional request_id deduplicates retries. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"model",{{"$ref","#/$defs/model"}}},{"request_id",id}}, {"document_id","model"},
-      object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
+      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
     tool("cad_read","Read saved editable intent. Omit revision to read HEAD.",
       {{"document_id",id},{"revision",revision}},{"document_id"},
-      object(record_properties,{"schema_version","document_id","revision","kernel_version","model"}),true),
-    tool("cad_apply","Build atomic semantic edits, including revision-pinned editable components, and commit only if expected_revision still matches. Failures preserve HEAD.",
+      object(source_properties,{"schema_version","document_id","revision","kernel_version","model"}),true),
+    tool("cad_apply","Build atomic semantic edits, including revision-pinned editable components, and commit only if expected_revision still matches. Failures preserve HEAD. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"request_id",id}},
-      {"document_id","expected_revision","operations"},object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
-    tool("cad_restore","Rebuild a historical model as a new revision. History remains immutable; expected_revision must match HEAD.",
+      {"document_id","expected_revision","operations"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
+    tool("cad_restore","Rebuild a historical model as a new revision. History remains immutable; expected_revision must match HEAD. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"expected_revision",revision},{"source_revision",revision},{"request_id",id}},
-      {"document_id","expected_revision","source_revision"},object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
+      {"document_id","expected_revision","source_revision"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
     tool("cad_inspect_step","Inspect a local STEP before importing, including invalid geometry. Reports per-solid validity, tessellation, bounds and diagnostic entities. Source solid indices are scoped to the returned SHA-256 and pinned kernel; use that hash with cad_import solid_indices. No repair, document or revision is created.",
       {{"path",text},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"path"},
       object({{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"kernel_version",text},{"index_lifetime",{{"const","source_sha256_and_kernel"}}},
@@ -168,13 +175,13 @@ Json tool_definitions() {
         {"source_sha256","kernel_version","index_lifetime","valid","meshable","solid_count","solids","errors"}),true),
     tool("cad_import_sketch","Capture a local font, SVG or ASCII DXF and atomically append its exact editable sketch to an existing document. Requires expected_revision; validates every source contour in a bounded worker before publication. Returns compact revision/source identity; cad_read retrieves embedded bytes. Then extrude, cut or thicken by feature_id through ordinary cad_apply. Optional request_id deduplicates retries and source deletion does not affect rebuilds.",
       {{"document_id",id},{"expected_revision",revision},{"request_id",id},{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"$ref","#/$defs/scalar"}}},{"spacing",{{"$ref","#/$defs/scalar"}}},{"scale",{{"$ref","#/$defs/scalar"}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}},{"fonts",authoring_font_sources_schema()}}, {"document_id","expected_revision","format","path","feature_id","workplane"},
-      object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"summary",summary_schema()}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","summary"}),false),
+      object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"model_sha256",hash},{"summary",summary_schema()}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","model_sha256","summary"}),false),
     tool("cad_capture_sketch","Capture a local font, SVG or ASCII DXF as a portable editable sketch feature. Embeds exact source bytes and SHA-256, validates closed exact planar geometry in a bounded native worker, and returns a feature for cad_create/add_feature. Text uses captured unhinted Unicode font outlines with editable text/height; SVG/DXF support documented filled planar curves and reject unsupported entities. No document is committed.",
       {{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"type","number"},{"minimum",0.00001},{"maximum",100000}}},{"spacing",{{"type","number"},{"minimum",-1000000},{"maximum",1000000}}},{"scale",{{"type","number"},{"minimum",0.000001},{"maximum",1000000}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}},{"fonts",authoring_font_sources_schema()}}, {"format","path","feature_id","workplane"},
       object({{"feature",{{"$ref","#/$defs/authoring_feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
-    tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. geometry defaults to solid; surface explicitly imports face/shell-only sources without material semantics. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
+    tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. geometry defaults to solid; surface explicitly imports face/shell-only sources without material semantics. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history. Returns a compact revision/hash/summary receipt; cad_read retrieves the captured source.",
       {{"document_id",id},{"path",text},{"request_id",id},{"geometry",{{"enum",{"solid","surface"}}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
-      object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
+      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
       {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh","curve"}}}},{"feature_id",id},{"curve",{{"$ref","#/$defs/curve_query"}}}},
       {"document_id","revision"},object(identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
@@ -412,10 +419,18 @@ Json tool_definitions() {
         bool objects=true;
         for(const auto& branch:branches)if(!branch.is_object()||branch.value("type",Json())!="object"){objects=false;break;}
         if(!objects)continue;
-        std::set<std::string> required;
-        if(branches.front().contains("required"))for(const auto& name:branches.front().at("required"))required.insert(name.get<std::string>());
+        const auto mandatory_fields=[](const Json& branch) {
+          std::set<std::string> fields;
+          if(branch.contains("required"))for(const auto& name:branch.at("required"))fields.insert(name.get<std::string>());
+          if(branch.value("additionalProperties",Json())==false&&!branch.contains("patternProperties")&&
+             branch.contains("properties")&&branch.at("properties").is_object()&&branch.contains("minProperties")&&
+             branch.at("minProperties").is_number_unsigned()&&branch.at("minProperties").get<std::size_t>()>=branch.at("properties").size())
+            for(const auto& property:branch.at("properties").items())fields.insert(property.key());
+          return fields;
+        };
+        auto required=mandatory_fields(branches.front());
         for(const auto& branch:branches)for(auto it=required.begin();it!=required.end();) {
-          if(!branch.contains("required")||std::find(branch.at("required").begin(),branch.at("required").end(),Json(*it))==branch.at("required").end())it=required.erase(it);else ++it;
+          if(!mandatory_fields(branch).contains(*it))it=required.erase(it);else ++it;
         }
         std::set<std::string> candidates;
         for(const auto& branch:branches)if(branch.contains("properties"))for(const auto& property:branch.at("properties").items())candidates.insert(property.key());
@@ -690,6 +705,78 @@ Json tool_definitions() {
         anchor_rewrite(schema);
       }
     }
+    // Factor context-independent assertions into local reference siblings.
+    // Properties/items/closure keywords stay at their original nodes because
+    // their meaning or evaluation annotations depend on sibling schemas.
+    {
+      const std::set<std::string> safe={"type","const","enum","minimum","maximum","exclusiveMinimum","exclusiveMaximum",
+        "multipleOf","minItems","maxItems","uniqueItems","minLength","maxLength","pattern","minProperties","maxProperties","required"};
+      std::set<std::string> anchors;bool protected_scope=false;
+      std::vector<Json*> nodes;
+      std::function<void(Json&)> collect=[&](Json& node) {
+        if(node.is_array()){for(auto& child:node)collect(child);return;}
+        if(!node.is_object())return;
+        nodes.push_back(&node);
+        for(const auto* key:{"$id","$dynamicAnchor","$dynamicRef","$recursiveAnchor","$recursiveRef"})if(node.contains(key))protected_scope=true;
+        if(node.contains("$anchor")&&node.at("$anchor").is_string())anchors.insert(node.at("$anchor").get<std::string>());
+        // A pointer into a keyword could target an assertion moved by this
+        // pass. Preserve such schemas, including escaped pointer names.
+        if(node.contains("$ref")&&node.at("$ref").is_string()) {
+          const auto& ref=node.at("$ref").get_ref<const std::string&>();
+          if(ref.starts_with("#/")&&(!ref.starts_with("#/$defs/")||ref.find('/',8)!=std::string::npos))protected_scope=true;
+        }
+        for(auto& item:node.items()) {
+          const auto& key=item.key();
+          if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
+            for(auto& child:item.value().items())collect(child.value());
+          else if(key!="const"&&key!="enum"&&key!="default"&&key!="examples")collect(item.value());
+        }
+      };
+      collect(schema);
+      if(!protected_scope) {
+        struct Candidate {Json body;std::vector<std::size_t> matches;};
+        std::map<std::string,Candidate> candidates;
+        for(std::size_t index=0;index<nodes.size();++index) {
+          const auto& node=*nodes[index];if(node.contains("$ref"))continue;
+          std::vector<std::string> keys;for(const auto& key:safe)if(node.contains(key)&&!(index==0&&key=="type"))keys.push_back(key);
+          std::set<std::string> seen;
+          const auto add=[&](const Json& body) {
+            if(body.empty())return;const auto raw=body.dump();if(!seen.insert(raw).second)return;
+            auto& candidate=candidates[raw];candidate.body=body;candidate.matches.push_back(index);
+          };
+          Json full=Json::object();for(const auto& key:keys){full[key]=node.at(key);add(Json{{key,node.at(key)}});}add(full);
+          for(std::size_t a=0;a<keys.size();++a)for(std::size_t b=a+1;b<keys.size();++b)
+            add(Json{{keys[a],node.at(keys[a])},{keys[b],node.at(keys[b])}});
+        }
+        std::vector<bool> replaced(nodes.size(),false);std::size_t ordinal=0;
+        while(!candidates.empty()) {
+          std::string name,anchor;
+          do {
+            name="s"+std::to_string(ordinal);auto value=ordinal++;anchor="s";
+            constexpr std::string_view alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            do{anchor+=alphabet[value%alphabet.size()];value/=alphabet.size();}while(value);
+          }while(anchors.contains(anchor)||(schema.contains("$defs")&&schema.at("$defs").contains(name)));
+          const Json reference={{"$ref","#"+anchor}};const auto ref_bytes=reference.dump().size();
+          auto best=candidates.end();std::size_t saving=0;
+          for(auto it=candidates.begin();it!=candidates.end();++it) {
+            auto& candidate=it->second;
+            const auto active=std::count_if(candidate.matches.begin(),candidate.matches.end(),[&](std::size_t index){return !replaced[index];});
+            if(!active||it->first.size()<=ref_bytes)continue;
+            auto body=candidate.body;body["$anchor"]=anchor;
+            const auto overhead=body.dump().size()+name.size()+4+(schema.contains("$defs")?0:10);
+            const auto gross=active*(it->first.size()-ref_bytes);
+            if(gross>overhead&&gross-overhead>saving){saving=gross-overhead;best=it;}
+          }
+          if(best==candidates.end())break;
+          for(const auto index:best->second.matches)if(!replaced[index]) {
+            auto& node=*nodes[index];for(const auto& item:best->second.body.items())node.erase(item.key());
+            node["$ref"]="#"+anchor;replaced[index]=true;
+          }
+          auto body=best->second.body;body["$anchor"]=anchor;schema["$defs"][name]=std::move(body);
+          anchors.insert(anchor);candidates.erase(best);
+        }
+      }
+    }
   }
   return tools;
 }
@@ -859,7 +946,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     const auto expected=create?0:revision_number(args.at("expected_revision"));
     Json model;
     auto precondition=[&]() -> std::optional<Json> {
-      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)){if(tool=="cad_import_sketch")replay->erase("model");return replay;}
+      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)){return committed_record_receipt(*replay);}
       if(create) {
         try {store_.read(id);throw Error("already_exists","Document already exists: "+id);}
         catch(const Error& e) {if(e.code!="not_found")throw;}
@@ -909,7 +996,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     Json result_fields={{"summary",evaluated.at("summary")}};
     if(tool=="cad_import_sketch"){result_fields["feature_id"]=args.at("feature_id");for(const auto& feature:model.at("features"))if(feature.at("id")==args.at("feature_id")){const auto& profile=feature.at("profile");result_fields["source_sha256"]=profile.at("type")=="text"?profile.at("font").at("sha256"):profile.at("sha256");}}
     if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",result_fields}};
-    auto record=store_.commit(id,model,create,receipt);record.update(result_fields);if(tool=="cad_import_sketch")record.erase("model");return record;
+    auto record=store_.commit(id,model,create,receipt);record.update(result_fields);return committed_record_receipt(std::move(record));
   }
   if(tool=="cad_compare") {
     const auto from=store_.read(id,revision_number(args.at("from_revision"))),to=store_.read(id,revision_number(args.at("to_revision")));

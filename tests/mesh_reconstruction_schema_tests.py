@@ -52,6 +52,14 @@ with tempfile.TemporaryDirectory(prefix='cad-mesh-contract-') as folder:
     guided = copy.deepcopy(request)
     guided['reconstruct'] = [{'patch_id':patch['id'], 'feature_id':'Cylinder', 'extent':'cylinder', 'axis_range_mm':patch['axis_range_mm']}]
     proposed = call('cad_artifact', guided)['proposals'][0]
+    for key, change in (
+        ('model', lambda p:p['model']['features'][0].update(untrusted=True)),
+        ('model', lambda p:p['model']['features'].append({'id':'extra', 'type':'box', 'size':[1,1,1]})),
+        ('operations', lambda p:p['operations'].append({'op':'remove_feature', 'id':'Cylinder'})),
+    ):
+        bad_result = copy.deepcopy(call('cad_artifact', guided))
+        change(bad_result['proposals'][0])
+        assert not Draft202012Validator(tools['cad_artifact']['outputSchema']).is_valid(bad_result); checks += 1
     created = call('cad_create', {'document_id':'adopted', 'model':proposed['model']})
     assert abs(created['summary']['volume_mm3']-300*math.pi) < 1e-6; checks += 1
     call('cad_export', {'document_id':'adopted', 'revision':1, 'format':'step'})

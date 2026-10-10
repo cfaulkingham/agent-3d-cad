@@ -23,9 +23,39 @@ Json mesh_reconstruction_definitions(){
   const auto analytic=obj({{"kind",{{"enum",{"plane","cylinder","sphere"}}}},{"origin_mm",xyz},{"axis",xyz},{"x_direction",xyz},{"radius_mm",positive}}, {"kind","origin_mm","axis","x_direction","radius_mm"});
   const auto residual=obj({{"max_distance_mm",positive},{"vertex_rms_distance_mm",positive},{"max_normal_deviation_deg",positive},{"worst_triangle",index},{"method",{{"const","full_triangle_distance_extrema_and_normal_cone"}}}}, {"max_distance_mm","vertex_rms_distance_mm","max_normal_deviation_deg","worst_triangle","method"});
   const auto patch=obj({{"id",text},{"analytic",analytic},{"triangle_indices",indices},{"triangle_count",{{"type","integer"},{"minimum",2},{"maximum",200000}}},{"area_mm2",positive},{"area_fraction",{{"type","number"},{"minimum",0},{"maximum",1}}},{"residual",residual},{"observed_bounds_uv_mm",rectangle},{"axis_range_mm",pair}}, {"id","analytic","triangle_indices","triangle_count","area_mm2","area_fraction","residual","observed_bounds_uv_mm","axis_range_mm"});
-  const auto proposal=obj({{"patch_id",text},{"model",{{"$ref","#/$defs/model"}}},{"operations",{{"type","array"},{"items",{{"$ref","#/$defs/operation"}}},{"maxItems",16}}},{"summary",{{"$ref","#/$defs/reconstruction_summary"}}},{"extrapolation",text},{"exact_geometry_validated",{{"const",true}}}}, {"patch_id","model","operations","summary","extrapolation","exact_geometry_validated"});
+  // Proposals contain only the constructors this recognizer actually emits.
+  // Using the entire authoring API here would falsely advertise assemblies,
+  // captured sources, arbitrary edits and features absent from these guides.
+  const Json id={{"$ref","#/$defs/model_id"}},scalar={{"$ref","#/$defs/scalar"}},vector={{"$ref","#/$defs/vector3"}};
+  const auto point=Json{{"type","array"},{"items",scalar},{"minItems",2},{"maxItems",2}};
+  const auto segments=Json{{"type","array"},{"minItems",2},{"maxItems",2},{"items",{{"oneOf",Json::array({
+    obj({{"type",{{"const","line"}}},{"start",point},{"end",point}},{"type","start","end"}),
+    obj({{"type",{{"const","arc"}}},{"start",point},{"mid",point},{"end",point}},{"type","start","mid","end"})
+  })}}}};
+  const Json profiles={{"oneOf",Json::array({
+    obj({{"type",{{"const","rectangle"}}},{"width",scalar},{"height",scalar}},{"type","width","height"}),
+    obj({{"type",{{"const","circle"}}},{"radius",scalar}},{"type","radius"}),
+    obj({{"type",{{"const","wire"}}},{"segments",segments}},{"type","segments"})
+  })}};
+  const auto sketch=obj({{"id",id},{"type",{{"const","sketch"}}},{"workplane",{{"$ref","#/$defs/workplane"}}},{"profile",profiles}}, {"id","type","workplane","profile"});
+  const Json material={{"oneOf",Json::array({
+    obj({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar}},{"id","type","input","distance"}),
+    obj({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",obj({{"origin",vector},{"direction",vector}},{"origin","direction"})},{"angle_deg",{{"const",360}}}},{"id","type","input","axis","angle_deg"})
+  })}};
+  const auto generated_model=obj({{"schema_version",{{"const",1}}},{"units",{{"const","mm"}}},
+    {"parameters",{{"type","object"},{"propertyNames",id},{"additionalProperties",real},{"minProperties",1},{"maxProperties",3}}},
+    {"features",{{"type","array"},{"prefixItems",Json::array({sketch,material})},{"minItems",2},{"maxItems",2}}},{"output",id}},
+    {"schema_version","units","parameters","features","output"});
+  const Json generated_feature={{"oneOf",Json::array({sketch,material})}};
+  const Json generated_operation={{"oneOf",Json::array({
+    obj({{"op",{{"const","set_parameter"}}},{"name",id},{"value",real}},{"op","name","value"}),
+    obj({{"op",{{"const","add_feature"}}},{"feature",generated_feature}},{"op","feature"}),
+    obj({{"op",{{"const","set_output"}}},{"feature_id",id}},{"op","feature_id"})
+  })}};
+  const auto proposal=obj({{"patch_id",text},{"model",{{"$ref","#/$defs/reconstruction_model"}}},{"operations",{{"type","array"},{"items",{{"$ref","#/$defs/reconstruction_operation"}}},{"minItems",4},{"maxItems",6}}},{"summary",{{"$ref","#/$defs/reconstruction_summary"}}},{"extrapolation",text},{"exact_geometry_validated",{{"const",true}}}}, {"patch_id","model","operations","summary","extrapolation","exact_geometry_validated"});
   const auto result=obj({{"action",{{"const","recognize"}}},{"source_sha256",hash},{"review_sha256",hash},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},{"read_only",{{"const",true}}},{"editable_history_recovered",{{"const",false}}},{"options",options},{"patches",list(patch,64)},{"proposals",list(proposal,16)},{"leftover_triangle_indices",indices},{"leftover_area_mm2",positive},{"total_area_mm2",positive},{"recognized_area_fraction",{{"type","number"},{"minimum",0},{"maximum",1}}},{"candidates_examined",{{"type","integer"},{"minimum",0},{"maximum",512}}},{"search_budget_exhausted",{{"type","boolean"}}},{"limitations",list(text,8)}}, {"action","source_sha256","review_sha256","kernel_version","units","read_only","editable_history_recovered","options","patches","proposals","leftover_triangle_indices","leftover_area_mm2","total_area_mm2","recognized_area_fraction","candidates_examined","search_budget_exhausted","limitations"});
-  return {{"mesh_recognition_arguments",arguments},{"mesh_recognition_result",result}};
+  return {{"mesh_recognition_arguments",arguments},{"mesh_recognition_result",result},
+    {"reconstruction_model",generated_model},{"reconstruction_operation",generated_operation}};
 }
 void validate_mesh_recognition(const Json& args){
   fields(args,{"action","review_path","expected_sha256","options"},{"reconstruct"});const auto path=path_from_utf8(text_field(args,"review_path"));const auto hash=text_field(args,"expected_sha256");if(args.at("action")!="recognize"||!path.is_absolute()||path.filename()!="review.json"||hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Recognition requires absolute review.json and its SHA-256");

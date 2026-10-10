@@ -9,6 +9,23 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — active, 2026-10-10
 
+Integration checkpoint: strict compact committed-revision receipts now include
+`model_sha256`; `cad_read` at the returned revision retains the complete editable
+source. CLI, MCP, mutation replay and durable job recovery use the same Service
+projection. [COMMIT_RECEIPTS.md](COMMIT_RECEIPTS.md) documents this preview API
+change and historical-result compatibility. Narrow reconstruction proposal
+schemas describe the constructors actually emitted, and independent assertion
+factoring preserves accepted/rejected JSON instances and exact literal values.
+The current 31-tool catalog is **451,101 bytes**, below the unchanged
+**476,160-byte** gate; native `app_protocol` passed **1/1 in 0.99 s**.
+Independent factoring proofs passed **12,953 checks / 236 fixtures / 3,595
+acceptance probes**; mandatory-property hoisting/interning passed **51,993
+checks / 615 fixtures / 51,267 acceptance probes**. The integrated live-call
+schema run reached the existing curved-pipe example and failed its unchanged
+30-second worker timeout; a separately owned centroid-conditioning fix and the
+full integrated rerun remain outstanding. This checkpoint supersedes the older
+catalog-size observations below, not their historical evidence.
+
 The user authorized tackling the full comparison gap list with parallel agents.
 The integration branch is `codex/build123d-gap-closure`, based on `f90033f`;
 isolated managed worktrees cover solids/lofts, surfaces and sheet metal.
