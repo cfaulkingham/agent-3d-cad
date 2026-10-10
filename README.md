@@ -7,11 +7,6 @@ reopen saved designs, and export STEP, STL and PDF/SVG/DXF drawings.
 The native CAD engine runs on your computer; the interactive viewer runs inside
 an MCP Apps host. No Python, Node, Rust or compiler is needed to use a package.
 
-**We are building toward 1.0 for ChatGPT desktop and Claude Desktop.**
-The [published 0.1.0-preview.1](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1)
-is a development preview. It has not passed the complete installation and
-in-chat workflow in both hosts. [1.0 acceptance and current status](docs/RELEASE_1_0.md).
-
 ## Install in Claude Desktop
 
 Claude uses a self-contained `.mcpb` extension containing the CAD engine and
