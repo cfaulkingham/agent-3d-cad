@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/cache.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/jobs.hpp"
@@ -141,10 +142,11 @@ void component_metadata() {
   service.call("cad_apply",{{"document_id","library"},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","spare_height"},{"value",9}}})}});
   capture["source_revision"]=2;
   const auto updated=service.call("cad_apply",{{"document_id","consumer"},{"expected_revision",2},{"operations",Json::array({capture})}});
-  require(geometry_cache_key(initial.at("model"))==geometry_cache_key(updated.at("model")),"Unrelated library edits preserve captured geometry fingerprints");
+  const auto initial_source=test::receipt_source(service,initial),updated_source=test::receipt_source(service,updated);
+  require(geometry_cache_key(initial_source)==geometry_cache_key(updated_source),"Unrelated library edits preserve captured geometry fingerprints");
   require(updated.at("summary").at("components")[0].at("source").at("revision")==2,"A whole-model geometry hit reports the new component pin");
-  require(service.call("cad_read",{{"document_id","consumer"},{"revision",2}}).at("model")==initial.at("model"),"Cached source updates preserve consumer history");
-  auto changed=updated.at("model");changed["parameters"]["angle"]=90;Json diagnostics;
+  require(service.call("cad_read",{{"document_id","consumer"},{"revision",2}}).at("model")==initial_source,"Cached source updates preserve consumer history");
+  auto changed=updated_source;changed["parameters"]["angle"]=90;Json diagnostics;
   const auto result=evaluate_model(temp.root,changed,{{"kind","view"}},&diagnostics);
   hits(diagnostics,changed,{"imported"});
   require(result.at("summary").at("assembly").at("motion").at("dofs")[0].at("value")==90,"Only the bound component mechanism changes for a pose parameter edit");

@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/manufacturing.hpp"
 #include "agentcad/bom.hpp"
 #include "agentcad/hash.hpp"
@@ -158,7 +159,7 @@ void pinned() {
   const auto imported=service.call("cad_apply",capture);
   const auto result=service.call("cad_manufacture",{{"document_id",seed.at("document_id")},{"revision",2},{"options",{{"drawings",false}}}});
   const auto root=path_from_utf8(text_field(result,"directory"));const auto saved=parse_json(read_text(root/"source.json"));
-  require(saved.at("model")==imported.at("model")&&saved.at("model").at("components")[0].at("source").at("revision")==1,"Package captures exact historical component source pins");
+  require(saved.at("model")==test::receipt_source(service,imported)&&saved.at("model").at("components")[0].at("source").at("revision")==1,"Package captures exact historical component source pins");
   Temp independent;Service portable(independent.root);
   const auto restored=portable.call("cad_create",{{"document_id","portable"},{"model",saved.at("model")}});
   require(test::geometry_equivalent(restored.at("summary"),imported.at("summary")),"Pinned package rebuilds without the component library");

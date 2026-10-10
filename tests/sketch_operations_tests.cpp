@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/service.hpp"
@@ -121,8 +122,9 @@ void service(const fs::path& root){
   reopened.call("cad_create",{{"document_id","consumer"},{"model",model(Json::array({{{"id","seed"},{"type","box"},{"size",{1,1,1}}}}),"seed")}});
   const auto captured=reopened.call("cad_apply",{{"document_id","consumer"},{"expected_revision",1},{"operations",Json::array({{{"op","set_component"},{"id","module"},{"source_document_id","library"},{"source_revision",1}},{{"op","set_output"},{"feature_id","module"}}})}});
   near(captured.at("summary").at("volume_mm3"),990);
-  const auto mapping=captured.at("model").at("components")[0].at("feature_map");
-  for(const auto& feature:captured.at("model").at("features"))if(feature.at("id")==mapping.at("corner"))require(feature.at("vertices").at("feature_id")==mapping.at("base"),"Component corner selectors remap their source feature");
+  const auto captured_source=test::receipt_source(reopened,captured);
+  const auto mapping=captured_source.at("components")[0].at("feature_map");
+  for(const auto& feature:captured_source.at("features"))if(feature.at("id")==mapping.at("corner"))require(feature.at("vertices").at("feature_id")==mapping.at("base"),"Component corner selectors remap their source feature");
   auto changed=apply_operations(doc,edits);const auto old_keys=feature_cache_keys(doc),new_keys=feature_cache_keys(changed);require(old_keys.at("base")==new_keys.at("base"),"Unchanged sketch cache key stays stable");require(old_keys.at("expanded")!=new_keys.at("expanded")&&old_keys.at("part")!=new_keys.at("part"),"Dependent feature cache keys invalidate on parameter edit");
 }
 }

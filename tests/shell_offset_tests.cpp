@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/service.hpp"
@@ -131,9 +132,10 @@ void lifecycle(){
   const auto captured=cold.call("cad_apply",{{"document_id","consumer"},{"expected_revision",1},{"operations",Json::array({
     {{"op","set_component"},{"id","housingCopy"},{"source_document_id","housing"},{"source_revision",2},{"bindings",{{"height",14}}}},
     {{"op","set_output"},{"feature_id","housingCopy"}}})}});near(captured.at("summary").at("volume_mm3"),20*30*14-16*26*12);
-  const auto& local=captured.at("model").at("features").back();require(local.at("faces").at("feature_id")==local.at("input"),"Component maps face selector source IDs");
+  const auto captured_source=test::receipt_source(cold,captured);
+  const auto& local=captured_source.at("features").back();require(local.at("faces").at("feature_id")==local.at("input"),"Component maps face selector source IDs");
   Temp portable;Service independent(portable.root);fs::remove_all(workspace/"documents/housing");
-  near(independent.call("cad_create",{{"document_id","portable"},{"model",captured.at("model")}}).at("summary").at("volume_mm3"),3408);
+  near(independent.call("cad_create",{{"document_id","portable"},{"model",captured_source}}).at("summary").at("volume_mm3"),3408);
   job(independent,{{"action","submit"},{"request_id","changeWall"},{"tool","cad_apply"},{"arguments",{{"document_id","portable"},{"expected_revision",1},{"operations",Json::array({{{"op","replace_feature"},{"id","housingCopy"},{"feature",Json{{"id","housingCopy"},{"type","offset"},{"input",local.at("input")},{"distance",1},{"join","intersection"}}}}})}}}});
   const auto success=finish(independent,"changeWall");require(success.at("state")=="succeeded",success.dump());near(success.at("result").at("summary").at("volume_mm3"),22*32*16);
   job(independent,{{"action","submit"},{"request_id","collapsed"},{"tool","cad_apply"},{"arguments",{{"document_id","portable"},{"expected_revision",2},{"operations",Json::array({{{"op","replace_feature"},{"id","housingCopy"},{"feature",Json{{"id","housingCopy"},{"type","offset"},{"input",local.at("input")},{"distance",-30}}}}})}}}});

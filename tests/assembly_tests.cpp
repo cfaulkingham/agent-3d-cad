@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/jobs.hpp"
 #include <chrono>
@@ -105,7 +106,7 @@ int main() {try {
   const auto context=call(reopened,"cad_viewer",{{"action","context"},{"view_id","assembly"},{"evaluation_id",live.at("evaluation_id")},{"selection",pick}});
   require(context.at("resolved_selection").at("geometry").contains("part_id"),"Live selected part survives context publication");
   const auto restored=call(reopened,"cad_restore",{{"document_id","assembly"},{"expected_revision",3},{"source_revision",1}});
-  require(restored.at("revision")==4&&restored.at("model")==model,"Restore recreates editable assembly as new revision");
+  require(restored.at("revision")==4&&test::receipt_source(reopened,restored)==model,"Restore recreates editable assembly as new revision");
   auto job=call(reopened,"cad_job",{{"action","submit"},{"request_id","assembly_edit_job"},{"tool","cad_apply"},
     {"arguments",{{"document_id","assembly"},{"expected_revision",4},{"operations",change}}}});
   for(int i=0;i<2000&&job.at("state")!="succeeded";++i) {

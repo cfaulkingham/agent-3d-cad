@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/artifact_review.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/jobs.hpp"
@@ -47,18 +48,18 @@ void lifecycle() {
   auto bad=args;bad["document_id"]="mismatch";bad["expected_sha256"]=std::string(64,'0');
   fails("artifact_mismatch",[&]{service.call("cad_import",bad);});
   fails("not_found",[&]{service.call("cad_read",{{"document_id","mismatch"}});});
-  const auto imported=service.call("cad_import",args);volume(imported.at("summary"));
-  require(imported.at("model").at("features")[0].at("content")==raw,"Import preserves all source bytes above 1 MiB");
+  const auto imported=service.call("cad_import",args);volume(imported.at("summary"));const auto imported_source=test::receipt_source(service,imported);
+  require(imported_source.at("features")[0].at("content")==raw,"Import preserves all source bytes above 1 MiB");
   require(fs::file_size(workspace/"documents/imported/revisions/1.json")>max_json_bytes,"Saved revision crosses old storage cap");
   fs::remove(file);fs::remove_all(workspace/".cache");Service reopened(workspace);
   require(reopened.call("cad_import",args)==imported,"Receipt replay survives source deletion and reopen");
-  require(reopened.call("cad_read",{{"document_id","imported"}}).at("model")==imported.at("model"),"Reopen preserves the large embedded model");
+  require(reopened.call("cad_read",{{"document_id","imported"}}).at("model")==imported_source,"Reopen preserves the large embedded model");
   volume(reopened.call("cad_query",{{"document_id","imported"},{"revision",1}}).at("summary"));
   const auto changed=reopened.call("cad_apply",{{"document_id","imported"},{"expected_revision",1},{"operations",Json::array({
     {{"op","add_feature"},{"feature",{{"id","moved"},{"type","transform"},{"input","imported"},{"translation",{5,0,0}}}}},
     {{"op","set_output"},{"feature_id","moved"}}})},{"request_id","edit"}});
   volume(changed.at("summary"));require(std::abs(changed.at("summary").at("bounds_mm").at("min")[0].get<double>()-5)<1e-5,"Large import supports subsequent geometry edits");
-  auto broken=imported.at("model").at("features")[0];broken["content"]=std::string(2*1024*1024,'x');broken["sha256"]=sha256(broken.at("content").get<std::string>());
+  auto broken=imported_source.at("features")[0];broken["content"]=std::string(2*1024*1024,'x');broken["sha256"]=sha256(broken.at("content").get<std::string>());
   fails("kernel_failure",[&]{reopened.call("cad_apply",{{"document_id","imported"},{"expected_revision",2},{"operations",Json::array({{{"op","replace_feature"},{"id","imported"},{"feature",broken}}})}});});
   require(reopened.call("cad_read",{{"document_id","imported"}}).at("revision")==2,"Invalid large STEP edit leaves HEAD unchanged");
   volume(reopened.call("cad_restore",{{"document_id","imported"},{"expected_revision",2},{"source_revision",1}}).at("summary"));
@@ -70,11 +71,12 @@ void lifecycle() {
   const auto captured=reopened.call("cad_apply",{{"document_id","consumer"},{"expected_revision",1},{"operations",Json::array({
     {{"op","set_component"},{"id","bought"},{"source_document_id","imported"},{"source_revision",1}},
     {{"op","set_output"},{"feature_id","bought"}}})}});
-  volume(captured.at("summary"));require(captured.at("model").dump().size()>4*1024*1024,"Pinned snapshot and materialized STEP both exceed metadata budget");
-  Temp portable;Service independent(portable.root);volume(independent.call("cad_create",{{"document_id","copy"},{"model",captured.at("model")}}).at("summary"));
+  const auto captured_source=test::receipt_source(reopened,captured);
+  volume(captured.at("summary"));require(captured_source.dump().size()>4*1024*1024,"Pinned snapshot and materialized STEP both exceed metadata budget");
+  Temp portable;Service independent(portable.root);volume(independent.call("cad_create",{{"document_id","copy"},{"model",captured_source}}).at("summary"));
   fails("limit_exceeded",[&]{validate_payload_size(Json{{"content",std::string(max_json_bytes,'x')}});});
-  fails("limit_exceeded",[&]{parse_json(imported.dump());});
-  auto invalid_model=imported.at("model");invalid_model["features"][0]["sha256"]=std::string(64,'0');
+  fails("limit_exceeded",[&]{parse_json(imported_source.dump());});
+  auto invalid_model=imported_source;invalid_model["features"][0]["sha256"]=std::string(64,'0');
   fails("invalid_model",[&]{validate_model(invalid_model);});
 }
 void large_job_and_review() {
@@ -88,8 +90,8 @@ void large_job_and_review() {
   while(std::chrono::steady_clock::now()<deadline) {
     auto state=job(service,{{"action","get"},{"job_id","large"}});
     if(state.at("state")=="succeeded") {
-      volume(state.at("result").at("summary"));const auto& content=state.at("result").at("model").at("features")[0].at("content").get_ref<const std::string&>();
-      require(content.size()==bytes&&sha256(content)==hash,"Durable async result preserves STEP above old 64 MiB result cap");succeeded=true;break;
+      volume(state.at("result").at("summary"));const auto saved_source=test::receipt_source(service,state.at("result"));const auto& content=saved_source.at("features")[0].at("content").get_ref<const std::string&>();
+      require(content.size()==bytes&&sha256(content)==hash,"Durable async receipt resolves complete STEP source above 64 MiB");succeeded=true;break;
     }
     require(state.at("state")!="failed"&&state.at("state")!="interrupted",state.dump());
     std::this_thread::sleep_for(std::chrono::milliseconds(30));

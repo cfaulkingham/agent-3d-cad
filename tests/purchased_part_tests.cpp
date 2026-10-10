@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/bom.hpp"
 #include "agentcad/cache.hpp"
 #include "agentcad/hash.hpp"
@@ -45,7 +46,7 @@ void workflow(){
   Temp temporary;Service service(temporary.root);const auto file=temporary.root/"fixture.step";BuiltModel(box()).export_file(file,"step");
   const auto bytes=read_text(file),digest=sha256(bytes);auto identity=purchase();identity["artifact_sha256"]=digest;
   Json args={{"document_id","library"},{"path",path_to_utf8(file)},{"expected_sha256",digest},{"purchase",purchase()},{"request_id","import_once"}};
-  const auto imported=service.call("cad_import",args);const auto model=imported.at("model");
+  const auto imported=service.call("cad_import",args);const auto model=test::receipt_source(service,imported);
   require(model.at("features")[0].at("content")==bytes&&model.at("features")[0].at("sha256")==digest,"Import preserves exact source bytes/hash");
   require(model.at("features")[0].at("purchase")==identity,"Native importer binds caller supplier identity to measured artifact hash");
   require(std::abs(imported.at("summary").at("volume_mm3").get<double>()-80)<1e-6,"Purchased import preserves exact geometry within integration tolerance");
@@ -126,20 +127,21 @@ void workflow(){
     {{"op","set_component"},{"id","bought"},{"source_document_id","library"},{"source_revision",1}},
     {{"op","add_feature"},{"feature",consumer_assembly}},
     {{"op","set_output"},{"feature_id","assembly"}}})}});
-  require(build_bom(captured.at("model")).at("items")[0].at("purchase")==identity,"Pinned component capture retains imported provenance through ID remapping");
+  const auto captured_source=test::receipt_source(service,captured);
+  require(build_bom(captured_source).at("items")[0].at("purchase")==identity,"Pinned component capture retains imported provenance through ID remapping");
   auto new_source=model.at("features")[0];new_source["purchase"]["supplier"]="New declared supplier";
   service.call("cad_apply",{{"document_id","library"},{"expected_revision",1},{"operations",Json::array({{{"op","replace_feature"},{"id","imported"},{"feature",new_source}}})}});
   require(build_bom(service.call("cad_read",{{"document_id","consumer"}}).at("model")).at("items")[0].at("purchase")==identity,"Source supplier updates do not silently change a pinned consuming revision");
   Temp portable;Service independent(portable.root);
-  const auto copied=independent.call("cad_create",{{"document_id","portable"},{"model",captured.at("model")}});
+  const auto copied=independent.call("cad_create",{{"document_id","portable"},{"model",captured_source}});
   require(test::geometry_equivalent(copied.at("summary"),captured.at("summary")),"Purchased component rebuilds without source file or library");
-  require(build_bom(copied.at("model")).at("items")[0].at("purchase")==identity,"Portable captured source preserves its recorded supplier and artifact identity");
+  require(build_bom(test::receipt_source(independent,copied)).at("items")[0].at("purchase")==identity,"Portable captured source preserves its recorded supplier and artifact identity");
   require(service.call("cad_read",{{"document_id","library"},{"revision",1}}).at("model")==model,"Historical purchasing identity remains immutable after explicit source edits");
 
   atomic_text(file,bytes);args["document_id"]="async_import";args.erase("request_id");
   const Json submit={{"action","submit"},{"tool","cad_import"},{"arguments",args},{"request_id","purchased_async"}};
   const auto queued=job(service,submit),done=terminal(service,text_field(queued,"job_id"));
-  require(done.at("state")=="succeeded"&&done.at("result").at("model").at("features")[0].at("purchase")==identity,"Native job importer binds the same supplier/hash provenance");
+  require(done.at("state")=="succeeded"&&test::receipt_source(service,done.at("result")).at("features")[0].at("purchase")==identity,"Native job importer binds the same supplier/hash provenance");
   fs::remove(file);require(job(service,submit).at("job_id")==queued.at("job_id"),"Job receipt replays the purchased import without rereading deleted source");
   atomic_text(file,bytes);auto bad_submit=submit;bad_submit["request_id"]="purchased_failed";bad_submit["arguments"]["document_id"]="async_mismatch";bad_submit["arguments"]["expected_sha256"]=std::string(64,'a');
   const auto rejected=terminal(service,text_field(job(service,bad_submit),"job_id"));

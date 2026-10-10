@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/service.hpp"
@@ -98,8 +99,8 @@ void lifecycle(const fs::path& root){
   auto consumer=model(Json::array({{{"id","seed"},{"type","box"},{"size",{1,1,1}}}}),"seed");reopened.call("cad_create",{{"document_id","consumer"},{"model",consumer}});
   const auto captured=reopened.call("cad_apply",{{"document_id","consumer"},{"expected_revision",1},{"operations",Json::array({
     {{"op","set_component"},{"id","module"},{"source_document_id","surface-library"},{"source_revision",1}},{{"op","set_output"},{"feature_id","module"}}})}});
-  near(captured.at("summary").at("volume_mm3"),1000);const auto& component=captured.at("model").at("components")[0];require(component.at("feature_map").size()==8,"Surface solid components capture complete patch and shell dependencies");
-  const auto imported_shell=component.at("feature_map").at("shell");bool remapped=false;for(const auto& feature:captured.at("model").at("features"))if(feature.at("id")==imported_shell){remapped=feature.at("inputs")[0]==component.at("feature_map").at("bottom");}require(remapped,"Surface shell dependency arrays are remapped during portable component capture");
+  near(captured.at("summary").at("volume_mm3"),1000);const auto captured_source=test::receipt_source(reopened,captured);const auto& component=captured_source.at("components")[0];require(component.at("feature_map").size()==8,"Surface solid components capture complete patch and shell dependencies");
+  const auto imported_shell=component.at("feature_map").at("shell");bool remapped=false;for(const auto& feature:captured_source.at("features"))if(feature.at("id")==imported_shell){remapped=feature.at("inputs")[0]==component.at("feature_map").at("bottom");}require(remapped,"Surface shell dependency arrays are remapped during portable component capture");
   service.call("cad_create",{{"document_id","surface-only-library"},{"model",model(Json::array({rectangle()}),"patch")}});
   fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","consumer"},{"expected_revision",2},{"operations",Json::array({{{"op","set_component"},{"id","sheet"},{"source_document_id","surface-only-library"},{"source_revision",1}}})}});});
 }
