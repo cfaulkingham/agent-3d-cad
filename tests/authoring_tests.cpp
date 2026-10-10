@@ -47,6 +47,15 @@ void svg(const fs::path& root){
   const std::string smooth="<svg><path d='M0 0 q5 10 10 0 t10 0 l0 -10 h-20 z'/></svg>";require(BuiltModel(profile_model(imported("svg",smooth))).summary().at("volume_mm3").get<double>()>0,"Relative smooth quadratic path closes exactly");
   const std::string rounded="<svg><rect width='20' height='10' rx='2' ry='2'/></svg>";near(BuiltModel(profile_model(imported("svg",rounded))).summary().at("volume_mm3"),3*(200-16+4*std::numbers::pi));
   for(const std::string source:{"<svg><script>bad</script></svg>","<svg><use href='#part'/></svg>","<svg><text>Label</text></svg>","<svg><rect width='1' height='1' stroke='black'/></svg>","<!DOCTYPE svg><svg><circle r='1'/></svg>"})fails("unsupported_format",[&]{BuiltModel rejected(profile_model(imported("svg",source)));});
+  for(const std::string paint:{" none ","\tNoNe\n"," URL(#paint) ","uRl(#paint) red","vAr(--paint)","context-fill","CONTEXT-STROKE",R"(\6e one)",R"(\75rl(#paint))"}){
+    for(const std::string source:{"<svg><rect width='2' height='3' fill='"+paint+"'/></svg>","<svg><g fill='"+paint+"'><rect width='2' height='3'/></g></svg>"})
+      fails("unsupported_format",[&]{BuiltModel rejected(profile_model(imported("svg",source)));});
+  }
+  const std::string normalized_stroke="<svg><rect width='2' height='3' fill=' ReD ' stroke=' NoNe '/></svg>";
+  near(BuiltModel(profile_model(imported("svg",normalized_stroke))).summary().at("volume_mm3"),18);
+  Service paint_service(root/"paint_workspace");const auto paint_path=root/"paint.svg";write(paint_path,normalized_stroke);
+  const auto paint_capture=paint_service.call("cad_capture_sketch",{{"format","svg"},{"path",path_to_utf8(paint_path)},{"feature_id","paint"},{"workplane",plane()}});
+  require(paint_capture.at("feature").at("profile").at("content")==normalized_stroke&&paint_capture.at("source_sha256")==sha256(normalized_stroke),"Paint interpretation never normalizes captured bytes or identity");
   fails("invalid_shape",[&]{BuiltModel rejected(profile_model(imported("svg","<svg><path d='M0 0 L10 0 L0 10'/></svg>")));});
   fails("invalid_shape",[&]{BuiltModel rejected(profile_model(imported("svg","<svg><path d='M0 0 L10 10 L0 10 L10 0 Z'/></svg>")));});
 }

@@ -108,8 +108,11 @@ Metadata `title`/`desc` plain text and element IDs are accepted. Unsupported
 geometry, attributes or paint semantics fail rather than being discarded.
 This includes scripts, `use`/external references, CSS/style, text/images,
 stroked geometry, paint servers, clipping/masks, document types/entities,
-nested viewports and open paths. The parser never fetches URLs or executes
-source content. Convert stroked artwork/text to supported filled contours in
+nested viewports and open paths. Paint keywords/functions are checked after
+trimming whitespace and folding ASCII case; escaped CSS paint tokens, variables
+and contextual paints are rejected. Checks never rewrite captured source bytes.
+The parser never fetches URLs or executes source content. Convert stroked
+artwork/text to supported filled contours in
 the source application, or use native font text authoring.
 
 ## DXF subset and units
