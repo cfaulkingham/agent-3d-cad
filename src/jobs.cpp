@@ -875,10 +875,13 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
 #endif
     WorkerWatchdog watchdog(limits);
     const auto& request = payload.at("request");
-    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot", "options", "topology"});
+    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot", "options", "topology", "mesh", "guides", "source_sha256", "review_sha256"});
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
+    if(kind=="recognize_mesh") {
+      write_result(output,{{"result",BuiltModel::recognize_mesh(request.at("mesh"),request.at("options"),request.at("guides"),text_field(request,"source_sha256"),text_field(request,"review_sha256"))},{"cache",Json::object()}});return 0;
+    }
     if(kind=="capture_sketch") {
       const auto& model=payload.at("model");BuiltModel validated(model);const auto id=text_field(request,"feature_id");for(const auto& feature:model.at("features"))if(feature.at("id")==id){auto groups=authoring_contours(feature.at("profile"),model.at("parameters"));std::size_t contours=0,segments=0;for(const auto& group:groups)for(const auto& loop:group.at("loops")){++contours;segments+=loop.size();}write_result(output,{{"result",{{"contour_count",contours},{"segment_count",segments}}},{"cache",Json::object()}});return 0;}throw Error("invalid_argument","Capture feature is absent");
     }

@@ -18,6 +18,7 @@
 #include "agentcad/slicer.hpp"
 #include "agentcad/measurement.hpp"
 #include "agentcad/artifact_review.hpp"
+#include "agentcad/mesh_reconstruction.hpp"
 #include <fstream>
 #include <cctype>
 #include <random>
@@ -98,8 +99,11 @@ Json tool_definitions() {
   definitions.update(slicer_definitions());
   definitions.update(measurement_definitions());
   definitions.update(artifact_review_definitions());
+  definitions.update(mesh_reconstruction_definitions());
+  definitions["reconstruction_summary"]=summary_schema();
   definitions["artifact_arguments"]={{"type","object"},{"oneOf",Json::array({
     Json{{"$ref","#/$defs/artifact_review_arguments"}},
+    Json{{"$ref","#/$defs/mesh_recognition_arguments"}},
     object({{"action",{{"const","verify"}}},{"review_path",{{"type","string"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}},{"action","review_path","expected_sha256"})})}};
   const Json hash={{"type","string"},{"pattern","^[a-f0-9]{64}$"}},bytes={{"type","integer"},{"minimum",1},{"maximum",gcode_bytes_limit}};
   definitions["gcode_result"]=object({{"document_id",id},{"revision",revision},{"feature_id",id},
@@ -252,8 +256,8 @@ Json tool_definitions() {
       object({{"document_id",id},{"from_revision",revision},{"to_revision",revision},{"parameters",{{"type","object"}}},
         {"features",array(id,512)},{"output_changed",{{"type","boolean"}}},{"volume_delta_mm3",{{"type","number"}}},{"area_delta_mm2",{{"type","number"}}}},
         {"document_id","from_revision","to_revision","parameters","features","output_changed","volume_delta_mm3","area_delta_mm2"}),true),
-    tool("cad_artifact","Review original STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF as bounded, source-hashed read-only geometry/data, or verify a portable captured review. Explicit units and reference hashes are required. No editable document/history, original face selectors or executed artifact code. Submit review through cad_job for large inputs.",
-      {{"action",{{"type","string"}}}},{"action"},{{"type","object"},{"$ref","#/$defs/artifact_review_result"}},false),
+    tool("cad_artifact","Review original STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF as bounded, source-hashed read-only geometry/data, or verify a portable captured review. Explicit units and reference hashes are required. No editable document/history, original face selectors or executed artifact code. Recognize captured meshes with explicit tolerances and guided validated editable proposals; no original history is recovered. Submit through cad_job for large inputs.",
+      {{"action",{{"type","string"}}}},{"action"},{{"type","object"},{"oneOf",Json::array({Json{{"$ref","#/$defs/artifact_review_result"}},Json{{"$ref","#/$defs/mesh_recognition_result"}}})}},false),
     tool("cad_job","Submit, inspect, list or cancel a durable job. Submit a tool and arguments with request_id; retries return the same job. Geometry runs in bounded native workers.",
       {{"action",{{"enum",{"submit","get","cancel","list"}}}},{"request_id",id},{"job_id",id},{"tool",text},{"arguments",{{"type","object"}}},
         {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array())}},
@@ -711,11 +715,12 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   }
   if(tool=="cad_artifact") {
     if(text_field(args,"action")=="review")validate_artifact_review_arguments(args);
+    else if(text_field(args,"action")=="recognize")validate_mesh_recognition(args);
     else if(text_field(args,"action")=="verify") {
       fields(args,{"action","review_path","expected_sha256"});
       const auto path=path_from_utf8(text_field(args,"review_path"));const auto hash=text_field(args,"expected_sha256");
       if(!path.is_absolute()||path.filename()!="review.json"||hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Verification requires absolute review.json and lowercase SHA-256");
-    }else throw Error("invalid_argument","Artifact action must be review or verify");
+    }else throw Error("invalid_argument","Artifact action must be review, verify or recognize");
     return;
   }
   static const std::set<std::string> known={"cad_create","cad_read","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_view","cad_preview","cad_resolve_selection","cad_compare"};
@@ -804,6 +809,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
   validate_tool_arguments(tool,args);
   if(tool=="cad_artifact") {
+    if(args.at("action")=="recognize")return recognize_mesh_artifact(store_.root(),args);
     if(args.at("action")=="review")return review_external_artifact(store_.root(),args,AGENTCAD_CACHE_BUILD);
     return verify_external_artifact(path_from_utf8(text_field(args,"review_path")).parent_path(),text_field(args,"expected_sha256"));
   }

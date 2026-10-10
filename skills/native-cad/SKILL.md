@@ -65,6 +65,12 @@ code execution occurs. See packaged ARTIFACT_REVIEW.md for parser/format limits.
 The returned `sha256` identifies captured `review.json`, while `source.sha256`
 identifies the original. Use `cad_artifact` with `action: verify`, `review_path`
 and the review hash to recheck captured bytes and their parsed representation.
+For guided mesh reconstruction, `cad_artifact` action `recognize` takes the
+verified captured mesh review and explicit distance/normal/weld tolerances. Read
+`MESH_RECONSTRUCTION.md` for bounded patch evidence and caller-chosen solid extents.
+Adopt validated model/operation proposals through ordinary create/apply only after
+the requested reconstruction intent is clear; recognition itself creates no document.
+
 Show that package with `cad_artifact_show` and retain its `view_id`. Use `cad_job`
 for substantial review/verification; those jobs need no synthetic document ID.
 

@@ -1,4 +1,7 @@
 #include "agentcad/kernel.hpp"
+#include "agentcad/hash.hpp"
+#include "agentcad/mesh_reconstruction.hpp"
+#include "agentcad/storage.hpp"
 #include "agentcad/measurement.hpp"
 #include "agentcad/section.hpp"
 #include "agentcad/model.hpp"
@@ -4117,4 +4120,124 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
     throw occt_error(e, Json::object(), "export_failed");
   }
 }
+namespace {
+namespace mesh_fit {
+using V=gp_XYZ;
+using IDs=std::vector<std::size_t>;
+V v3(const Json& a){return V(number(a[0]),number(a[1]),number(a[2]));}
+Json js(const V& v){return Json::array({v.X(),v.Y(),v.Z()});}
+V unit(V v){if(v.Modulus()<1e-14)throw Error("invalid_argument","Degenerate mesh fitting direction");return v/v.Modulus();}
+V canonical(V v){v=unit(v);int k=1;for(int i=2;i<=3;++i)if(std::abs(v.Coord(i))>std::abs(v.Coord(k)))k=i;if(v.Coord(k)<0)v=v*(-1);return v;}
+V transverse(const V& n){const V ref=std::abs(n.X())<.8?V(1,0,0):V(0,1,0);return unit(ref-n*n.Dot(ref));}
+struct Triangle {std::array<V,3> p;V normal;double area;};
+struct Fit {std::string kind;V origin,axis=V(0,0,1),x=V(1,0,0);double radius=0;};
+struct Evidence {double distance=0,rms2=0,angle=0;};
+V nearest_segment(const V& a,const V& b){const auto d=b-a;const auto length=d.SquareModulus();return a+d*(length>1e-28?std::clamp(-a.Dot(d)/length,0.,1.):0.);}
+// Exact minimum norm over the complete closed triangle, including degenerate
+// projected triangles. Curved-surface distance extrema need this interior check.
+V nearest_triangle(const std::array<V,3>& p){
+  V best=p[0];for(int i=0;i<3;++i){const auto q=nearest_segment(p[i],p[(i+1)%3]);if(q.SquareModulus()<best.SquareModulus())best=q;}
+  const auto a=p[1]-p[0],b=p[2]-p[0],n=a.Crossed(b);const auto nn=n.SquareModulus();
+  if(nn>1e-26*a.SquareModulus()*b.SquareModulus()){
+    const auto q=n*(p[0].Dot(n)/nn);const auto d=q-p[0];const auto aa=a.Dot(a),ab=a.Dot(b),bb=b.Dot(b),ad=a.Dot(d),bd=b.Dot(d),den=aa*bb-ab*ab;
+    if(den>0){const auto u=(ad*bb-bd*ab)/den,w=(bd*aa-ad*ab)/den;if(u>=-1e-12&&w>=-1e-12&&u+w<=1+1e-12&&q.SquareModulus()<best.SquareModulus())best=q;}
+  }return best;
+}
+Evidence evidence(const Triangle& t,const Fit& f){
+  Evidence e;std::array<V,3> radial;double signed_min=1,signed_max=-1;
+  for(int i=0;i<3;++i){auto p=t.p[i]-f.origin;double d=0,cosine=0;
+    if(f.kind=="plane"){d=std::abs(p.Dot(f.axis));cosine=t.normal.Dot(f.axis);}
+    else {if(f.kind=="cylinder")p-=f.axis*p.Dot(f.axis);radial[i]=p;const auto r=p.Modulus();d=std::abs(r-f.radius);cosine=r>1e-14?t.normal.Dot(p)/r:0;}
+    e.distance=std::max(e.distance,d);e.rms2+=d*d/3;const auto c=std::clamp(cosine,-1.,1.);signed_min=std::min(signed_min,c);signed_max=std::max(signed_max,c);
+  }
+  if(f.kind!="plane")e.distance=std::max(e.distance,std::abs(nearest_triangle(radial).Modulus()-f.radius));
+  // All radial directions over a triangle lie in the cone of its vertex rays.
+  // For a consistent sign the worst unsigned normal angle is at a vertex;
+  // opposite signs or a zero radial point require the conservative 90° bound.
+  const auto cosine=signed_min*signed_max<=0?0.:std::min(std::abs(signed_min),std::abs(signed_max));
+  e.angle=std::acos(std::clamp(cosine,0.,1.))*180/std::numbers::pi;return e;
+}
+V eigen_min(double a[3][3]){
+  double q[3][3]={{1,0,0},{0,1,0},{0,0,1}};
+  for(int iter=0;iter<40;++iter){int p=0,r=1;for(int i=0;i<3;++i)for(int j=i+1;j<3;++j)if(std::abs(a[i][j])>std::abs(a[p][r])){p=i;r=j;}
+    if(std::abs(a[p][r])<=1e-15*(std::abs(a[0][0])+std::abs(a[1][1])+std::abs(a[2][2])+1e-30))break;
+    const auto theta=.5*std::atan2(2*a[p][r],a[r][r]-a[p][p]),c=std::cos(theta),s=std::sin(theta);const auto app=a[p][p],arr=a[r][r],apr=a[p][r];
+    for(int k=0;k<3;++k)if(k!=p&&k!=r){const auto x=a[k][p],y=a[k][r];a[k][p]=a[p][k]=c*x-s*y;a[k][r]=a[r][k]=s*x+c*y;}
+    a[p][p]=c*c*app-2*s*c*apr+s*s*arr;a[r][r]=s*s*app+2*s*c*apr+c*c*arr;a[p][r]=a[r][p]=0;
+    for(int k=0;k<3;++k){const auto x=q[k][p],y=q[k][r];q[k][p]=c*x-s*y;q[k][r]=s*x+c*y;}
+  }int k=0;for(int i=1;i<3;++i)if(a[i][i]<a[k][k])k=i;return canonical(V(q[0][k],q[1][k],q[2][k]));
+}
+bool solve(double a[4][5],int n,std::array<double,4>& out){double scale=0;for(int i=0;i<n;++i)for(int j=0;j<n;++j)scale=std::max(scale,std::abs(a[i][j]));
+  for(int col=0;col<n;++col){int pivot=col;for(int r=col+1;r<n;++r)if(std::abs(a[r][col])>std::abs(a[pivot][col]))pivot=r;if(std::abs(a[pivot][col])<1e-12*scale)return false;for(int j=col;j<=n;++j)std::swap(a[pivot][j],a[col][j]);const auto diagonal=a[col][col];for(int j=col;j<=n;++j)a[col][j]/=diagonal;for(int r=0;r<n;++r)if(r!=col){const auto factor=a[r][col];for(int j=col;j<=n;++j)a[r][j]-=factor*a[col][j];}}
+  for(int i=0;i<n;++i){out[i]=a[i][n];if(!std::isfinite(out[i]))return false;}return true;
+}
+std::optional<Fit> fit(const std::vector<Triangle>& triangles,const IDs& ids,const std::string& kind,std::optional<V> forced_axis={}){
+  if(ids.empty())return {};Fit f;f.kind=kind;V mean;for(auto id:ids)for(const auto& p:triangles[id].p)mean+=p;mean/=3.*ids.size();f.origin=mean;
+  double cov[3][3]{};for(auto id:ids){if(kind=="cylinder"){const auto n=triangles[id].normal;for(int i=0;i<3;++i)for(int j=0;j<3;++j)cov[i][j]+=n.Coord(i+1)*n.Coord(j+1);}
+    else for(const auto& p:triangles[id].p){const auto d=p-mean;for(int i=0;i<3;++i)for(int j=0;j<3;++j)cov[i][j]+=d.Coord(i+1)*d.Coord(j+1);}}
+  if(kind!="sphere")f.axis=forced_axis?canonical(*forced_axis):eigen_min(cov);f.x=transverse(f.axis);if(kind=="plane")return f;
+  const auto y=f.axis.Crossed(f.x);double scale=0;for(auto id:ids)for(const auto& p:triangles[id].p)scale=std::max(scale,(p-mean).Modulus());if(scale<1e-8)return {};
+  double matrix[4][5]{};const int n=kind=="sphere"?4:3;
+  for(auto id:ids)for(const auto& p:triangles[id].p){const auto d=(p-mean)/scale;const double x=d.Dot(f.x),yy=d.Dot(y),z=d.Dot(f.axis);std::array<double,4> row={2*x,2*yy,kind=="sphere"?2*z:1.,1.};const double b=x*x+yy*yy+(kind=="sphere"?z*z:0.);for(int i=0;i<n;++i){for(int j=0;j<n;++j)matrix[i][j]+=row[i]*row[j];matrix[i][n]+=row[i]*b;}}
+  std::array<double,4> solution{};if(!solve(matrix,n,solution))return {};const auto r2=solution[n-1]+solution[0]*solution[0]+solution[1]*solution[1]+(kind=="sphere"?solution[2]*solution[2]:0.);if(r2<=1e-16)return {};f.radius=scale*std::sqrt(r2);if(f.radius<1e-5||f.radius>1e6)return {};f.origin=mean+f.x*(scale*solution[0])+y*(scale*solution[1])+(kind=="sphere"?f.axis*(scale*solution[2]):V());return f;
+}
+std::vector<IDs> components(const IDs& ids,const std::vector<IDs>& adjacent){std::set<std::size_t> left(ids.begin(),ids.end());std::vector<IDs> result;while(!left.empty()){IDs group{*left.begin()};left.erase(left.begin());for(std::size_t i=0;i<group.size();++i)for(auto next:adjacent[group[i]])if(left.erase(next))group.push_back(next);std::sort(group.begin(),group.end());result.push_back(std::move(group));}return result;}
+Json proposal(const Json& patch,const Json& guide){
+  const auto& a=patch.at("analytic");const auto kind=text_field(a,"kind"),extent=text_field(guide,"extent"),id=text_field(guide,"feature_id"),profile=id+"Profile";const auto origin=v3(a.at("origin_mm")),axis=v3(a.at("axis")),x=v3(a.at("x_direction")),y=axis.Crossed(x);const double radius=a.at("radius_mm");
+  Json parameters=Json::object(),features=Json::array();const auto parameter=[&](const std::string& name,double value){parameters[id+name]=value;return Json{{"parameter",id+name}};};
+  Json plane={{"origin",js(origin)},{"normal",js(axis)},{"x_direction",js(x)}},shape;std::string explanation;
+  if(kind=="plane"&&extent=="rectangle"){
+    const auto b=guide.at("bounds_uv_mm");const auto u0=number(b[0][0]),v0=number(b[0][1]),u1=number(b[1][0]),v1=number(b[1][1]);plane["origin"]=js(origin+x*u0+y*v0);shape={{"type","rectangle"},{"width",parameter("Width",u1-u0)},{"height",parameter("Height",v1-v0)}};explanation="Caller rectangle and positive thickness create a complete slab; patch trim, holes and opposite side were not recovered.";
+    features.push_back({{"id",profile},{"type","sketch"},{"workplane",plane},{"profile",shape}});features.push_back({{"id",id},{"type","extrude"},{"input",profile},{"distance",parameter("Thickness",number(guide.at("thickness_mm")))}});
+  }else if(kind=="cylinder"&&extent=="cylinder"){
+    const auto range=guide.at("axis_range_mm");plane["origin"]=js(origin+axis*number(range[0]));shape={{"type","circle"},{"radius",parameter("Radius",radius)}};features.push_back({{"id",profile},{"type","sketch"},{"workplane",plane},{"profile",shape}});features.push_back({{"id",id},{"type","extrude"},{"input",profile},{"distance",parameter("Height",number(range[1])-number(range[0]))}});explanation="Caller axial bounds create a full 360-degree solid cylinder; missing circumference, ends, bore and original feature history were not recovered.";
+  }else if(kind=="sphere"&&extent=="sphere"){
+    const auto r=parameter("Radius",radius);const Json negative={{"expression",{{"op","multiply"},{"args",Json::array({r,-1})},{"unit","mm"}}}};plane["normal"]=js(y*(-1));plane["x_direction"]=js(x);shape={{"type","wire"},{"segments",Json::array({{{"type","arc"},{"start",Json::array({0,negative})},{"mid",Json::array({r,0})},{"end",Json::array({0,r})}},{{"type","line"},{"start",Json::array({0,r})},{"end",Json::array({0,negative})}}})}};features.push_back({{"id",profile},{"type","sketch"},{"workplane",plane},{"profile",shape}});features.push_back({{"id",id},{"type","revolve"},{"input",profile},{"axis",{{"origin",js(origin)},{"direction",js(axis)}}},{"angle_deg",360}});explanation="Caller explicitly requests the full sphere fitted to this patch; unseen surface, interior material and original feature history were not recovered.";
+  }else throw Error("invalid_argument","Reconstruction extent does not match the recognized patch kind",{{"patch_id",patch.at("id")}});
+  Json model={{"schema_version",1},{"units","mm"},{"parameters",parameters},{"features",features},{"output",id}},operations=Json::array();for(const auto& [name,value]:parameters.items())operations.push_back({{"op","set_parameter"},{"name",name},{"value",value}});for(const auto& feature:features)operations.push_back({{"op","add_feature"},{"feature",feature}});operations.push_back({{"op","set_output"},{"feature_id",id}});
+  validate_model(model);BuiltModel built(model);return {{"patch_id",patch.at("id")},{"model",model},{"operations",operations},{"summary",built.summary()},{"extrapolation",explanation},{"exact_geometry_validated",true}};
+}
+}
+}
+Json BuiltModel::recognize_mesh(const Json& mesh,const Json& options,const Json& guides,const std::string& source_hash,const std::string& review_hash){
+  using namespace mesh_fit;
+  // The public service validates the captured package and options. This boundary
+  // repeats structural bounds for direct native callers before allocating geometry.
+  validate_mesh_recognition({{"action","recognize"},{"review_path",path_to_utf8(std::filesystem::temp_directory_path()/"review.json")},{"expected_sha256",review_hash},{"options",options},{"reconstruct",guides}});
+  if(source_hash.size()!=64||source_hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Mesh source requires SHA-256 identity");
+  const auto& positions=mesh.at("positions");const auto& source=mesh.at("triangles");if(!positions.is_array()||!source.is_array()||positions.size()>200000||source.empty()||source.size()>200000)throw Error("limit_exceeded","Mesh recognition exceeds captured geometry limits");
+  const double tolerance=options.at("distance_tolerance_mm"),normal_tolerance=options.at("normal_tolerance_deg"),weld=options.at("weld_tolerance_mm");const std::size_t minimum=options.at("min_triangles"),max_patches=options.at("max_patches"),max_candidates=options.at("max_candidates");
+  std::vector<V> vertices;std::vector<std::size_t> welded;std::vector<V> representatives;using Cell=std::array<long long,3>;std::map<Cell,IDs> cells;std::map<std::array<double,3>,std::size_t> exact;
+  for(const auto& p:positions){if(!p.is_array()||p.size()!=3)throw Error("invalid_argument","Mesh vertex needs three finite coordinates");const auto point=v3(p);vertices.push_back(point);std::optional<std::size_t> found;
+    if(weld==0){const auto key=p.get<std::array<double,3>>();const auto it=exact.find(key);if(it!=exact.end())found=it->second;else exact[key]=representatives.size();}
+    else {Cell cell;for(int i=0;i<3;++i){const auto q=std::floor(point.Coord(i+1)/weld);if(std::abs(q)>9e15)throw Error("invalid_argument","Weld tolerance is too small for coordinate range");cell[i]=static_cast<long long>(q);}for(int a=-1;a<=1;++a)for(int b=-1;b<=1;++b)for(int c=-1;c<=1;++c){const auto it=cells.find({cell[0]+a,cell[1]+b,cell[2]+c});if(it!=cells.end())for(auto id:it->second)if((point-representatives[id]).Modulus()<=weld&&(!found||id<*found))found=id;}if(!found)cells[cell].push_back(representatives.size());}
+    if(!found){found=representatives.size();representatives.push_back(point);}welded.push_back(*found);
+  }
+  std::vector<Triangle> triangles;std::vector<IDs> adjacent(source.size());std::map<std::array<std::size_t,2>,IDs> edges;IDs remaining;double total=0;
+  for(std::size_t id=0;id<source.size();++id){const auto& item=source[id];if(!item.is_array()||item.size()!=3)throw Error("invalid_argument","Mesh triangle needs three indices");std::array<std::size_t,3> indices;Triangle t;for(int i=0;i<3;++i){if(!item[i].is_number_integer()||item[i]<0||item[i]>=vertices.size())throw Error("invalid_argument","Mesh triangle index out of bounds");indices[i]=item[i].get<std::size_t>();t.p[i]=vertices[indices[i]];}const auto n=(t.p[1]-t.p[0]).Crossed(t.p[2]-t.p[0]);t.area=.5*n.Modulus();t.normal=t.area>1e-18?n/(2*t.area):V(0,0,1);total+=t.area;triangles.push_back(t);remaining.push_back(id);if(t.area<=1e-18)continue;
+    for(int i=0;i<3;++i){auto a=welded[indices[i]],b=welded[indices[(i+1)%3]];if(a==b)continue;if(a>b)std::swap(a,b);edges[{a,b}].push_back(id);}}
+  const auto smooth=std::cos(std::min(60.,2*normal_tolerance)*std::numbers::pi/180);
+  for(const auto& [edge,members]:edges){if(members.size()!=2)continue;const auto a=members[0],b=members[1];if(std::abs(triangles[a].normal.Dot(triangles[b].normal))>=smooth){adjacent[a].push_back(b);adjacent[b].push_back(a);}}
+  auto pending=components(remaining,adjacent);Json patches=Json::array();std::vector<bool> recognized(triangles.size());std::size_t examined=0;std::uint64_t random=0x9e3779b97f4a7c15ULL;for(char c:source_hash)random=random*131+static_cast<unsigned char>(c);const auto next=[&](std::size_t n){random^=random<<13;random^=random>>7;random^=random<<17;return static_cast<std::size_t>(random%n);};
+  // Largest connected smooth regions first; failures remain reported leftovers.
+  const auto area=[&](const IDs& ids){double sum=0;for(auto id:ids)sum+=triangles[id].area;return sum;};
+  while(!pending.empty()&&patches.size()<max_patches&&examined<max_candidates){auto largest=std::max_element(pending.begin(),pending.end(),[&](const auto&a,const auto&b){return area(a)<area(b);});auto region=std::move(*largest);pending.erase(largest);if(region.size()<minimum||area(region)<=1e-18)continue;
+    std::optional<Fit> best;IDs best_ids;double best_area=0;const auto test=[&](const std::optional<Fit>& candidate){if(!candidate||examined>=max_candidates)return;++examined;IDs inliers;for(auto id:region){if(triangles[id].area<=1e-18)continue;const auto e=evidence(triangles[id],*candidate);if(e.distance<=tolerance&&e.angle<=normal_tolerance)inliers.push_back(id);}for(auto& group:components(inliers,adjacent)){const auto value=area(group);if(group.size()>=minimum&&value>best_area+1e-12){best_area=value;best_ids=std::move(group);best=*candidate;}}};
+    for(const auto* kind:{"plane","cylinder","sphere"})test(fit(triangles,region,kind));
+    // Deterministic bounded RANSAC supplies local hypotheses when a connected
+    // region spans more than one analytic surface. Inliers always use all facets.
+    for(int trial=0;trial<24&&examined<max_candidates&&best_ids.size()!=region.size();++trial){const auto first=region[next(region.size())],second=region[next(region.size())];IDs sample;for(int i=0;i<4;++i)sample.push_back(region[next(region.size())]);test(fit(triangles,IDs{first},"plane"));test(fit(triangles,sample,"sphere"));const auto axis=triangles[first].normal.Crossed(triangles[second].normal);if(axis.Modulus()>1e-4)test(fit(triangles,sample,"cylinder",axis));}
+    if(!best)continue;
+    if(auto improved=fit(triangles,best_ids,best->kind)){bool valid=true;for(auto id:best_ids){const auto e=evidence(triangles[id],*improved);if(e.distance>tolerance||e.angle>normal_tolerance){valid=false;break;}}if(valid)best=improved;}
+    const auto& f=*best;Json members=Json::array();double maximum=0,squared=0,angle=0;std::size_t worst=best_ids.front();std::array<double,2> low={1e100,1e100},high={-1e100,-1e100};double zmin=1e100,zmax=-1e100;const auto y=f.axis.Crossed(f.x);
+    for(auto id:best_ids){recognized[id]=true;members.push_back(id);const auto e=evidence(triangles[id],f);if(e.distance>maximum){maximum=e.distance;worst=id;}squared+=e.rms2;angle=std::max(angle,e.angle);for(const auto& p:triangles[id].p){const auto d=p-f.origin;const std::array<double,2> uv={d.Dot(f.x),d.Dot(y)};for(int k=0;k<2;++k){low[k]=std::min(low[k],uv[k]);high[k]=std::max(high[k],uv[k]);}zmin=std::min(zmin,d.Dot(f.axis));zmax=std::max(zmax,d.Dot(f.axis));}}
+    const auto identity=sha256(Json{{"kind",f.kind},{"members",members},{"review_sha256",review_hash},{"options",options}}.dump());
+    patches.push_back({{"id","mesh_"+source_hash+"_"+identity.substr(0,24)},{"analytic",{{"kind",f.kind},{"origin_mm",js(f.origin)},{"axis",js(f.axis)},{"x_direction",js(f.x)},{"radius_mm",f.radius}}},{"triangle_indices",members},{"triangle_count",members.size()},{"area_mm2",best_area},{"area_fraction",total>0?best_area/total:0.},{"residual",{{"max_distance_mm",maximum},{"vertex_rms_distance_mm",std::sqrt(squared/best_ids.size())},{"max_normal_deviation_deg",angle},{"worst_triangle",worst},{"method","full_triangle_distance_extrema_and_normal_cone"}}},{"observed_bounds_uv_mm",Json::array({low,high})},{"axis_range_mm",Json::array({zmin,zmax})}});
+    IDs rest;for(auto id:region)if(!recognized[id])rest.push_back(id);for(auto& group:components(rest,adjacent))pending.push_back(std::move(group));
+  }
+  Json leftovers=Json::array(),proposals=Json::array();double leftover_area=0;for(std::size_t i=0;i<triangles.size();++i)if(!recognized[i]){leftovers.push_back(i);leftover_area+=triangles[i].area;}
+  for(const auto& guide:guides){const Json* patch=nullptr;for(const auto& p:patches)if(p.at("id")==guide.at("patch_id"))patch=&p;if(!patch)throw Error("stale_selection","Reconstruction patch does not belong to this source, options and recognition result",{{"patch_id",guide.at("patch_id")}});proposals.push_back(proposal(*patch,guide));}
+  return {{"action","recognize"},{"source_sha256",source_hash},{"review_sha256",review_hash},{"kernel_version",kernel_version()},{"units","mm"},{"read_only",true},{"editable_history_recovered",false},{"options",options},{"patches",patches},{"proposals",proposals},{"leftover_triangle_indices",leftovers},{"leftover_area_mm2",leftover_area},{"total_area_mm2",total},{"recognized_area_fraction",total>0?std::clamp(1-leftover_area/total,0.,1.):0.},{"candidates_examined",examined},{"search_budget_exhausted",!leftovers.empty()&&(examined>=max_candidates||patches.size()>=max_patches)},{"limitations",Json::array({"Bounded deterministic analytic fitting is not a complete segmentation algorithm; leftovers are unrecognized, not proof of non-analytic geometry.","Distances bound each entire source triangle; RMS is over triangle vertices. Normal deviations compare facet normals to analytic normals without trusting STL normal records.","Welding affects adjacency only; source coordinates and all residual calculations are unchanged. Nonmanifold edges do not connect regions.","Recognition does not establish watertightness, material, design intent or original history. Guided solids explicitly extrapolate the fitted surface and require ordinary transactional adoption."})}};
+}
+
 }

@@ -30,6 +30,9 @@ public:
   // intent and deserialized compound children. No cached topology IDs are trusted.
   BuiltModel(const Json& model, const Json& snapshot);
   Json snapshot() const;
+  // Analytic fits of captured triangles, with bounded evidence and validated editable proposals.
+  static Json recognize_mesh(const Json& mesh,const Json& options,const Json& guides,
+                             const std::string& source_hash,const std::string& review_hash);
   ~BuiltModel();
   BuiltModel(BuiltModel&&) noexcept;
   BuiltModel& operator=(BuiltModel&&) noexcept;
