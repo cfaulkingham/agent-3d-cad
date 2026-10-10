@@ -1,17 +1,17 @@
-/* Viewer shell: floating Shapr3D-style layout over a full-bleed canvas.
+/* Viewer shell: floating inspection cards over a full-bleed CAD stage.
    Light is the default; [data-theme=dark] overrides the tokens. */
 :root{
   color-scheme:light;
-  --bg:#e8ecf1;--surface:#fff;--surface-2:#f1f3f6;--hover:#e4e8ed;--hairline:#dde2e8;
-  --text:#1d2630;--text-2:#5f6b78;--accent:#1a73e8;--accent-soft:#eaf2fe;--on-accent:#fff;
+  --bg:#f0f0f0;--surface:#fff;--surface-2:#ebebed;--hover:#dedee1;--hairline:#d3d3d6;--glass:rgba(233,233,235,.84);
+  --text:#454547;--text-2:#858588;--accent:#007aff;--accent-soft:#eaf2fe;--on-accent:#fff;
   --ok:#1b7f55;--warn-bg:#fff6e3;--warn-border:#e0b25a;--warn-text:#7a4b00;
-  --shadow:0 2px 10px rgba(28,39,51,.18);--radius:12px;
+  --shadow:0 5px 22px rgba(0,0,0,.12);--radius:14px;
   --cube-top:#fbfcfd;--cube-side-a:#e6eaef;--cube-side-b:#d6dce3;--cube-bottom:#c7ced7;--cube-edge:#aab3be;--cube-text:#4c5864;
   font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
 }
 :root[data-theme=dark]{
   color-scheme:dark;
-  --bg:#191e24;--surface:#2a3037;--surface-2:#343c45;--hover:#3e4751;--hairline:#3b434c;
+  --bg:#191e24;--glass:rgba(42,48,55,.88);--surface:#2a3037;--surface-2:#343c45;--hover:#3e4751;--hairline:#3b434c;
   --text:#e9eef3;--text-2:#a3afbb;--accent:#6eadff;--accent-soft:#1f3a5e;--on-accent:#0b1f3a;
   --ok:#5fd39a;--warn-bg:#312920;--warn-border:#8b6b40;--warn-text:#f0cc96;
   --shadow:0 3px 12px rgba(0,0,0,.45);
@@ -51,7 +51,7 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 .section-heading h2,.export-panel h2,.popover-head h2{font-size:12.5px;font-weight:650;color:var(--text)}
 
 /* Stage */
-#app{position:relative;height:100vh;min-height:480px;max-height:1100px;overflow:hidden;background:var(--bg)}
+#app{position:relative;height:100vh;min-height:480px;overflow:hidden;background:var(--bg)}
 #viewport{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none}
 .annotation-overlay{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .annotation-pin{position:absolute;transform:translate(-50%,-50%);width:24px;height:24px;min-height:24px;padding:0;border-radius:50%;background:#ffdb68;color:#162431;border:2px solid #162431;font-weight:700;pointer-events:auto;box-shadow:0 1px 4px #0008}
@@ -221,3 +221,90 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 #app[data-compact=true] .popover-right{right:12px;top:100px;max-height:calc(100% - 200px)}
 
 @media (prefers-reduced-motion:reduce){.spinner{animation:none}*{transition:none!important}}
+
+/* Reference layout. Cards stay out of the main model area; the footer is fixed. */
+#viewport,.annotation-overlay{bottom:36px;height:calc(100% - 36px)}
+.card,.popover,.dock{background:var(--glass);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.top-left{top:10px;left:10px;max-width:38px}
+.project-pill{width:32px;height:22px;padding:0;justify-content:center;background:transparent;box-shadow:none;border-color:var(--hairline)}
+.project-pill .pill-text,.project-pill .connection,.project-pill .chevron{display:none}
+.brand-icon{display:flex;color:#a0a0a3}
+.brand-icon svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round}
+.top-right{top:auto;bottom:43px;right:12px;z-index:5}
+.top-right .pill{font-size:11px;padding:4px 10px;background:var(--glass);box-shadow:none;opacity:.8}
+.pick-hint{position:absolute;top:16px;left:50%;transform:translateX(-50%);background:var(--glass);border-radius:999px;padding:5px 12px;color:var(--text);font-size:14px;pointer-events:none;white-space:nowrap}
+.scene-card{left:20px;top:42px;width:clamp(200px,22.4vw,360px);max-height:calc(100% - 100px);padding:10px;overflow:auto}
+.parts-heading,.parameter-heading{display:flex;gap:9px;align-items:center;margin-bottom:8px}
+.parts-heading h2,.parameter-heading h2{font-size:15px;font-weight:650;line-height:1.4}
+.parts-heading svg,.parameter-heading svg{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.parameter-heading circle{fill:var(--surface-2)}
+.parts-heading .icon-button,.parameter-heading .icon-button{padding:0 2px;font-size:18px}
+.parts-heading .icon-button[aria-expanded=false],.parameter-heading .icon-button[aria-expanded=false]{transform:rotate(180deg)}
+#scene-content{min-width:0}
+.segmented{display:flex;align-items:center;background:var(--surface-2);border-radius:6px;padding:0;overflow:auto}
+.segmented button{background:transparent;border:0;border-radius:5px;padding:4px 13px;line-height:1.4;font-size:13px;box-shadow:none;color:var(--text)}
+.segmented button[aria-pressed=true]{color:#fff;background:var(--accent);font-weight:550}
+.part-tabs{width:max-content;max-width:100%}
+.part-tabs button{min-width:80px;max-width:180px;text-overflow:ellipsis;overflow:hidden}
+.part-tabs[data-multiple=true]{width:100%;flex-wrap:wrap;gap:3px;max-height:180px;overflow-x:hidden;overflow-y:auto;background:transparent}
+.part-tabs[data-multiple=true] button{background:var(--surface-2)}
+.part-tabs[data-multiple=true] button[aria-pressed=true]{background:var(--accent)}
+.design-details{margin-top:8px}
+.design-details>summary{font-size:10px;color:var(--text-2);list-style:none}
+.design-details>summary::after{content:' ›'}
+.design-details[open]>summary::after{content:' ⌄'}
+.card-head{padding:5px 0 0}.pane{padding:8px 0}.scene-foot{padding:7px 0}
+#scene-chip{top:42px;left:12px;font-size:12px;padding:4px 10px}
+.parameter-card{position:absolute;top:16px;right:12px;z-index:4;width:clamp(260px,25vw,360px);max-height:calc(100% - 82px);padding:12px;overflow:hidden;display:flex;flex-direction:column}
+.parameter-heading{margin:0 0 10px}
+#parameters-close{margin-left:auto}
+#parameter-content{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.parameter-list{min-height:0;overflow:auto;scrollbar-width:thin;padding-right:1px}
+.parameter-row{margin:0 0 15px}
+.parameter-label{display:flex;justify-content:space-between;gap:8px;align-items:center;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.parameter-label label{overflow-wrap:anywhere}
+.parameter-label input[type=number]{width:88px;text-align:right;padding:0;border:0;border-radius:3px;background:transparent;font:inherit;appearance:textfield;-moz-appearance:textfield}
+.parameter-label input::-webkit-inner-spin-button{appearance:none}
+.parameter-slider{display:block;width:100%;height:5px;margin:10px 0 4px;border-radius:999px;background:linear-gradient(to right,var(--accent) 0 var(--fill),var(--surface-2) var(--fill) 100%);appearance:none;-webkit-appearance:none;cursor:pointer}
+.parameter-slider::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;width:21px;height:17px;border-radius:12px;background:#fff;box-shadow:0 3px 13px #0003;border:0}
+.parameter-slider::-moz-range-thumb{width:21px;height:17px;border-radius:12px;background:#fff;box-shadow:0 3px 13px #0003;border:0}
+.parameter-slider:disabled{opacity:.5;cursor:default}
+#parameter-status{font-size:11px;color:var(--text-2);margin:0 0 7px;overflow-wrap:anywhere}
+#parameter-status:empty{display:none}
+.compare-row{display:flex;justify-content:space-between;align-items:center;gap:12px;font-size:12px;color:var(--text-2);padding-top:10px;flex:none}
+.compare-row select{padding:3px 10px;border:0;background:var(--surface-2);min-width:105px;color:var(--text)}
+#compare-result{margin:8px 0 0;max-height:80px;overflow:auto}
+#parameters-chip{position:absolute;top:16px;right:12px;z-index:4;padding:5px 12px;font-size:12px;background:var(--glass)}
+#parameters-panel[hidden]~#parameters-chip:not([hidden]){display:block}
+.workspace-title{display:flex;flex-direction:column;margin-bottom:10px;font-size:13px}
+.workspace-title span{font-size:11px;color:var(--text-2)}
+.menu-actions{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px}
+.menu-actions button{font-size:11px}
+.popover-left{top:40px;left:10px;max-height:calc(100% - 90px)}
+.popover-right,.popover-right-top{top:auto;right:12px;bottom:45px;max-height:calc(100% - 100px);width:min(320px,calc(100% - 24px))}
+.viewer-footer{position:absolute;bottom:0;left:0;right:0;height:36px;display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--surface);border-top:1px solid var(--hairline);z-index:6;padding:4px 10px}
+.view-toolbar{display:flex;align-items:center;gap:6px;min-width:0}
+.view-toolbar .segmented button{padding:3px 13px}
+.footer-icon{width:22px;height:26px;display:grid;place-items:center;padding:0;background:transparent;border:0;color:var(--text-2);border-radius:4px}
+.footer-icon svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.footer-icon[aria-pressed=true],.footer-icon[aria-expanded=true]{background:transparent;color:var(--accent)}
+.corner-readout{position:static;font:12px/1 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--text-2);white-space:nowrap;margin-left:auto}
+.dock,#app[data-dock=menu] .dock{top:auto;bottom:45px;left:10px;right:auto;flex-direction:row;flex-wrap:wrap;border-radius:10px;max-width:calc(100% - 20px);max-height:160px}
+.dock-button{width:30px;height:30px;border-radius:5px}
+.cube-area{top:auto;bottom:70px;right:28px}
+.selection-bar{bottom:48px;width:min(680px,calc(100% - 28px))}
+.selection-bar[data-state=idle][data-prompt=false] .bar-row,.selection-bar[data-state=idle][data-prompt=false] .bar-details{display:none}
+.loading{bottom:48px;z-index:7}
+.floating-note{bottom:128px;width:min(560px,calc(100% - 28px))}
+#app[data-compact=true] .top-left{max-width:38px}
+#app[data-compact=true] .top-right{gap:6px}
+#app[data-compact=true] .popover-right{top:auto;bottom:45px;max-height:calc(100% - 100px)}
+#app[data-compact=true] .pick-hint{font-size:12px;padding:4px 9px;top:12px}
+#app[data-compact=true] .viewer-footer{height:36px;padding:4px 6px;overflow-x:auto}
+#app[data-compact=true] .view-toolbar{gap:4px;flex-shrink:0}
+#app[data-compact=true] .view-toolbar .segmented button{padding:3px 8px;font-size:12px}
+#app[data-compact=true] .footer-icon{width:20px}
+#app[data-compact=true] .parameter-card{width:min(300px,calc(100% - 24px));top:46px}
+#app[data-compact=true] #parameters-chip{top:44px}
+
+#models-popover .top-right{position:static;margin-top:12px;justify-content:flex-end}

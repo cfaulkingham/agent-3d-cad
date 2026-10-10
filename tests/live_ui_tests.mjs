@@ -1066,4 +1066,51 @@ function annotationMock(){
  check(count()===before,'Read-only external payload cannot reach native review-note mutation or read actions');delete m.state.value.payload.read_only;m.state.value.read_only=true;
  await assert.rejects(m.state.annotation('list'),/External artifact sessions/);checks++;check(count()===before,'Read-only sync discriminator blocks notes without inventing a native source identity');m.state.dispose();
 }
+// Parameter edits use the existing durable native transaction contract.
+function parameterMock(outcome = 'succeeded') {
+  const m = mock(), original = m.bridge.tool; let height = 6;
+  m.bridge.tool = async (name, args) => {
+    if (name === 'cad_job') {
+      m.calls.push({ name, args });
+      if (outcome === 'lost') throw Error('Acknowledgment lost');
+      if (outcome !== 'succeeded') return { job_id: 'parameter_job', state: 'failed', error: { message: 'Revision conflict' } };
+      height = args.arguments.operations[0].value; m.advance();
+      return { job_id: 'parameter_job', state: 'succeeded', result: { document_id: 'part', revision: 2 } };
+    }
+    const response = await original(name, args);
+    if (args.action === 'sync' && response.model) response.model.parameters = { height };
+    return response;
+  };
+  return m;
+}
+{
+  const m = parameterMock(); await m.state.pollOnce(); await m.state.editParameter('height', 8);
+  const edits = m.calls.filter(c => c.name === 'cad_job');
+  check(edits.length === 1 && edits[0].args.tool === 'cad_apply', 'Parameter release submits one durable native mutation');
+  assert.deepEqual(edits[0].args.arguments, { document_id: 'part', expected_revision: 1, operations: [{ op: 'set_parameter', name: 'height', value: 8 }] }); checks++;
+  check(m.state.value.payload.revision === 2 && m.state.value.model.parameters.height === 8 && !m.state.value.parameter_busy, 'Successful parameter edit reconciles saved source and clears busy state');
+  await m.state.editParameter('height', 8);
+  check(m.calls.filter(c => c.name === 'cad_job').length === 1, 'An unchanged value creates no extra revision'); m.state.dispose();
+}
+for (const outcome of ['failed', 'lost']) {
+  const m = parameterMock(outcome); await m.state.pollOnce(); const before = m.state.value.payload;
+  await assert.rejects(m.state.editParameter('height', 8), outcome === 'lost' ? /Acknowledgment/ : /Revision conflict/); checks++;
+  check(m.state.value.payload === before && m.state.value.model.parameters.height === 6, 'Failed or uncertain edit retains displayed committed geometry');
+  check(m.calls.filter(c => c.name === 'cad_job').length === 1 && !m.state.value.parameter_busy && !!m.state.value.parameter_error, 'Failed or uncertain mutation is never resubmitted and exposes its error'); m.state.dispose();
+}
+{
+  const m = parameterMock(); await m.state.pollOnce();
+  for (const [name, value] of [['unknown', 5], ['height', NaN], ['height', Infinity], ['height', 1000001]]) { await assert.rejects(m.state.editParameter(name, value), /finite parameter/); checks++; }
+  m.state.value.payload.draft = true; await assert.rejects(m.state.editParameter('height', 8), /saved geometry/); checks++;
+  m.state.value.payload.read_only = true; await assert.rejects(m.state.editParameter('height', 8), /read-only/); checks++;
+  check(!m.calls.some(c => c.name === 'cad_job'), 'Invalid, draft and read-only edits never reach native mutations'); m.state.dispose();
+}
+{
+  const m = parameterMock(); await m.state.pollOnce(); const original = m.bridge.tool; let release;
+  m.bridge.tool = (name, args) => name === 'cad_job' ? new Promise(resolve => { release = resolve; }) : original(name, args);
+  const edit = m.state.editParameter('height', 8);
+  await assert.rejects(m.state.editParameter('height', 9), /saved geometry/); checks++;
+  m.state.attach('other'); release({ state: 'succeeded', result: { document_id: 'part', revision: 2 } }); await edit;
+  check(m.state.value.view_id === 'other' && m.state.value.payload === null && !m.state.value.parameter_busy, 'Retarget rejects late parameter results; concurrent release cannot create another edit'); m.state.dispose();
+}
 console.log(`${checks} live UI bridge/state checks passed`);

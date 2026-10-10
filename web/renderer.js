@@ -166,12 +166,19 @@
   const defaultNow=()=>globalThis.performance?.now?.()??Date.now();
   const defaultReducedMotion=()=>!!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
   const rgb=(r,g,b)=>[r/255,g/255,b/255];
-  const defaultTheme=()=>({background:{top:rgb(241,244,248),bottom:rgb(217,223,231)},line:rgb(58,68,80),select:rgb(26,115,232),hover:rgb(110,173,255)});
+  const defaultTheme=()=>({background:{top:rgb(240,240,240),bottom:rgb(240,240,240)},line:rgb(92,107,123),select:rgb(0,122,255),hover:rgb(110,173,255)});
   const darkTheme=()=>({background:{top:rgb(46,53,61),bottom:rgb(25,30,36)},line:rgb(34,41,50),select:rgb(90,162,255),hover:rgb(140,190,255)});
   function themeValue(value) {
     const unit=v=>Array.isArray(v)&&v.length===3&&v.every(n=>Number.isFinite(n)&&n>=0&&n<=1);
     if(!value||!value.background||![value.background.top,value.background.bottom,value.line,value.select,value.hover].every(unit))fail('Invalid viewer theme.');
     return {background:{top:[...value.background.top],bottom:[...value.background.bottom]},line:[...value.line],select:[...value.select],hover:[...value.hover]};
+  }
+  function stageSettings(model) {
+    if (!model?.bounds) return { floor: -.5, step: .1, origin: [0,0,-.5], shift: [0,0] };
+    const raw = model.span / 8, magnitude = Math.pow(10, Math.floor(Math.log10(raw))), fraction = raw / magnitude;
+    const step = (fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10) * magnitude / model.span;
+    return { floor: model.bounds.min[2] - .0001, step, origin: [model.bounds.min[0] - .16, model.bounds.min[1] - .16, model.bounds.min[2]],
+      shift: model.center.slice(0,2).map(n => (-n / model.span) % step) };
   }
   const wrapAngle=a=>Math.atan2(Math.sin(a),Math.cos(a));
   const easeOut=t=>1-Math.pow(1-Math.max(0,Math.min(1,t)),3);
@@ -198,7 +205,7 @@
     const b=basis(c),corners=[];
     for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
     const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
-    const zoom=Math.max(.05,Math.min(50,Math.min(usableWidth*.82/(Math.max(1e-12,high[0]-low[0])*.68*size),usableHeight*.72/(Math.max(1e-12,high[1]-low[1])*.68*size))));
+    const zoom=Math.max(.05,Math.min(50,Math.min(usableWidth*.86/(Math.max(1e-12,high[0]-low[0])*.68*size),usableHeight*.86/(Math.max(1e-12,high[1]-low[1])*.68*size))));
     return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[-(low[0]+high[0])/2*.68*zoom+(left-right)/2/size,(low[1]+high[1])/2*.68*zoom+(top-bottom)/2/size]};
   }
   // Extent of one face or edge in normalized model units, padded so a straight
@@ -592,7 +599,7 @@
           float rim=pow(1.-abs(n.z),3.);
           float spec=pow(max(0.,dot(reflect(normalize(vec3(.35,-.65,.85)),n),vec3(0.,0.,-1.))),28.);
           vec3 base=uSection?vec3(.94,.55,.18):selected?mix(vColor,uSelectColor,.55):hovered?mix(vColor,uHoverColor,.35):vColor;
-          color=base*(.58+.40*diffuse)+vec3(.08)*rim+vec3(.10)*spec;}
+          color=base*(.62+.40*diffuse)+vec3(.015,.035,.06)+vec3(.08)*rim+vec3(.10)*spec;}
         ${webgl2?'outColor':'gl_FragColor'}=vec4(color,1.);
       }`;
     const shaders=[];let linked=null;
@@ -612,12 +619,39 @@
   function backdropProgram(gl) {
     const vertexSource=`#version 300 es
       precision highp float;
-      out float vT;
-      void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vT=p.y;gl_Position=vec4(p*2.-1.,1.,1.);}`;
+      out float vT;out vec2 vScreen;
+      void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));vT=p.y;vScreen=p*2.-1.;gl_Position=vec4(vScreen,1.,1.);}`;
     const fragmentSource=`#version 300 es
       precision highp float;
-      in float vT;uniform vec3 uTop;uniform vec3 uBottom;out vec4 outColor;
-      void main(){outColor=vec4(mix(uBottom,uTop,vT),1.);}`;
+      in float vT;in vec2 vScreen;uniform vec3 uTop;uniform vec3 uBottom;
+      uniform mat3 uBasis;uniform vec2 uScale;uniform vec2 uPan;uniform vec2 uViewport;
+      uniform bool uGrid;uniform bool uAxes;uniform float uFloor;uniform float uStep;uniform vec2 uShift;uniform vec3 uOrigin;
+      out vec4 outColor;
+      vec2 screen(vec3 p){return ((uBasis*p).xy*uScale+uPan)*uViewport*.5;}
+      float axis(vec3 direction){
+        vec2 a=screen(uOrigin),b=screen(uOrigin+direction*.24),p=vScreen*uViewport*.5;
+        vec2 d=b-a;float length2=dot(d,d);if(length2<1.)return 0.;
+        float t=clamp(dot(p-a,d)/length2,0.,1.);return 1.-smoothstep(1.7,2.7,length(p-a-t*d));
+      }
+      void main(){
+        vec3 color=mix(uBottom,uTop,vT);float dark=step(.5,dot(uTop,vec3(.2126,.7152,.0722)));
+        if(uGrid){
+          vec3 direction=transpose(uBasis)*vec3(0.,0.,1.);
+          if(abs(direction.z)>.005){
+            vec3 point=transpose(uBasis)*vec3((vScreen-uPan)/uScale,0.);
+            point+=direction*((uFloor-point.z)/direction.z);
+            vec2 coord=(point.xy-uShift)/uStep;
+            vec2 minor=abs(fract(coord-.5)-.5)/max(fwidth(coord),vec2(.0001));
+            vec2 major=abs(fract(coord/5.-.5)-.5)/max(fwidth(coord/5.),vec2(.0001));
+            float fine=1.-smoothstep(.35,1.,min(minor.x,minor.y));
+            float bold=1.-smoothstep(.5,1.5,min(major.x,major.y));
+            float fade=1.-smoothstep(3.,7.,length(point.xy));
+            color=mix(color,mix(vec3(.48),vec3(.65),dark),max(fine*.30,bold*.65)*fade);
+          }
+        }
+        if(uAxes){color=mix(color,vec3(.95,.12,.15),axis(vec3(1.,0.,0.)));color=mix(color,vec3(.10,.71,.25),axis(vec3(0.,1.,0.)));color=mix(color,vec3(0.,.48,.95),axis(vec3(0.,0.,1.)));}
+        outColor=vec4(color,1.);
+      }`;
     const shaders=[];let linked=null;
     try {
       for(const [type,source] of [[gl.VERTEX_SHADER,vertexSource],[gl.FRAGMENT_SHADER,fragmentSource]]) {
@@ -626,7 +660,9 @@
       }
       linked=gl.createProgram();if(!linked)fail('Unable to allocate the backdrop program.');for(const shader of shaders)gl.attachShader(linked,shader);gl.linkProgram(linked);
       if(!gl.getProgramParameter(linked,gl.LINK_STATUS))fail('Backdrop shader linking failed: '+gl.getProgramInfoLog(linked));
-      return {program:linked,uTop:gl.getUniformLocation(linked,'uTop'),uBottom:gl.getUniformLocation(linked,'uBottom')};
+      const result={program:linked};
+      for(const name of ['uTop','uBottom','uBasis','uScale','uPan','uViewport','uGrid','uAxes','uFloor','uStep','uShift','uOrigin'])result[name]=gl.getUniformLocation(linked,name);
+      return result;
     } catch(error){if(linked)gl.deleteProgram(linked);throw error;}
     finally {for(const shader of shaders)gl.deleteShader(shader);}
   }
@@ -634,6 +670,7 @@
     constructor(canvas,{onPick=()=>{},onHover=()=>{},onView=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{},now=defaultNow,reducedMotion=defaultReducedMotion}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
       this.canvas=canvas;this.callbacks={onPick,onHover,onView,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.insets={top:0,right:0,bottom:0,left:0};this.view=null;this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.hoverResumeAt=0;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
+      this.display={grid:true,axes:true,edges:false};
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this.callbacks.onAnnotations([]);this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
       this._controls();
@@ -723,7 +760,7 @@
       gl.bindBuffer(gl.ARRAY_BUFFER,r.edges);gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,16,0);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,16,12);gl.disableVertexAttribArray(a.aNormal);gl.vertexAttrib3f(a.aNormal,0,0,1);
       const selected=this.selection?.kind==='edge'?r.ranges.get(this.selection.entity_id):null;
       const hovered=this.hover?.kind==='edge'&&!(selected&&this.selection.entity_id===this.hover.entity_id)?r.ranges.get(this.hover.entity_id):null;
-      gl.uniform1i(u.uLines,true);gl.uniform1f(u.uSelected,selected?.number??-1);gl.uniform1f(u.uHover,hovered?.number??-1);gl.lineWidth(1);gl.drawArrays(gl.LINES,0,r.edgeCount);
+      gl.uniform1i(u.uLines,true);gl.uniform1f(u.uSelected,selected?.number??-1);gl.uniform1f(u.uHover,hovered?.number??-1);gl.lineWidth(1);if(this.display.edges)gl.drawArrays(gl.LINES,0,r.edgeCount);
       // Most GPUs cap wide lines at 1px, so highlighted edges are re-drawn at small
       // screen-space offsets (px is device pixels per CSS pixel) to read as thicker.
       const thick=(range,radius)=>{for(const [dx,dy] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]){gl.uniform2f(u.uLineShift,2*dx*radius*ratio/w,-2*dy*radius*ratio/h);gl.drawArrays(gl.LINES,range.start,range.count);}gl.uniform2f(u.uLineShift,0,0);};
@@ -849,8 +886,20 @@
     _drawBackdrop(){
       const backdrop=this.resources?.backdrop;if(!backdrop)return;
       const gl=this.gl;gl.disable(gl.DEPTH_TEST);gl.useProgram(backdrop.program);
+      // WebGL validates enabled arrays even for this attribute-less pass. After
+      // visibility reuploads, the previous arrays can still name deleted buffers.
+      for(const location of Object.values(this.resources.attributes)) gl.disableVertexAttribArray(location);
+      const {width,height}=this._size(),b=basis(this.camera),scale=Math.min(width,height)*.68*this.camera.zoom,stage=stageSettings(this.fullModel);
+      gl.uniformMatrix3fv(backdrop.uBasis,false,new Float32Array([b[0][0],b[1][0],b[2][0],b[0][1],b[1][1],b[2][1],b[0][2],b[1][2],b[2][2]]));
+      gl.uniform2f(backdrop.uScale,2*scale/width,2*scale/height);gl.uniform2f(backdrop.uPan,2*this.camera.pan[0]*Math.min(width,height)/width,-2*this.camera.pan[1]*Math.min(width,height)/height);
+      gl.uniform2f(backdrop.uViewport,width,height);gl.uniform1i(backdrop.uGrid,!!this.model&&this.display.grid);gl.uniform1i(backdrop.uAxes,!!this.model&&this.display.axes);
+      gl.uniform1f(backdrop.uFloor,stage.floor);gl.uniform1f(backdrop.uStep,stage.step);gl.uniform2f(backdrop.uShift,...stage.shift);gl.uniform3f(backdrop.uOrigin,...stage.origin);
       gl.uniform3f(backdrop.uTop,...this.theme.background.top);gl.uniform3f(backdrop.uBottom,...this.theme.background.bottom);gl.drawArrays(gl.TRIANGLES,0,3);
     }
+    setDisplay(settings){return this._checked(()=>{
+      if(!settings||Object.keys(settings).some(key=>!['grid','axes','edges'].includes(key)||typeof settings[key]!=='boolean'))fail('Display settings must be grid, axes or edges booleans.');
+      Object.assign(this.display,settings);this._schedule();
+    });}
     setTheme(value){return this._checked(()=>{this.theme=themeValue(value);this._schedule();});}
     getTheme(){return themeValue(this.theme);}
     // CSS pixels covered by floating chrome on each side; used by fit, reset and frame.
@@ -916,6 +965,6 @@
     });}
     destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;if(this.hoverPending!==null)cancelAnimationFrame(this.hoverPending);this.hoverPending=null;this.hover=null;this.hoverPoint=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources){this.gl.deleteProgram(this.resources.program);if(this.resources.backdrop)this.gl.deleteProgram(this.resources.backdrop.program);}this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
   }
-  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme});
+  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme,stageSettings});
   globalThis.CadRenderer=CadRenderer;
 })();

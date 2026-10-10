@@ -59,7 +59,7 @@ agent-3d-cad viewer --workspace "/absolute/path/to/cad-workspace" --view main
 The Tauri window starts its own stdio connection to the native service. It has no
 HTTP listener and opens no browser tab. The agent’s MCP connection or CLI calls
 must use the **same workspace and view ID**. Workspace paths are shown in the
-Models menu (the project pill). Use **Open workspace**, **Recent workspaces** and project search to
+Models menu (the top-left menu button). Use **Open workspace**, **Recent workspaces** and project search to
 reopen earlier projects; their editable documents stay outside the app install.
 Opening a workspace lists its saved models; choose one to display it.
 
@@ -120,6 +120,27 @@ fails without changing the saved view state. All visibility edits require the
 current displayed evaluation, so a view that is loading or stale must synchronize
 before changing its mask.
 
+## Editing parameters
+
+The Parameters card has a slider and a numeric field for every saved numeric
+parameter. Release a slider, press Enter in a number field, or leave the field to
+rebuild and save one revision through a bounded native `cad_apply` job. There is
+one parameter mutation in flight, qualified by the displayed document and
+`expected_revision`. Invalid geometry preserves HEAD and restores the saved
+value; revision conflicts and uncertain replies are explicit and never trigger
+an automatic mutation retry. Retargeting the viewer discards obsolete UI results.
+Draft poses and read-only artifacts cannot use parameter edits.
+
+Slider ranges are convenient local windows around the saved value, not model
+constraints. Numeric fields accept the full finite ±1,000,000 scalar range; the
+native model and kernel validate the resulting design. Values normally display up to three
+decimal places, retain very small nonzero values, and expose the exact saved value
+while the field has focus.
+
+**Compare with** shows parameter differences against one of the last 50 saved
+revisions. This compares editable values, without a geometry overlay. A changed
+document or revision clears the comparison.
+
 ## Selecting
 
 One cursor selects faces and edges; there is no mode switch. The entity under the
@@ -149,7 +170,9 @@ the latest pointer position; clicks always resolve.
 | Double-click empty space | Fit the model |
 
 Right-drag orbits (it used to pan); pan with the middle button or Shift.
-The orientation cube at top-right follows the camera. Click a face for that
+The bottom toolbar provides **Iso**, **Front**, **Top** and **Right** views.
+Enable **Orientation cube** from the Models menu for the cube near the lower-right
+corner; it follows the camera. Click a face for that
 standard view (Top, Front, Right, Left, Back, Bottom); click near a face's border
 for an edge or corner view; drag the cube to orbit; double-click it for the default
 isometric view. **Fit** frames the whole model. Fit, reset and framing centre the
@@ -161,21 +184,34 @@ Shift+arrows pan, +/- zoom.
 
 ## Layout and theme
 
-Light is the default look. The viewer follows the host's light/dark theme when the
-host reports one, otherwise the operating system's, and switches live. Edge lines
-stay dark in both themes because the model is light in both.
+The stage uses a light gray background, cool blue solid shading and translucent
+floating cards. The viewer follows the host's light/dark theme, otherwise the
+operating system's, and switches live. The bottom toolbar toggles the ground grid,
+XYZ direction guide and exact edge outlines, opens measurement, and fits the model.
+Grid and axes use the same orthographic camera as the model and appear in saved PNGs.
+They are WebGL2 backdrop decorations, not selectable geometry or measurements;
+WebGL1 retains its solid background fallback. Edge outlines start hidden; hover,
+selection and picking still work. The XYZ guide shows world directions near the
+model, rather than asserting that its anchor is the document origin.
 
 | Width | Behavior |
 |---|---|
-| 900 px and up | Scene card open, tool dock shown |
-| 560–899 px | Scene card collapsed to a chip, dock shown as icons |
-| Under 560 px | Dock folds into one **Tools** button, the selection bar spans the width with the prompt on a second row, the cube shrinks |
+| 900 px and up | Parts and available Parameters cards open |
+| 560–899 px | Cards reopen from **Parts** and **Parameters** buttons |
+| Under 560 px | One card opens at a time; the toolbar fits at 360 px and the selected edit bar wraps |
 
-Each tool (Visual inspection, Colors, Review notes, Saved views, Exact section,
-Measure, Sequences, Motion, Source) is one dock icon that opens one popover; an
-icon appears only while its panel applies (Motion needs an articulated assembly,
-Source only a read-only artifact). Esc, a click outside or the close button
-dismisses it and focus returns to the icon. The dock supports Up/Down arrows.
+**Assembled** restores all assembly leaves; each part tab isolates its occurrence.
+Large assemblies use wrapped tabs with a bounded scroll area. **Design details**
+retains the feature tree and detailed visibility controls. Card arrows collapse
+contents; the Parameters close button leaves a reopen button. Resizing or opening
+and closing Parameters recenters the usable viewport while preserving orbit and zoom.
+
+The Models menu contains the library, exports, optional orientation cube and
+**Ask agent…**. Clicking geometry reveals the selection bar. The bottom ellipsis
+opens inspection tools (Visual inspection, Colors, Review notes, Saved views,
+Exact section, Measure, Sequences, Motion and Source). An icon appears only while
+its panel applies. Esc, an outside click or the close button dismisses the popover;
+the dock supports Up/Down arrows.
 
 Quick Edit hands a request to the host; it does not directly mutate geometry or
 guarantee that the host posts a message automatically. Complete any composer

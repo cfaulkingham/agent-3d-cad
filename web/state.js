@@ -405,6 +405,43 @@
       return this.setHiddenParts(this.partIds().filter(part => !leaves.has(part)));
     }
     showAll() { return this.setHiddenParts([]); }
+    async editParameter(name, value) {
+      this.requireNative();
+      const p = this.value.payload;
+      if (this.closed || this.value.status !== 'ready' || !p || p.draft || this.parameterBusy || this.motionBusy || this.presetBusy || this.sequenceBusy)
+        throw Error('Wait for saved geometry before changing a parameter.');
+      if (!Object.hasOwn(this.value.model?.parameters || {}, name) || !Number.isFinite(value) || Math.abs(value) > 1000000)
+        throw Error('Choose a finite parameter value between −1,000,000 and 1,000,000.');
+      if (this.value.model.parameters[name] === value) return;
+      this.pausePlayback();
+      const epoch = this.epoch, view = this.value.view_id, document_id = p.document_id, expected_revision = p.revision;
+      const current = () => !this.closed && epoch === this.epoch && this.value.view_id === view && this.value.payload?.document_id === document_id;
+      this.parameterBusy = true; this.update({ parameter_busy: true, parameter_source: document_id, parameter_error: null, parameter_message: `Updating ${name}…` });
+      try {
+        // One durable, revision-checked mutation per release. Never resubmit after
+        // an uncertain acknowledgment: sync reconciles the committed source.
+        let job = await this.bridge.tool('cad_job', { action: 'submit', request_id: `parameter_${crypto.randomUUID()}`, tool: 'cad_apply',
+          arguments: { document_id, expected_revision, operations: [{ op: 'set_parameter', name, value }] }, budget: { timeout_ms: 30000, memory_mb: 2048 } });
+        const deadline = Date.now() + 40000;
+        while (['queued', 'running', 'cancelling'].includes(job.state)) {
+          if (Date.now() > deadline) throw Error(`The edit is still pending. Read the current revision before retrying. Job: ${job.job_id}`);
+          if (!current()) return;
+          await new Promise(resolve => setTimeout(resolve, 200));
+          job = await this.bridge.tool('cad_job', { action: 'get', job_id: job.job_id });
+        }
+        if (!current()) return;
+        if (job.state !== 'succeeded') throw Error(job.error?.message || `Parameter edit ${job.state}.`);
+        if (job.result?.document_id !== document_id || job.result?.revision !== expected_revision + 1) throw Error('The parameter result belongs to another revision. Read the saved model.');
+        this.update({ selection: null, parameter_message: `Saved revision ${job.result.revision}` });
+      } catch (error) {
+        if (current()) this.update({ parameter_error: error.message, parameter_message: null });
+        throw error;
+      } finally {
+        this.parameterBusy = false;
+        if (!this.closed) this.update({ parameter_busy: false });
+        if (current()) await this.pollOnce();
+      }
+    }
     async motion(action, fields = {}) {
       this.requireNative();
       this.pausePlayback();

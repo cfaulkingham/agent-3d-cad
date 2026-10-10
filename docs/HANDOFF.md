@@ -7,6 +7,119 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Screenshot-reference viewer and direct parameter controls — 2026-10-09
+
+Reworked the shared embedded/Tauri `web/` viewer around the user's screenshot:
+light gray full-canvas stage, translucent Parts and Parameters cards, compact
+Models menu, point-selection hint and a fixed bottom toolbar. Existing model
+library, exports, design details, Quick Edit and inspection tools remain available.
+No native tool/document contracts or OCCT geometry implementation changed.
+
+Implemented behavior:
+
+- Parts tabs isolate actual assembly occurrences; Assembled restores all leaves.
+  Multiple tabs wrap inside a bounded vertical area, avoiding a horizontal
+  scrollbar covering their hit targets. Single solids show their output name.
+- Parameters provide sliders and numeric fields. Slider release, numeric blur or
+  Enter submits one bounded `cad_apply` job with captured document identity and
+  expected revision. Native failures preserve HEAD and restore the displayed
+  value. Unknown/nonfinite/out-of-range, draft and read-only edits cannot submit;
+  concurrent edits are gated, obsolete responses are discarded and uncertain
+  mutations are never resubmitted. Numeric fields expose exact values on focus.
+- Compare with reads parameter differences against up to 50 recent revisions;
+  changing source or revision clears the comparison. This is a value comparison,
+  without a geometry overlay.
+- Iso/Front/Top/Right buttons follow the actual camera. The bottom toolbar toggles
+  grid, XYZ guide and edge outlines, opens measurement and fits geometry. Hover
+  and qualified selection work while outlines are hidden. Grid and XYZ guide are
+  camera-aligned WebGL2 backdrop decorations included in PNG capture; the guide
+  is anchored near the model and does not claim to mark the document origin.
+- Cards collapse and Parameters can close/reopen. Widths below 900 px use reopen
+  buttons, with one card at a time below 560 px. Layout changes preserve orbit and
+  zoom while adjusting pan for the uncovered viewport.
+- Real GPU inspection found a stale vertex-array issue during hide/restore:
+  the attribute-less backdrop could inherit arrays pointing to deleted geometry
+  buffers. It now disables all geometry arrays before drawing. A regression
+  checks isolation/restoration, and the real browser subsequently restored the
+  assembly and switched theme without blanking the canvas.
+
+Executed evidence (macOS arm64):
+
+- Final `cmake --build build --parallel 4` succeeded. **13/13 relevant CTest
+  suites passed in 12.97 s**: embedded_assets, app_protocol, live, live_mcp_flow,
+  webgl_renderer, viewer_shell, live_ui, playback_ui, export_ui,
+  artifact_retarget_ui, offline_renderer, desktop_bridge and desktop_assets.
+  Counts include **109 renderer**, **344 live UI**, **6 shell**, **72 real MCP**,
+  **269 native live**, and **6,613 app-protocol** checks. The full unrelated native
+  geometry suite was not repeated. Syntax checks and `git diff --check` passed.
+- The dev-only MCP Apps harness used the real native service in an isolated
+  temporary workspace. Codex's in-app browser demonstrated numeric commit,
+  slider keyboard commit, exact revision comparison, a rejected negative width
+  retaining geometry, part isolate/restore, grid/outline toggles, Top view, model
+  library retarget, panel reopen and widths 360/560/1280, including live dark mode.
+- Evidence is in `.local/evidence/viewer-reference-20261009/`: build/CTest logs,
+  a valid 35 × 40 × 35 mm native bracket record and `preview.png`. The temporary
+  harness remains open for interactive review; no user Documents workspace,
+  installed plugin or standalone app was replaced.
+
+Limits/next: package and install the reviewed UI for actual embedded-host and
+standalone delivery, then complete remaining 1.0 host/platform/signing gates.
+This increment validates the developer harness and built native resource, not a
+new installation or release. Projection remains orthographic; WebGL1 retains
+its solid backdrop fallback. Slider ranges are UI windows, not design constraints.
+
+## Current local plugin build and in-app library — 2026-10-09
+
+Built committed `main` source `9f79efa` with the retained OCCT 8.0.1 v2 HLR SDK
+and packaged the native engine, MCP App and both agent skills. VERSION remains
+`0.1.0-preview.1`; no public tag/release was created. Outputs stay under
+`build/packages/`: the portable core, ordinary plugin ZIP and a separate
+installation source configured for the existing Documents/Agent3DCAD workspace.
+The ordinary generated plugin keeps the product default workspace.
+
+Installed through this app's bundled Codex CLI (`0.162.0-alpha.2`), preserving
+the old versioned source installation. New source:
+`~/Applications/Agent3DCAD/chatgpt-plugin-9f79efa-20261009`; installed cache:
+`~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1`.
+The CLI requires removing the existing same-name marketplace registration before
+registering a different local source; only that registration was replaced.
+The plugin is enabled, no duplicate standalone MCP entry was added, and parsed
+comparison verified all unrelated configuration unchanged. The original config
+is backed up with mode 0600. All **34 model files** across the two existing
+Documents project folders stayed byte-identical through installation and host
+verification.
+
+Executed macOS arm64 evidence:
+
+- Incremental native build and fresh portable installation succeeded. The clean
+  build of the same native source passed **56/56 CTest suites** in the cleanup
+  entry below; that full run was not repeated for this packaging-only task.
+- Unmodified `tests/plugin_smoke.py` passed complete provenance, empty-PATH
+  MCP/viewer discovery, create/edit, restart/reopen/history and STEP/STL/PDF/SVG/
+  four DXF exports in an isolated temporary workspace.
+- Prepared source, installed source and actual plugin cache passed their complete
+  **307-file** inventories. Native executable SHA-256:
+  `3281c67cc82abdcf678b7fa88e89ed992e38e689a241afeebdf47383c2840a35`.
+  Both installed skills match their repository sources exactly.
+- The app's bundled runtime independently returned the enabled installed plugin,
+  `agent-cad:native-cad` and `agent-cad:setup`, and **28 tools** associated with
+  `pluginId=agent-cad@agent-cad-local`. The installed service also passed actual
+  workspace startup with empty PATH and loader overrides removed; its viewer
+  resource SHA-256 matches provenance:
+  `0d22ccf8034f22011c6c0dc2f8fb97b862311bd80da9053092b60eecf67dfdf3`.
+- Actual connected tools in this chat returned `cad_list` and `cad_open`
+  successfully. View `chat_01a1207b_install_9f79efa` rendered inside the app;
+  DOM inspection and a screenshot show its Models menu listing all five saved
+  projects at their prior revisions. This establishes live library rendering,
+  not a new geometry selection/edit/export acceptance journey.
+
+Evidence, config backup and exact verification scripts are under
+`.local/evidence/plugin-install-9f79efa-20261009/`; `library.jpg` records the actual
+embedded library. This is a local macOS build with ad-hoc signatures, not
+publisher signing/notarization or additional 1.0 host/platform certification.
+Continue using this chat's view for project selection; complete remaining host
+journeys and delivery/signing gates before a stable release.
+
 ## Repository and local artifact cleanup — 2026-10-09
 
 Removed all 13 historical root `build*` directories after preserving their

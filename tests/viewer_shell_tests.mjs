@@ -61,4 +61,13 @@ test('the cube matrix puts each face toward the viewer in its standard view, upr
   }
 });
 
+test('parameter slider windows preserve sign and stay within scalar limits', () => {
+  for (const value of [-1000000, -40, 0, .864, 40, 785.189, 1000000]) {
+    const range = Shell.parameterRange(value);
+    assert.ok(range.min <= value && range.max >= value && range.max > range.min);
+    assert.ok(range.min >= -1000000 && range.max <= 1000000 && range.step > 0);
+  }
+  assert.equal(Shell.parameterRange(40).step, .01);
+});
+
 console.log(`viewer shell: ${checks} checks passed`);

@@ -1,4 +1,4 @@
-/* Viewer shell: pure UI decisions first, DOM glue added by later tasks. */
+/* Shared floating viewer chrome, card state and camera coordination. */
 (() => {
   'use strict';
   const resolveTheme = (hostContext, prefersDark) => {
@@ -49,6 +49,12 @@
   };
   const clamp01 = value => Math.max(0, Math.min(1, Number.isFinite(value) ? value : .5));
   const titleCase = name => name[0].toUpperCase() + name.slice(1);
+  // Documents provide values, not design limits. These are local slider windows;
+  // the number field accepts the full scalar range and the kernel validates intent.
+  const parameterRange = value => {
+    const span = Math.max(Math.abs(value), 1);
+    return { min: Math.max(-1000000, value > 0 ? 0 : value - span), max: Math.min(1000000, value + span), step: Math.pow(10, Math.floor(Math.log10(span)) - 3) };
+  };
 
   // Connects the floating chrome to the existing section elements. Panels keep
   // their IDs and are only moved; app.js still owns their content and `hidden`
@@ -83,7 +89,7 @@
     };
     const dock = $('tool-dock'), dockToggle = $('dock-toggle');
     const dockButtons = () => [...dock.querySelectorAll('.dock-button')];
-    let openKey = null, activeTool = null, returnTo = null, dockOpen = false;
+    let openKey = null, activeTool = null, returnTo = null, dockOpen = false, promptOpen = false;
     const parkToolPanel = () => { const panel = activeTool && $(activeTool); if (panel) $('tool-panels').append(panel); };
     function close(restoreFocus = true) {
       if (!openKey) return;
@@ -96,7 +102,7 @@
     }
     function open(key, trigger) {
       if (openKey) close(false);
-      openKey = key; returnTo = trigger || doc.activeElement;
+      openKey = key; returnTo = key === 'export' ? $('project-pill') : trigger || doc.activeElement;
       const entry = popovers[key];
       entry.el.hidden = false;
       entry.trigger?.setAttribute('aria-expanded', 'true');
@@ -105,16 +111,19 @@
     const toggle = key => (openKey === key ? close() : open(key, popovers[key].trigger));
     on(popovers.models.trigger, 'click', () => toggle('models'));
     on(popovers.export.trigger, 'click', () => toggle('export'));
+    on($('ask-agent'), 'click', () => { close(false); promptOpen = true; refreshBar(); $('prompt').focus(); });
+    on($('show-cube'), 'click', () => { const visible = $('cube-area').hidden; $('cube-area').hidden = !visible; $('show-cube').setAttribute('aria-pressed', String(visible)); });
     on($('tool-popover-close'), 'click', () => close());
     on($('documents'), 'click', event => { if (event.target.closest('button')) close(false); });
     on($('export-menu'), 'click', event => { if (event.target.closest('#export-model,#save-image')) close(false); });
     on(doc, 'pointerdown', event => {
+      if (dockOpen && !dock.contains(event.target) && !dockToggle.contains(event.target) && !$('tool-popover').contains(event.target)) { dockOpen = false; dockToggle.setAttribute('aria-expanded', 'false'); refreshDock(); }
       if (!openKey) return;
       const entry = popovers[openKey], target = event.target;
       if (entry.el.contains(target) || (openKey === 'tool' ? dock.contains(target) : entry.trigger.contains(target))) return;
       close(false);
     }, true);
-    on(doc, 'keydown', event => { if (event.key === 'Escape' && openKey) close(); });
+    on(doc, 'keydown', event => { if (event.key === 'Escape') { if(openKey) close(); dockOpen = false; dockToggle.setAttribute('aria-expanded', 'false'); refreshDock(); } });
     function openTool(button) {
       const id = button.dataset.tool;
       if (activeTool === id) { close(); return; }
@@ -135,7 +144,7 @@
     on(dockToggle, 'click', () => { dockOpen = !dockOpen; dockToggle.setAttribute('aria-expanded', String(dockOpen)); refreshDock(); });
 
     // Responsive layout from the viewer's own width.
-    let mode = null, userScene = null;
+    let mode = null, userScene = null, userParameters = null, parameterDocument = null, cameraLayout = null;
     const sceneCard = $('scene-card'), sceneChip = $('scene-chip');
     function applyLayout() {
       const next = layoutMode(app.clientWidth);
@@ -146,13 +155,37 @@
       sceneCard.hidden = !visible; sceneChip.hidden = visible; sceneChip.setAttribute('aria-expanded', String(visible));
       // Fit and framing target what the floating chrome leaves uncovered. A Scene
       // card opened over the model from the chip is transient and not counted.
-      renderer?.setInsets({ top: 56, right: next.compact ? 12 : 84, bottom: next.compact ? 150 : 96, left: visible && next.scene === 'open' ? 268 : 0 });
+      refreshParameters();
       refreshDock();
     }
-    on($('scene-collapse'), 'click', () => { userScene = false; applyLayout(); });
-    on(sceneChip, 'click', () => { userScene = true; applyLayout(); });
+    on($('scene-collapse'), 'click', () => { const content = $('scene-content'); content.hidden = !content.hidden; $('scene-collapse').setAttribute('aria-expanded', String(!content.hidden)); });
+    on(sceneChip, 'click', () => { userScene = true; if(mode?.compact) userParameters = false; applyLayout(); });
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(applyLayout) : null;
     observer?.observe(app);
+
+    function refreshParameters() {
+      const key = $('document-title').textContent;
+      if (key !== parameterDocument) { parameterDocument = key; userParameters = null; }
+      const available = $('parameters').children.length > 0 && !$('parameters').dataset.readonly;
+      const visible = available && (userParameters ?? mode?.scene === 'open');
+      $('parameters-panel').hidden = !visible; $('parameters-chip').hidden = !available || visible;
+      $('parameters-chip').setAttribute('aria-expanded', String(visible)); $('show-parameters').disabled = !available;
+      const insets = { top: 48, right: visible && mode?.scene === 'open' ? $('parameters-panel').offsetWidth + 20 : 12, bottom: 56, left: 12 };
+      const size = Math.max(1, Math.min(app.clientWidth, app.clientHeight - 36));
+      // Keep the model's position relative to the uncovered viewport when cards
+      // open/close or a host resizes its embedded app. Preserve orbit and zoom.
+      if(renderer?.model && cameraLayout) {
+        const old = cameraLayout.insets, oldSize = cameraLayout.size, camera = renderer.getCamera();
+        const dx = (insets.left-insets.right)/(2*size) - (old.left-old.right)/(2*oldSize);
+        const dy = (insets.top-insets.bottom)/(2*size) - (old.top-old.bottom)/(2*oldSize);
+        if(Math.abs(dx)+Math.abs(dy)>1e-6) renderer.setCamera({...camera,pan:[camera.pan[0]+dx,camera.pan[1]+dy]});
+      }
+      cameraLayout = { insets, size }; renderer?.setInsets(insets);
+    }
+    const showParameters = () => { userParameters = true; if(mode?.compact) userScene = false; close(false); applyLayout(); };
+    on($('parameters-chip'), 'click', showParameters); on($('show-parameters'), 'click', showParameters);
+    on($('parameters-close'), 'click', () => { userParameters = false; applyLayout(); });
+    on($('parameters-collapse'), 'click', () => { const content = $('parameter-content'); content.hidden = !content.hidden; $('parameters-collapse').setAttribute('aria-expanded', String(!content.hidden)); });
 
     function refreshDock() {
       let visible = 0;
@@ -162,9 +195,8 @@
         if (!button.hidden) visible++;
       }
       if (activeTool && $(activeTool).hidden) close(false);
-      const menu = !!mode && mode.dock === 'menu';
-      dockToggle.hidden = !visible || !menu;
-      dock.hidden = !visible || (menu && !dockOpen);
+      dockToggle.hidden = !visible;
+      dock.hidden = !visible || !dockOpen;
     }
 
     // Scene card tabs. The Parts tab exists only while app.js shows the parts panel.
@@ -203,8 +235,20 @@
         if (at >= 0) key = `${labels[at].textContent} ${values[at].textContent}`;
       }
       $('selection-key').textContent = key;
+      bar.dataset.prompt = String(promptOpen);
+      $('pick-hint').hidden = selected || promptOpen || !$('empty-state').hidden || !$('all-hidden').hidden;
+      $('menu-title').textContent = $('document-title').textContent;
+      $('menu-revision').textContent = $('revision').textContent;
       autosize();
     }
+    on(doc, 'keydown', event => { if (event.key === 'Escape') { promptOpen = false; refreshBar(); } });
+
+    for (const button of $('standard-views').querySelectorAll('[data-view]')) on(button, 'click', () => renderer?.setView(button.dataset.view, { animate: true }));
+    for (const [id, key] of [['toggle-grid','grid'], ['toggle-axes','axes'], ['toggle-edges','edges']]) on($(id), 'click', () => {
+      const enabled = $(id).getAttribute('aria-pressed') !== 'true';
+      $(id).setAttribute('aria-pressed', String(enabled)); renderer?.setDisplay({ [key]: enabled });
+    });
+    on($('open-measure'), 'click', () => { const button = dockButtons().find(item => item.dataset.tool === 'measurement-panel'); if (button && !button.hidden) openTool(button); });
 
     // Orientation cube: six real buttons in a world-aligned CSS 3D scene.
     const cube = $('cube'), cubeScene = doc.createElement('div');
@@ -217,7 +261,14 @@
       label.textContent = face.name; button.append(label); cubeScene.append(button);
     }
     cube.append(cubeScene);
-    const syncView = camera => { cubeScene.style.transform = `matrix3d(${cubeMatrix(camera).join(',')})`; };
+    const syncView = camera => {
+      cubeScene.style.transform = `matrix3d(${cubeMatrix(camera).join(',')})`;
+      for (const button of $('standard-views').querySelectorAll('[data-view]')) {
+        const [yaw,pitch] = CadRenderer.math.STANDARD_VIEWS[button.dataset.view];
+        const selected = Math.abs(Math.atan2(Math.sin(camera.yaw-yaw),Math.cos(camera.yaw-yaw))) < .01 && Math.abs(camera.pitch-pitch) < .01;
+        button.setAttribute('aria-pressed', String(selected));
+      }
+    };
     const look = direction => {
       if (!renderer) return;
       const view = CadRenderer.math.viewFromDirection(direction);
@@ -259,7 +310,7 @@
     if (renderer) syncView(renderer.getCamera());
     refreshScene(); refreshBar();
     return {
-      refresh() { applyTheme(); refreshDock(); refreshScene(); refreshBar(); },
+      refresh() { applyTheme(); refreshDock(); refreshScene(); refreshParameters(); refreshBar(); },
       syncView,
       openToolById(id) {
         const button = dockButtons().find(item => item.dataset.tool === id);
@@ -273,5 +324,5 @@
       }
     };
   }
-  globalThis.CadShell = Object.freeze({ resolveTheme, layoutMode, CUBE_FACES, cubeDirection, cubeMatrix, cubeFaceMatrix, mount });
+  globalThis.CadShell = Object.freeze({ resolveTheme, layoutMode, parameterRange, CUBE_FACES, cubeDirection, cubeMatrix, cubeFaceMatrix, mount });
 })();

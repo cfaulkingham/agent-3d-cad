@@ -261,6 +261,27 @@ function mockCanvas({webgl2=true,unavailable=false}={}) {
   return {canvas,gl,stats};
 }
 function flush(){for(const [id,callback] of [...scheduled]){scheduled.delete(id);callback();}}
+test('grid spacing is bounded, follows world coordinates and keeps the axis triad near the model',()=>{
+  for(const data of [base,assembly()]){
+    const model=prepare(data),stage=Renderer.math.stageSettings(model);
+    assert.ok(stage.step>=.125&&stage.step<=.25&&stage.floor<model.bounds.min[2]);
+    assert.ok(stage.origin.every(Number.isFinite)&&stage.shift.every(v=>Number.isFinite(v)&&Math.abs(v)<stage.step));
+  }
+});
+test('backdrop clears stale vertex arrays before drawing after a visibility reupload',()=>{
+  const {canvas,gl}=mockCanvas(),enabled=new Set([0,1,2,3]);let active=null,renderer,backgrounds=0;
+  gl.enableVertexAttribArray=location=>enabled.add(location);gl.disableVertexAttribArray=location=>enabled.delete(location);gl.useProgram=program=>{active=program;};
+  gl.drawArrays=()=>{if(active===renderer.resources.backdrop.program){assert.equal(enabled.size,0);backgrounds++;}};
+  renderer=new Renderer(canvas);renderer.load(assembly());flush();renderer.setHiddenParts(['cover']);flush();renderer.setHiddenParts([]);flush();
+  assert.ok(backgrounds>=3);renderer.destroy();
+});
+test('display toggles preserve geometry, picking and selected references',()=>{
+  const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);
+  const reference={...base,kind:'face',entity_id:'face-1'};renderer.setSelection(reference);const model=renderer.model,selection=renderer.selection;
+  renderer.setDisplay({grid:false,axes:false,edges:true});flush();
+  assert.equal(renderer.model,model);assert.equal(renderer.selection,selection);assert.equal(at(model,[-.1,-.1,0]).id,'face-1');
+  assert.throws(()=>renderer.setDisplay({grid:'yes'}));assert.throws(()=>renderer.setDisplay({other:true}));renderer.destroy();
+});
 test('WebGL2 loads, highlights, captures, and releases resources',()=>{
   const {canvas,stats}=mockCanvas(),errors=[],picks=[],renderer=new Renderer(canvas,{onError:e=>errors.push(e),onPick:(...args)=>picks.push(args)});
   renderer.load(base);renderer.setSelection({...base,kind:'face',entity_id:'face-1'});flush();assert.ok(stats.draws>0);assert.equal(errors.length,0);assert.equal(picks.length,0);

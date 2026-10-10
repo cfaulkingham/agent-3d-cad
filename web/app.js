@@ -90,7 +90,75 @@
       }
       detail.append(code); $('features').append(detail);
     }
-    facts($('parameters'), Object.entries(model?.parameters || {}).map(([name, value]) => [name, fmt(value)]));
+  }
+  let parameterKey = '', partTabsKey = '', comparisonToken = 0, comparisonKey = '';
+  const parameterDisplay = value => value !== 0 && Math.abs(value) < .001 ? value : Number(value.toFixed(3));
+  function parameterControls(v) {
+    const p = v.payload, native = !!p && !p.read_only && !v.read_only;
+    $('parameters').dataset.readonly = native ? '' : 'true';
+    const values = native ? v.model?.parameters || {} : {}, key = JSON.stringify([p?.document_id, p?.revision, values]);
+    if (key !== parameterKey) {
+      parameterKey = key; $('parameters').replaceChildren();
+      for (const [name, value] of Object.entries(values)) {
+        const row = document.createElement('div'), heading = document.createElement('div'), label = document.createElement('label'), number = document.createElement('input'), slider = document.createElement('input');
+        row.className = 'parameter-row'; heading.className = 'parameter-label'; label.textContent = name.toUpperCase();
+        number.type = 'number'; number.min = -1000000; number.max = 1000000; number.step = 'any'; number.value = parameterDisplay(value); number.id = `parameter-${name}`; label.htmlFor = number.id;
+        const range = CadShell.parameterRange(value); slider.type = 'range'; slider.className = 'parameter-slider'; Object.assign(slider, range); slider.value = value;
+        slider.setAttribute('aria-label', `Adjust ${name}`); slider.title = 'Release to rebuild and save'; number.title = 'Enter a value to rebuild and save';
+        const fill = () => slider.style.setProperty('--fill', `${100 * (Number(slider.value) - range.min) / (range.max - range.min)}%`);
+        fill(); number.onfocus = () => { number.value = value; }; slider.oninput = () => { number.value = parameterDisplay(Number(slider.value)); fill(); };
+        const commit = async raw => {
+          if (parameterKey !== key || state.value.payload?.document_id !== p.document_id || state.value.payload?.revision !== p.revision) return;
+          try { if (raw === '') throw Error('Enter a number.'); await state.editParameter(name, Number(raw)); }
+          catch (error) { if(parameterKey === key) state.update({parameter_source:p.document_id,parameter_error:error.message,parameter_message:null}); }
+          finally { const saved = state.value.model?.parameters?.[name] ?? value; number.value = parameterDisplay(saved); slider.value = saved; fill(); }
+        };
+        slider.onchange = () => commit(slider.value); number.onblur = () => commit(number.value);
+        number.onkeydown = event => { if(event.key === 'Enter') { event.preventDefault(); number.blur(); } };
+        heading.append(label, number); row.append(heading, slider); $('parameters').append(row);
+      }
+    }
+    const ready = native && v.status === 'ready' && !p.draft && !v.parameter_busy && !v.preset_busy && !v.sequence_busy && !sending;
+    for (const input of $('parameters').querySelectorAll('input')) input.disabled = !ready;
+    $('parameter-status').textContent = (v.parameter_source === p?.document_id ? v.parameter_error || v.parameter_message : '') || (p?.draft ? 'Save or reset the pose to edit parameters.' : '');
+    const source = native ? `${p.document_id}/${p.revision}` : '';
+    if (source !== comparisonKey) {
+      comparisonKey = source; ++comparisonToken; $('compare-revision').replaceChildren();
+      const none = document.createElement('option'); none.value = ''; none.textContent = 'None'; $('compare-revision').append(none);
+      // Bound the menu for long histories; the most recent revisions are the useful comparisons.
+      if (native) for (let revision = p.revision - 1; revision >= Math.max(1, p.revision - 50); revision--) {
+        const option = document.createElement('option'); option.value = revision; option.textContent = `Revision ${revision}`; $('compare-revision').append(option);
+      }
+      $('compare-result').hidden = true; $('compare-result').textContent = '';
+    }
+    $('compare-revision').disabled = !ready || p.revision < 2;
+  }
+  $('compare-revision').onchange = async () => {
+    const token = ++comparisonToken, revision = Number($('compare-revision').value), p = state.value.payload, values = state.value.model?.parameters || {};
+    $('compare-result').hidden = !revision; if (!revision) return;
+    $('compare-result').textContent = 'Loading revision…';
+    try {
+      const record = await bridge.tool('cad_read', { document_id: p.document_id, revision });
+      if (token !== comparisonToken || state.value.payload?.document_id !== p.document_id || state.value.payload?.revision !== p.revision) return;
+      if (record.document_id !== p.document_id || record.revision !== revision) throw Error('Comparison belongs to another revision.');
+      const previous = record.model.parameters, names = [...new Set([...Object.keys(previous), ...Object.keys(values)])];
+      const changes = names.filter(name => previous[name] !== values[name]).map(name => `${name}: ${fmt(previous[name])} → ${fmt(values[name])}`);
+      $('compare-result').textContent = changes.length ? changes.join(' · ') : 'Parameters match this revision.';
+    } catch (error) { if (token === comparisonToken) $('compare-result').textContent = error.message; }
+  };
+  function partTabs(v) {
+    const p = v.payload, parts = p?.summary?.assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !v.preset_busy && !sending;
+    const key = JSON.stringify([p?.document_id, p?.evaluation_id, hidden, ready]); if (key === partTabsKey) return; partTabsKey = key;
+    $('part-tabs').replaceChildren();
+    $('part-tabs').dataset.multiple = String(parts.length > 1);
+    const all = document.createElement('button'); all.textContent = 'Assembled'; all.disabled = !ready;
+    all.setAttribute('aria-pressed', String(!hidden.length)); all.onclick = () => { if(parts.length) state.showAll().catch(error => status(error.message)); else { for(const button of $('part-tabs').querySelectorAll('button')) button.setAttribute('aria-pressed',String(button===all)); } }; $('part-tabs').append(all);
+    const leaves = parts.length ? parts : p ? [{ id: p.feature_id, input: v.model?.output || 'Model' }] : [];
+    for (const part of leaves) {
+      const button = document.createElement('button'); button.textContent = parts.length ? part.id.replaceAll('/', ' / ') : (v.model?.output || 'Model').replaceAll('_',' ').replace(/^./,letter=>letter.toUpperCase()); button.title = `${part.id} → ${part.input}`;
+      button.disabled = !ready; button.setAttribute('aria-pressed', String(parts.length > 0 && hidden.length === parts.length - 1 && !hidden.includes(part.id)));
+      button.onclick = () => { if(parts.length) state.isolatePart(part.id).catch(error => status(error.message)); else { for(const item of $('part-tabs').querySelectorAll('button')) item.setAttribute('aria-pressed',String(item===button)); } }; $('part-tabs').append(button);
+    }
   }
   function partControls(v) {
     const assembly = v.payload?.summary?.assembly, parts = assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !sending && !v.preset_busy;
@@ -212,6 +280,7 @@
     if (v.error || rendererError) fail(Error(v.error || rendererError));
     else if (v.status !== 'error') $('view-error').hidden = true;
     if (v.payload !== rendered && v.payload) {
+      parameterControls(v); shell?.refresh();
       const same = v.payload.read_only?rendered?.artifact?.review_sha256===v.payload.artifact.review_sha256:!rendered?.read_only&&rendered?.document_id === v.payload.document_id;
       drawnEvaluation = null;
       try {
@@ -223,6 +292,7 @@
     }
     if (!v.payload) { modelTree(null); rendered = null; drawnEvaluation = null; }
     artifactControls(v);
+    parameterControls(v); partTabs(v);
     partControls(v);
     motionControls(v);sequenceControls(v);
     $('loading-text').textContent = v.saving ? 'Saving pose…' : v.payload ? 'Updating… Previous geometry shown' : 'Building current revision…';

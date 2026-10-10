@@ -14,44 +14,58 @@
   <div id="view-error" role="alert" class="view-error" hidden></div>
 
   <header class="top-left">
-    <button id="project-pill" class="pill project-pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="models-popover" title="Models">
-      <span class="brand-icon" aria-hidden="true">◇</span>
+    <button id="project-pill" class="pill project-pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="models-popover" aria-label="Models" title="Models">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h14"/></svg></span>
       <span class="pill-text"><span id="document-title" class="pill-title">Your workspace</span><span id="revision" class="pill-sub">Editable native CAD</span></span>
       <span id="connection" class="connection">Connecting</span>
       <span class="chevron" aria-hidden="true">▾</span>
     </button>
   </header>
-  <div class="top-right">
-    <button id="fullscreen" class="pill" hidden title="Expand viewer">Expand ↗</button>
-    <button id="export-menu-button" class="pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="export-menu">Export <span class="chevron" aria-hidden="true">▾</span></button>
-  </div>
 
-  <aside id="scene-card" class="card scene-card" aria-label="Scene">
+
+  <div id="pick-hint" class="pick-hint">Click a point on the model</div>
+  <aside id="scene-card" class="card scene-card" aria-label="Parts">
+    <div class="parts-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 8 9-5 9 5-9 5zM3 12l9 5 9-5M3 16l9 5 9-5"/></svg><h2>Parts</h2><button id="scene-collapse" class="icon-button" aria-label="Collapse parts panel" aria-expanded="true" aria-controls="scene-content">⌃</button></div>
+    <div id="scene-content">
+    <nav id="part-tabs" class="segmented part-tabs" aria-label="Displayed parts"></nav>
+    <details class="design-details"><summary>Design details</summary>
     <div class="card-head">
       <div id="scene-tabs" class="tabs" role="tablist" aria-label="Scene">
         <button id="tab-features" class="tab" role="tab" aria-selected="true" aria-controls="features-pane" data-pane="features-pane"><span id="feature-heading-title">Features</span> <span id="feature-count" class="count">0</span></button>
         <button id="tab-parts" class="tab" role="tab" aria-selected="false" aria-controls="parts-pane" data-pane="parts-pane" hidden>Parts</button>
       </div>
-      <button id="scene-collapse" class="icon-button" aria-label="Collapse scene panel" title="Collapse">–</button>
     </div>
     <div id="features-pane" class="pane" role="tabpanel" aria-labelledby="tab-features">
       <div id="features"><p class="muted">Open a model to explore its design.</p></div>
-      <details id="parameters-panel" class="parameters"><summary>Parameters</summary><dl id="parameters"></dl></details>
     </div>
     <div id="parts-pane" class="pane" role="tabpanel" aria-labelledby="tab-parts" hidden>
       <section id="parts-panel" class="parts-panel" aria-label="Assembly part visibility" hidden><div class="section-heading"><h2>Parts</h2><button id="show-all-parts" class="quiet">Show all</button></div><p id="parts-status" role="status" aria-live="polite" class="muted"></p><label class="sr-only" for="parts-search">Search parts and subassemblies</label><input id="parts-search" type="search" maxlength="519" placeholder="Search parts or sources…"><div id="parts-list"></div><p id="parts-empty" class="muted" hidden>No matching parts.</p></section>
     </div>
     <div class="scene-foot"><span id="model-facts">Ready when you are</span><span id="library-foot" class="library-foot">Exact geometry · OpenCascade 8.0.1 · Dimensions in millimeters</span></div>
+    </details></div>
   </aside>
-  <button id="scene-chip" class="pill" hidden aria-expanded="false" aria-controls="scene-card">Scene</button>
+  <button id="scene-chip" class="pill" hidden aria-expanded="false" aria-controls="scene-card">Parts</button>
+
+  <aside id="parameters-panel" class="card parameter-card" aria-label="Parameters" hidden>
+    <div class="parameter-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><circle cx="9" cy="6" r="2"/><circle cx="16" cy="12" r="2"/><circle cx="8" cy="18" r="2"/></svg><h2>Parameters</h2><button id="parameters-collapse" class="icon-button" aria-label="Collapse parameters" aria-expanded="true" aria-controls="parameter-content">⌃</button><button id="parameters-close" class="icon-button" aria-label="Close parameters">×</button></div>
+    <div id="parameter-content"><div id="parameters" class="parameter-list"></div><p id="parameter-status" role="status" aria-live="polite"></p>
+    <div class="compare-row"><label for="compare-revision">Compare with</label><select id="compare-revision"><option value="">None</option></select></div><p id="compare-result" class="fine-print" role="status" aria-live="polite" hidden></p></div>
+  </aside>
+  <button id="parameters-chip" class="pill" hidden aria-expanded="false" aria-controls="parameters-panel">Parameters</button>
 
   <section id="models-popover" class="popover popover-left" role="dialog" aria-label="Models" hidden>
+    <div class="workspace-title"><strong id="menu-title">Your workspace</strong><span id="menu-revision"></span></div>
+    <div class="menu-actions"><button id="ask-agent">Ask agent…</button><button id="show-parameters">Parameters</button><button id="show-cube" aria-pressed="false">Orientation cube</button></div>
     <div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div>
     <p id="workspace-label" class="workspace-label">Saved projects</p>
     <button id="open-workspace" class="workspace-button" hidden>Open workspace…</button>
     <select id="recent-workspaces" aria-label="Recent workspaces" hidden><option value="">Recent workspaces…</option></select>
     <label class="sr-only" for="project-search">Find a saved project</label><input id="project-search" type="search" placeholder="Find a project…">
     <nav id="documents" aria-label="Saved models"><p class="muted">Connecting to your workspace…</p></nav>
+  <div class="top-right">
+    <button id="fullscreen" class="pill" hidden title="Expand viewer">Expand ↗</button>
+    <button id="export-menu-button" class="pill" aria-haspopup="dialog" aria-expanded="false" aria-controls="export-menu">Export <span class="chevron" aria-hidden="true">▾</span></button>
+  </div>
   </section>
 
   <div id="export-menu" class="popover popover-right-top" role="dialog" aria-label="Export" hidden>
@@ -59,12 +73,10 @@
     <button id="save-image" class="quiet save-image" disabled>Save PNG image</button>
   </div>
 
-  <div id="cube-area" class="cube-area">
+  <div id="cube-area" class="cube-area" hidden>
     <div id="cube" class="cube" aria-label="Orientation cube"></div>
-    <button id="fit" class="pill small" title="Fit model (Home)" aria-label="Fit model">Fit</button>
   </div>
 
-  <button id="dock-toggle" class="pill dock-toggle" aria-haspopup="true" aria-expanded="false" aria-controls="tool-dock" hidden>Tools</button>
   <nav id="tool-dock" class="dock" role="toolbar" aria-orientation="vertical" aria-label="Inspection tools">
     <button class="dock-button" data-tool="presentation-panel" aria-label="Visual inspection" title="Visual inspection" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 12.5l8 4 8-4" stroke-dasharray="2.2 2.2"/></svg></button>
     <button class="dock-button" data-tool="appearance-panel" aria-label="Colors" title="Colors" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="8.8" cy="10" r="1.2"/><circle cx="13.5" cy="8.4" r="1.2"/><circle cx="15.8" cy="13" r="1.2"/></svg></button>
@@ -158,7 +170,18 @@
     </section>
   </div>
 
-  <div class="corner-readout"><span id="dimensions"></span></div>
+  <footer class="viewer-footer">
+    <nav class="view-toolbar" aria-label="View controls">
+      <div id="standard-views" class="segmented" role="group" aria-label="Camera view"><button data-view="iso" aria-pressed="true">Iso</button><button data-view="front" aria-pressed="false">Front</button><button data-view="top" aria-pressed="false">Top</button><button data-view="right" aria-pressed="false">Right</button></div>
+      <button id="toggle-grid" class="footer-icon" aria-label="Show grid" title="Grid" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M8 3v18M16 3v18M3 8h18M3 16h18"/></svg></button>
+      <button id="toggle-axes" class="footer-icon" aria-label="Show axes" title="Axes" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="m12 3 9 5v9l-9 5-9-5V8zM3 8l9 5 9-5M12 3v19M3 17l9-5 9 5"/></svg></button>
+      <button id="open-measure" class="footer-icon" aria-label="Measure" title="Measure"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="1"/><path d="M6 7v5M9 7v3M12 7v5M15 7v3M18 7v5"/></svg></button>
+      <button id="toggle-edges" class="footer-icon" aria-label="Show edges" title="Edges" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="m4 20 16-16"/></svg></button>
+      <button id="fit" class="footer-icon" aria-label="Fit model" title="Fit model (Home)"><svg viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M3 16v5h5M21 16v5h-5"/></svg></button>
+      <button id="dock-toggle" class="footer-icon" aria-haspopup="true" aria-expanded="false" aria-controls="tool-dock" title="Inspection tools" aria-label="Inspection tools"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
+    </nav>
+    <div class="corner-readout"><span id="dimensions"></span></div>
+  </footer>
 
   <details id="copy-fallback" class="card floating-note" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="6" aria-label="Request text to copy"></textarea></details>
 
