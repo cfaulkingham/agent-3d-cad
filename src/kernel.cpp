@@ -1167,6 +1167,7 @@ gp_Ax2 sketch_plane(const Json& feature,const Json& parameters,const std::map<st
 Json feature_provenance(const Json& feature,const Json& history,bool history_truncated) {
   Json dependencies=Json::array();
   for (const auto* key:{"input","left","right","target"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
+  if(feature.contains("path")&&feature.at("path").is_string())dependencies.push_back(feature.at("path"));
   if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input")&&std::find(dependencies.begin(),dependencies.end(),b.at("input"))==dependencies.end())dependencies.push_back(b.at("input"));
   if (feature.contains("sections")) dependencies=feature.at("sections");
   if (feature.contains("inputs")) dependencies=feature.at("inputs");
@@ -1900,8 +1901,7 @@ TopoDS_Shape planar_regions(const std::vector<TopoDS_Wire>& wires,const gp_Ax2& 
   }
   const auto result=face_compound(regions);check_sketch_shape(result,plane);return result;
 }
-TopoDS_Shape authoring_face(const Json& profile,const Json& parameters,const gp_Ax2& plane) {
-  const auto groups=authoring_contours(profile,parameters);
+TopoDS_Shape authoring_regions(const Json& groups,const gp_Ax2& plane) {
   const auto area=[](const TopoDS_Shape& shape){GProp_GProps props;BRepGProp::SurfaceProperties(shape,props);return props.Mass();};
   const auto common_area=[&](const TopoDS_Shape& a,const TopoDS_Shape& b){BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> inputs,tools;inputs.Append(a);tools.Append(b);common.SetArguments(inputs);common.SetTools(tools);common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();if(!common.IsDone()||common.HasErrors())throw Error("kernel_failure","Authoring contour containment failed");return common.Shape().IsNull()?0.0:area(common.Shape());};
   std::vector<TopoDS_Face> regions;
@@ -1937,6 +1937,32 @@ TopoDS_Shape authoring_face(const Json& profile,const Json& parameters,const gp_
   // Separate SVG shapes and glyphs follow union semantics, including overlaps.
   TopoDS_Shape result=regions.front();for(std::size_t i=1;i<regions.size();++i){BRepAlgoAPI_Fuse fuse;NCollection_List<TopoDS_Shape> inputs,tools;inputs.Append(result);tools.Append(regions[i]);fuse.SetArguments(inputs);fuse.SetTools(tools);fuse.SetNonDestructive(true);fuse.SetRunParallel(false);fuse.Build();if(!fuse.IsDone()||fuse.HasErrors())throw Error("kernel_failure","Authoring filled-region union failed");result=fuse.Shape();}
   if(result.IsNull()||!BRepCheck_Analyzer(result).IsValid()||count(result,TopAbs_FACE)>128||area(result)<=1e-10)throw Error("invalid_shape","Authoring must yield 1..128 valid planar faces");return result;
+}
+TopoDS_Shape authoring_face(const Json& profile,const Json& parameters,const gp_Ax2& plane) {
+  return authoring_regions(authoring_contours(profile,parameters),plane);
+}
+TopoDS_Shape text_path_shape(const Json& feature,const Json& profile,const Json& parameters,const gp_Ax2& plane,
+                            const FeatureGeometry& source,const TopoDS_Shape& path_shape,Json& history,bool& truncated) {
+  const auto input=text_field(feature,"input");const auto wire=single_curve_wire(path_shape);const CurvePath path(wire);
+  gp_Trsf local;local.SetTransformation(gp_Ax3(plane));const auto projected=BRepBuilderAPI_Transform(wire,local,true).Shape();Bnd_Box box;BRepBndLib::AddOptimal(projected,box,false,false);
+  if(std::abs(box.CornerMin().Z())>1e-7||std::abs(box.CornerMax().Z())>1e-7)throw Error("invalid_model","Text path must lie in the captured text sketch plane");
+  const auto layout=authoring_text_layout(profile,parameters);const auto advance=layout.at("advance").get<double>();const auto start=scalar(feature.value("start",Json(0)),parameters),offset=scalar(feature.value("offset",Json(0)),parameters);const bool reverse=feature.value("reverse",false);
+  if(advance<=0||start+advance>path.length+1e-7)throw Error("invalid_model","Text advances exceed the available path length",{{"path_length_mm",path.length},{"text_advance_mm",advance}});
+  const auto area=[](const TopoDS_Shape& shape){GProp_GProps p;BRepGProp::SurfaceProperties(shape,p,1e-9);return p.Mass();};
+  std::set<int> used;std::vector<TopoDS_Face> faces,source_scopes;std::vector<std::unique_ptr<BRepBuilderAPI_Transform>> operations;
+  for(const auto& group:layout.at("groups")) {
+    const double middle=group.at("origin_x").get<double>()+group.at("advance").get<double>()/2,station=start+middle;
+    if(station<0||station>path.length)throw Error("invalid_model","Glyph station lies outside its path");const auto sample=path.sample(reverse?1-station/path.length:station/path.length);auto tangent=sample.tangent;if(reverse)tangent.Reverse();const auto up=gp_Dir(gp_Vec(plane.Direction()).Crossed(gp_Vec(tangent)));const auto position=sample.point.Translated(gp_Vec(up)*offset);
+    gp_Trsf placement;placement.SetDisplacement(gp_Ax3(plane.Location().Translated(gp_Vec(plane.XDirection())*middle),plane.Direction(),plane.XDirection()),gp_Ax3(position,plane.Direction(),tangent));
+    const auto glyph=authoring_regions(Json::array({group}),plane);const auto expected=area(glyph);double matched=0;
+    // Match complete prior faces by exact area intersection. Already merged or
+    // overlapping source glyphs cannot be assigned independent rigid placements.
+    for(int index=1;index<=source.faces.Extent();++index){const auto face=TopoDS::Face(source.faces(index));BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> a,b;a.Append(face);b.Append(glyph);common.SetArguments(a);common.SetTools(b);common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();if(!common.IsDone()||common.HasErrors())throw Error("kernel_failure","Source glyph correspondence failed");const auto overlap=area(common.Shape());if(overlap<=1e-9)continue;const auto full=area(face);if(std::abs(overlap-full)>std::max(1e-8,full*1e-9)||!used.insert(index).second)throw Error("selection_ambiguous","Text-on-path requires separable source glyph regions");matched+=full;auto operation=std::make_unique<BRepBuilderAPI_Transform>(face,placement,true);if(!operation->IsDone())throw Error("kernel_failure","Exact glyph placement failed");faces.push_back(TopoDS::Face(operation->Shape()));source_scopes.push_back(face);operations.push_back(std::move(operation));}
+    if(std::abs(matched-expected)>std::max(1e-8,expected*1e-9))throw Error("selection_ambiguous","Captured text glyph has no unique complete source region");
+  }
+  if(used.size()!=static_cast<std::size_t>(source.faces.Extent()))throw Error("selection_ambiguous","Captured text has unassigned source regions");const auto result=face_compound(faces);check_sketch_shape(result,plane);
+  const FeatureGeometry target(result);for(std::size_t i=0;i<operations.size();++i)record_history(*operations[i],source,input,target,history,truncated,nullptr,-1,&source_scopes[i]);
+  return result;
 }
 TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp_Pnt& origin,bool left_handed) {
   const double radius=diameter/2,depth=17*std::sqrt(3.0)*pitch/48,root=radius-depth;
@@ -2124,6 +2150,9 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       } else if(type=="sketch_hull") {const auto plane=parameter_plane(feature.at("workplane"),parameters);std::vector<TopoDS_Shape> inputs;for(const auto& input:feature.at("inputs"))inputs.push_back(shapes.at(input.get<std::string>()));shape=sketch_hull(inputs,plane);planes.emplace(id,plane);
       } else if(type=="sketch_trace") {const auto plane=parameter_plane(feature.at("workplane"),parameters);shape=sketch_trace(shapes.at(text_field(feature,"input")),plane,scalar(feature.at("width"),parameters));planes.emplace(id,plane);
       } else if(type=="sketch_full_round") {const auto input=text_field(feature,"input");const auto plane=planes.at(input);shape=sketch_full_round(impl_->features.at(input),feature.at("edges"),parameters,plane);planes.emplace(id,plane);
+      } else if(type=="text_on_path") {
+        const auto input=text_field(feature,"input"),path=text_field(feature,"path");const Json* captured=nullptr;for(const auto& candidate:model.at("features"))if(candidate.at("id")==input){captured=&candidate.at("profile");break;}
+        shape=text_path_shape(feature,*captured,parameters,planes.at(input),impl_->features.at(input),shapes.at(path),history,history_truncated);planes.emplace(id,planes.at(input));
       } else if (type=="sketch_cut"||type=="sketch_fuse"||type=="sketch_intersection") {
         const auto left=text_field(feature,"left"),right=text_field(feature,"right");const auto plane=planes.at(left);
         if(std::abs(plane.Direction().Dot(planes.at(right).Direction()))<1-1e-9||gp_Pln(plane).Distance(planes.at(right).Location())>1e-7)

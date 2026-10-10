@@ -1,6 +1,7 @@
 """Independent JSON Schema validation of actual native authoring calls.
 Developer-only dependency: pinned jsonschema from the existing MCP test venv.
 """
+import base64
 import hashlib
 import json
 from pathlib import Path
@@ -75,4 +76,30 @@ with tempfile.TemporaryDirectory(prefix="cad-parity-authoring-schema-") as direc
         bad["features"][0]["profile"]["fonts"]["STANDARD"][field] = value
         assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid({"document_id": "bad", "model": bad})
         checks += 1
+
+    path_model = {"schema_version": 1, "units": "mm", "parameters": {"station": 5},
+        "features": [
+            {"id": "letters", "type": "sketch", "workplane": plane, "profile": {
+                "type": "text", "text": "BB", "height": 10,
+                "font": {"content_base64": base64.b64encode(font_bytes).decode(), "sha256": font_hash}}},
+            {"id": "path", "type": "curve", "path": {"type": "wire", "segments": [
+                {"type": "line", "start": [10, 20, 0], "end": [110, 20, 0]}]}},
+            {"id": "placed", "type": "text_on_path", "input": "letters", "path": "path",
+             "start": {"parameter": "station"}, "offset": 2, "reverse": False},
+            {"id": "part", "type": "extrude", "input": "placed", "distance": 3}], "output": "part"}
+    path_created = call("cad_create", {"document_id": "text_path", "model": path_model})
+    assert abs(path_created["summary"]["volume_mm3"] - 156) < 1e-5
+    path_topology = call("cad_query", {"document_id": "text_path", "revision": 1,
+                                      "feature_id": "placed", "kind": "topology"})
+    assert path_topology["topology"]["provenance"]["dependencies"] == ["letters", "path"]
+    path_edit = call("cad_apply", {"document_id": "text_path", "expected_revision": 1,
+        "operations": [{"op": "set_parameter", "name": "station", "value": 15}]})
+    assert abs(path_edit["summary"]["center_of_mass_mm"][0] - 32) < 1e-5
+    call("cad_read", {"document_id": "text_path", "revision": 1})
+    for field, value in [("reverse", 1), ("path", {}), ("unknown", True), ("start", "5mm")]:
+        bad = json.loads(json.dumps(path_model))
+        bad["features"][2][field] = value
+        assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid({"document_id": "bad", "model": bad})
+        checks += 1
+
 print(f"Parity authoring schemas: {checks} checks / {len(tools)} tools")

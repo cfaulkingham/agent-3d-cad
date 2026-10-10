@@ -92,12 +92,12 @@ void edit_tests(){
     if(type=="chamfer"){invalid=50;intent["features"].back()["distance"]={{"parameter","value"}};}
     if(type=="twist_extrude"){initial=90;changed=180;invalid=6000;intent["features"].back()["angle_deg"]={{"parameter","value"}};}
     if(type=="loft"){initial=10;changed=12;invalid=0;intent["features"][1]["workplane"]["origin"][2]={{"parameter","value"}};}
-    intent["parameters"]["value"]=initial;auto original=service.call("cad_create",{{"document_id",id},{"model",intent}});
+    intent["parameters"]["value"]=initial;auto original=service.call("cad_create",{{"document_id",id},{"model",intent}});const auto original_source=service.call("cad_read",{{"document_id",id},{"revision",original.at("revision")}}).at("model");
     auto revised=service.call("cad_apply",{{"document_id",id},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","value"},{"value",changed}}})}});
     require(revised.at("revision")==2,"Operation parameter edit commits");auto saved=service.call("cad_read",{{"document_id",id}});
     fails([&]{service.call("cad_apply",{{"document_id",id},{"expected_revision",2},{"operations",Json::array({{{"op","set_parameter"},{"name","value"},{"value",invalid}}})}});});
     require(service.call("cad_read",{{"document_id",id}})==saved,"Invalid geometry or dimension preserves complete operation revision");
-    require(service.call("cad_read",{{"document_id",id},{"revision",1}}).at("model")==original.at("model"),"Edit preserves historical source");
+    require(service.call("cad_read",{{"document_id",id},{"revision",1}}).at("model")==original_source,"Edit preserves historical source");
     Json diagnostics;fs::remove_all(temp.root/".cache");evaluate_model(temp.root,intent,{{"kind","view"}},&diagnostics);const auto keys=feature_cache_keys(intent);intent["parameters"]["value"]=changed;
     const auto rebuilt=evaluate_model(temp.root,intent,{{"kind","view"}},&diagnostics);require(diagnostics.at("feature_hits").at("part")==false,"Parameter change rebuilds new operation");
     near(rebuilt.at("summary").at("volume_mm3"),BuiltModel(intent).summary().at("volume_mm3"),1e-4);require(keys.at("part")!=feature_cache_keys(intent).at("part"),"Parameter changes dependent cache identity");
@@ -113,8 +113,9 @@ void lifecycle(){
     near(BuiltModel(intent,BuiltModel(intent).snapshot()).summary().at("volume_mm3"),expected.at("volume_mm3"),1e-4);
     auto altered=intent;altered["features"].back()["unexpected"]=true;fails([&]{service.call("cad_apply",{{"document_id",id},{"expected_revision",1},{"operations",Json::array({{{"op","replace_feature"},{"id","part"},{"feature",altered["features"].back()}}})}});});require(service.call("cad_read",{{"document_id",id}}).at("revision")==1,"Invalid operation keeps HEAD");
     service.call("cad_create",{{"document_id",id+"consumer"},{"model",model(Json::array({box()}),"base")}});auto captured=service.call("cad_apply",{{"document_id",id+"consumer"},{"expected_revision",1},{"operations",Json::array({{{"op","set_component"},{"id","component"},{"source_document_id",id},{"source_revision",1}},{{"op","set_output"},{"feature_id","component"}}})}});near(captured.at("summary").at("volume_mm3"),expected.at("volume_mm3"),1e-4);
-    Temp portable;Service isolated(portable.root);near(isolated.call("cad_create",{{"document_id","portable"},{"model",captured.at("model")}}).at("summary").at("volume_mm3"),expected.at("volume_mm3"),1e-4);
-    if(index==3)require(captured.at("model").at("features").back().at("reference_face").at("feature_id")==captured.at("model").at("features").back().at("input"),"Component remaps asymmetric reference face");
+    const auto captured_source=service.call("cad_read",{{"document_id",id+"consumer"},{"revision",captured.at("revision")}}).at("model");
+    Temp portable;Service isolated(portable.root);near(isolated.call("cad_create",{{"document_id","portable"},{"model",captured_source}}).at("summary").at("volume_mm3"),expected.at("volume_mm3"),1e-4);
+    if(index==3)require(captured_source.at("features").back().at("reference_face").at("feature_id")==captured_source.at("features").back().at("input"),"Component remaps asymmetric reference face");
   }
   // Scaling opaque captured STEP stays independent of its source path.
   auto record=service.call("cad_read",{{"document_id","solid1readback"}});auto imported=record.at("model");const auto source=imported.at("output").get<std::string>();imported["features"].push_back({{"id","scaled"},{"type","scale"},{"input",source},{"origin",{0,0,0}},{"factors",{.5,2,1}}});imported["output"]="scaled";near(BuiltModel(imported).summary().at("volume_mm3"),48000,1e-4);require(imported_step_source(imported,"scaled")==nullptr,"Scaling does not claim unchanged purchased-part geometry");

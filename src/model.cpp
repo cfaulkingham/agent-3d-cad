@@ -14,7 +14,7 @@ namespace agentcad {
 bool is_sketch_feature_type(const std::string& type) {
   static const std::set<std::string> types={"sketch","sketch_cut","sketch_fuse","sketch_intersection",
     "sketch_offset","sketch_fillet","sketch_chamfer","sketch_hull","sketch_trace","sketch_full_round","sketch_transform","sketch_instance","sketch_mirror",
-    "sketch_face","sketch_projection"};
+    "sketch_face","sketch_projection","text_on_path"};
   return types.contains(type);
 }
 bool is_surface_feature_type(const std::string& type) {
@@ -258,6 +258,7 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"enum",{"sketch_transform","sketch_instance"}}}},{"input",id},{"translation",vector_ref},{"rotation",rotation_schema}}, {"id","type","input"}));
   features.push_back(object({{"id",id},{"type",{{"enum",{"mirror","sketch_mirror"}}}},{"input",id},{"plane",workplane_schema}}, {"id","type","input","plane"}));
   features.push_back(object({{"id",id},{"type",{{"const","split"}}},{"input",id},{"plane",workplane_schema},{"keep",{{"enum",{"both","top","bottom"}}}}}, {"id","type","input","plane","keep"}));
+  features.push_back(object({{"id",id},{"type",{{"const","text_on_path"}}},{"input",id},{"path",id},{"start",scalar_ref},{"offset",scalar_ref},{"reverse",{{"type","boolean"}}}}, {"id","type","input","path"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_face"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}}}, {"id","type","input","faces"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_projection"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}},{"workplane",workplane_schema}}, {"id","type","input","faces","workplane"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
@@ -934,6 +935,11 @@ void validate_model(const Json& model) {
       fields(feature,{"id","type","input","workplane","width"});workplane(feature.at("workplane"),parameters);positive(feature.at("width"));const auto input=text_field(feature,"input");if(!prior.contains(input)||!is_curve_feature_type(types.at(input)))throw Error("invalid_model","Trace requires an earlier exact curve");
     } else if(type=="sketch_full_round") {
       fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");sketch_dependency(input);validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1||feature.at("edges").at("curve_kind")!="line")throw Error("invalid_model","Full round selects exactly one straight outer edge");
+    } else if(type=="text_on_path") {
+      fields(feature,{"id","type","input","path"},{"start","offset","reverse"});const auto input=text_field(feature,"input"),path=text_field(feature,"path");sketch_dependency(input);
+      bool captured=false;for(const auto& candidate:features)if(candidate.at("id")==input)captured=candidate.at("type")=="sketch"&&candidate.at("profile").at("type")=="text";
+      if(!captured)throw Error("invalid_model","Text-on-path input must be an earlier captured text sketch");if(!prior.contains(path)||!is_curve_feature_type(types.at(path)))throw Error("invalid_model","Text-on-path requires an earlier exact curve");
+      if(scalar(feature.value("start",Json(0)),parameters)<0)throw Error("invalid_model","Text path start must be nonnegative");scalar(feature.value("offset",Json(0)),parameters);if(feature.contains("reverse")&&!feature.at("reverse").is_boolean())throw Error("invalid_model","Text path reverse must be boolean");
     } else if (type == "sketch") {
       fields(feature, {"id", "type", "workplane", "profile"});
       workplane(feature.at("workplane"), parameters);

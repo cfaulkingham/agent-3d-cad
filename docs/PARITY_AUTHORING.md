@@ -96,6 +96,48 @@ and [HATCH boundary](https://help.autodesk.com/cloudhelp/2016/ENU/AutoCAD-DXF/fi
 group-code definitions. These are parsing references; native tests independently
 check analytic geometry and raw-source portability.
 
+## Editable text on a path
+
+A `text_on_path` feature takes `input`, the ID of an earlier direct `sketch`
+whose profile is captured `text`, and `path`, the ID of an earlier exact curve:
+
+```json
+{
+  "id": "curved_label",
+  "type": "text_on_path",
+  "input": "captured_label",
+  "path": "baseline_curve",
+  "start": 5,
+  "offset": 2,
+  "reverse": false
+}
+```
+
+The curve must be a single connected wire lying entirely in the text sketch's
+plane. `start` is a nonnegative arc length from the authored path beginning;
+`reverse` measures from its end and reverses the reading direction. Signed
+`offset` moves along the sketch normal crossed with the reading tangent. Both
+lengths accept editable scalar parameters and default to zero.
+
+Each glyph is moved rigidly so its advance center lies at the corresponding
+arc-length station with its baseline aligned to the exact path tangent. Font
+kerning and inter-glyph spacing remain part of the layout; whitespace advances
+are preserved. A final extra spacing interval is not included in text length.
+Outlines are exact native curves, not warped or tessellated. The resulting
+planar regions can be extruded or used by ordinary sketch operations.
+
+The full text advance must fit on the path, including a closed path; wrapping
+across its seam is not implicit. An undefined tangent or discontinuity at a
+placement station fails explicitly. Already merged source glyphs cannot be
+assigned independent placements and fail as ambiguous. Overlapping placed
+regions fail rather than being silently fused. Ink overhang is controlled by
+font outlines; the fit criterion is typographic advance, not an ink bounding box.
+
+Native face history records the actual input faces, and provenance includes both
+text and path dependencies. Parameter or feature edits invalidate downstream
+layout caches. Captured components include and remap both dependencies and all
+font bytes, so rebuilding does not require the source document or font file.
+
 ## Validation
 
 `parity_authoring` contains analytic block-transform, nested-array, spline,
@@ -105,16 +147,29 @@ file deletion, parameter edits, failed-edit rollback and portable components.
 `tests/parity_authoring_schema_tests.py` validates actual tool requests/results
 with an independent Draft 2020-12 validator.
 
-On 2026-10-10, macOS arm64 / pinned OCCT 8.0.1 / Release build:
+On 2026-10-10, macOS arm64 / pinned OCCT 8.0.1 / Release build, with
+shared mass-integration prerequisites `450656f` and `6d82d1f`:
 
-- `parity_authoring`: **95 checks**, 1.60 s; existing `authoring`: **142 checks**,
-  4.38 s; `dependency_cache`: **72,620 checks**, 5.64 s; `component`: **56 checks**,
-  3.66 s. These four suites passed in a five-suite run taking 15.81 s.
-- Independent actual request/result schema validation: **82 checks / 31 tools**.
-- The unchanged `app_protocol` gate failed: catalog **520,047 bytes** exceeds
-  the **476,160-byte** budget. Integration must compact discovery losslessly.
+- `parity_authoring`: **158 checks**, 3.27 s, including analytic straight/curved,
+  reversed and rotated-plane placement, exact quadratic glyphs, closed paths,
+  spacing and end-fit, native face history, independent STEP readback, snapshots,
+  edits, selective cache invalidation, durable jobs, rollback and portable
+  components after source deletion.
+- Existing `authoring`: **142 checks**, 4.46 s; `parity_solids`: **359 checks**,
+  13.58 s; `parity_curves`: **263 checks**, 0.55 s; `jobs`: **370 checks**,
+  19.99 s; `dependency_cache`: **87,050 checks**, 5.30 s; `component`:
+  **56 checks**, 3.44 s. These seven suites passed in an eight-suite run
+  taking **51.17 s**.
+- Independent actual request/result schema validation: **94 checks / 31 tools**.
+- The unchanged `app_protocol` gate failed: catalog **546,848 bytes** exceeds
+  the **476,160-byte** budget. Compact mutation receipts are separate integration
+  work; full-source assertions use `cad_read` at the returned revision.
 - Native build and `git diff --check` passed. No platform/package/host/release
   readiness beyond this local evidence is claimed.
 
-Editable text-on-path is the next part of this authoring increment and is not yet
-established by the captured DXF implementation alone.
+The strict spaced-glyph centroid regression exposed mass-only adaptive
+convergence under-integrating moments for planar polygons. The shared kernel
+fix uses fixed-degree Gauss integration for plane faces bounded only by lines,
+while retaining rational and curved-face quadrature. Independent STEP probes
+also verified translated/off-axis glyphs and a mixed affine-cylinder compound;
+the authoring tests retain their original analytic tolerances.

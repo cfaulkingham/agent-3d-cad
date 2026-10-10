@@ -9,6 +9,7 @@ Json authoring_font_sources_schema();
 void validate_authoring_fonts(const Json& fonts, bool sources);
 Json authoring_profile_schemas(const Json& scalar_schema);
 void validate_authoring_profile(const Json& profile, const Json& parameters);
+Json authoring_text_layout(const Json& profile, const Json& parameters);
 Json authoring_contours(const Json& profile, const Json& parameters);
 Json capture_sketch_source(const Json& args, const Json& parameters = Json::object());
 bool authoring_source_field(const Json& object, const std::string& key);
