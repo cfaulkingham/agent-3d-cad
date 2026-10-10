@@ -2911,7 +2911,13 @@ Json BuiltModel::summary(const std::string& feature_id) const {
       {
         Bnd_Box bounds;BRepBndLib::AddOptimal(shape,bounds,false,false);
         const auto lo=bounds.CornerMin(),hi=bounds.CornerMax();
-        const gp_Pnt reference((lo.X()+hi.X())*.5,(lo.Y()+hi.Y())*.5,(lo.Z()+hi.Z())*.5);
+        // Keep the common integration origin outside the material bounds.
+        // GK controls each first moment with a relative error: a centered origin
+        // makes symmetric moments vanish, so roundoff drives nested subdivision
+        // to its iteration limit. A nearby exterior origin avoids that numerical
+        // cancellation without changing the surface, quadrature or tolerance.
+        // GProps translates every signed face contribution to this same origin.
+        const gp_Pnt reference(2*lo.X()-hi.X(),2*lo.Y()-hi.Y(),2*lo.Z()-hi.Z());
         GProp_GProps combined(reference);
         for(TopExp_Explorer faces(shape,TopAbs_FACE);faces.More();faces.Next()) {
           const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);

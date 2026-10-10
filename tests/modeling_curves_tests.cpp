@@ -6,6 +6,12 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
+#include <GeomAPI_Interpolate.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <NCollection_HArray1.hxx>
+#include <gp_Trsf.hxx>
+#include <gp_Ax1.hxx>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -126,6 +132,65 @@ void sweeps(const fs::path& root) {
   BuiltModel smooth(doc);require(smooth.summary().at("solid_count")==1,"Spline endpoint tangents orient the sweep");
   near(BuiltModel(doc,smooth.snapshot()).summary().at("volume_mm3"),smooth.summary().at("volume_mm3"));
 }
+// Independent one-dimensional tube oracle. For a normal circular section of
+// radius r, integrating its Jacobian gives V=pi*r^2*L and first moment
+// pi*r^2*(integral(c ds)-r^2/4*(t_end-t_start)). This avoids all face quadrature.
+std::array<double,4> pipe_integrals(int intervals) {
+  occ::handle<NCollection_HArray1<gp_Pnt>> points=new NCollection_HArray1<gp_Pnt>(1,3);
+  points->SetValue(1,{0,0,0});points->SetValue(2,{5,0,15});points->SetValue(3,{20,0,20});
+  GeomAPI_Interpolate fit(points,false,1e-7);fit.Load({0,0,1},{1,0,0});fit.Perform();
+  require(fit.IsDone(),"Independent centerline interpolation succeeds");const auto curve=fit.Curve();
+  const double first=curve->FirstParameter(),step=(curve->LastParameter()-first)/intervals;
+  std::array<double,4> result{};
+  for(int i=0;i<=intervals;++i){gp_Pnt point;gp_Vec tangent;curve->D1(first+i*step,point,tangent);
+    const double weight=(i==0||i==intervals?1:i%2?4:2)*step/3*tangent.Magnitude();
+    result[0]+=weight;for(int axis=1;axis<=3;++axis)result[axis]+=weight*point.Coord(axis);}
+  return result;
+}
+void conditioned_pipe_moments(const fs::path& root) {
+  const auto coarse=pipe_integrals(4096),fine=pipe_integrals(8192);
+  for(int axis=0;axis<4;++axis)near(coarse[axis],fine[axis],1e-8);
+  const double length=fine[0],mass=4*std::numbers::pi*length,area=4*(2*std::numbers::pi*length+2*std::numbers::pi);
+  const gp_Pnt expected(-5,0,(fine[3]+.25)/length);
+  auto doc=parse_json(read_text(fs::path(CAD_SOURCE_DIR)/"examples/curved-pipe.create.json")).at("model");
+  const auto started=std::chrono::steady_clock::now();BuiltModel pipe(doc);const auto summary=pipe.summary();
+  const double elapsed=std::chrono::duration<double>(std::chrono::steady_clock::now()-started).count();
+  near(summary.at("volume_mm3"),mass,2e-4);near(summary.at("area_mm2"),area,3e-4);
+  for(int axis=0;axis<3;++axis)near(summary.at("center_of_mass_mm")[axis],expected.Coord(axis+1),2e-5);
+  require(summary.at("solid_count")==4,"Conditioned summary preserves every pipe instance");
+  const auto single=pipe.summary("tube");const gp_Pnt single_center((fine[1]-.25)/length,0,(fine[3]+.25)/length);
+  near(single.at("volume_mm3"),mass/4,5e-5);near(single.at("area_mm2"),area/4,1e-4);
+  for(int axis=0;axis<3;++axis)near(single.at("center_of_mass_mm")[axis],single_center.Coord(axis+1),2e-5);
+  // Restored exact geometry must use the same conditioned moments.
+  const auto restored=BuiltModel(doc,pipe.snapshot()).summary();
+  near(restored.at("volume_mm3"),mass,2e-4);
+  for(int axis=0;axis<3;++axis)near(restored.at("center_of_mass_mm")[axis],expected.Coord(axis+1),2e-5);
+  pipe.export_file(root/"conditioned-pipe.step","step");STEPControl_Reader reader;
+  require(reader.ReadFile(path_to_utf8(root/"conditioned-pipe.step").c_str())==IFSelect_RetDone&&reader.TransferRoots()>0,"Independent conditioned STEP transfer");
+  const auto shape=reader.OneShape();require(BRepCheck_Analyzer(shape).IsValid(),"Conditioned STEP remains valid");
+  GProp_GProps independent;BRepGProp::VolumeProperties(shape,independent,1e-9);
+  near(independent.Mass(),mass,2e-4);
+  for(int axis=0;axis<3;++axis)near(independent.CentreOfMass().Coord(axis+1),expected.Coord(axis+1),2e-5);
+  // Rotate the symmetry planes off all coordinate axes, translate far away,
+  // then combine rational faces with polynomial box faces using exact weights.
+  const gp_Vec translation(1234,-2345,3456);gp_Trsf rotate;rotate.SetRotation(gp_Ax1({0,0,0},gp_Dir(1,2,3)),.73);
+  const auto placed=expected.Transformed(rotate).Translated(translation);
+  const Json placement={{"translation",{translation.X(),translation.Y(),translation.Z()}},{"rotation",{{"origin",{0,0,0}},{"axis",{1,2,3}},{"angle_deg",.73*180/std::numbers::pi}}}};
+  doc["features"].push_back({{"id","box"},{"type","box"},{"size",{7,11,13}},{"origin",{1300,-2200,3600}}});
+  doc["features"].push_back({{"id","mixed"},{"type","assembly"},{"parts",Json::array({
+    Json{{"id","pipe"},{"input","bundle"},{"placement",placement}},Json{{"id","block"},{"input","box"}}
+  })}});doc["output"]="mixed";const auto mixed=BuiltModel(doc).summary();const double block_mass=7*11*13,total=mass+block_mass;
+  near(mixed.at("volume_mm3"),total,2e-4);const gp_Pnt block_center(1303.5,-2194.5,3606.5);
+  for(int axis=0;axis<3;++axis)near(mixed.at("center_of_mass_mm")[axis],(mass*placed.Coord(axis+1)+block_mass*block_center.Coord(axis+1))/total,2e-5);
+  // Exercise the production worker's unchanged 30-second default, including
+  // construction, summaries, topology, meshing and transactional publication.
+  set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Service service(root/"pipe-worker");
+  const auto original=parse_json(read_text(fs::path(CAD_SOURCE_DIR)/"examples/curved-pipe.create.json")).at("model");
+  const auto created=service.call("cad_create",{{"document_id","conditioned_pipe"},{"model",original}});
+  near(created.at("summary").at("volume_mm3"),mass,2e-4);
+  require(service.call("cad_read",{{"document_id","conditioned_pipe"},{"revision",created.at("revision")}}).at("model")==original,"Worker publishes the complete unchanged curve intent");
+  std::cout<<"Conditioned pipe build+summary seconds="<<elapsed<<" volume="<<mass<<" centroid_z="<<expected.Z()<<"\n";
+}
 void patterns() {
   auto doc=model(Json::array({{{"id","pin"},{"type","cylinder"},{"origin",{10,0,0}},{"radius",1},{"height",2}},
     {{"id","ring"},{"type","circular_pattern"},{"input","pin"},{"count",4},
@@ -156,7 +221,7 @@ void service(const fs::path& root) {
   near(reopened.call("cad_import",{{"document_id","copy"},{"path",exported.at("path")}}).at("summary").at("volume_mm3"),2400,2e-4);
 }
 }
-int main(){try{configure_kernel_logging();Temp temp;chamfers(temp.path);profiles(temp.path);sweeps(temp.path);patterns();service(temp.path);
+int main(){try{configure_kernel_logging();Temp temp;chamfers(temp.path);profiles(temp.path);sweeps(temp.path);conditioned_pipe_moments(temp.path);patterns();service(temp.path);
   std::cout<<checks<<" modeling flexibility checks passed\n";return 0;
 }catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}
 catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
