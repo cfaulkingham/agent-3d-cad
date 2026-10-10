@@ -29,7 +29,7 @@ void charge_payload(const Json& value, std::size_t& remaining, unsigned depth) {
   };
   if (value.is_object()) {
     charge(2);
-    const bool step = value.contains("type") && value.at("type") == "import_step";
+    const bool step = value.contains("type") && (value.at("type") == "import_step"||value.at("type")=="import_step_surface");
     bool first = true;
     for (const auto& [key, item] : value.items()) {
       charge(Json(key).dump().size() + 1 + (first ? 0 : 1)); first = false;

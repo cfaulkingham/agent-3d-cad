@@ -54,6 +54,15 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
+#include <BRepTools_Modification.hxx>
+#include <BRepTools_Modifier.hxx>
+#include <GeomConvert.hxx>
+#include <GeomAPI.hxx>
+#include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <GeomLProp_SLProps.hxx>
+#include <BRepOffsetAPI_MakeFilling.hxx>
+#include <BRepProj_Projection.hxx>
+#include <BSplCLib.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
@@ -297,7 +306,8 @@ void check_shape(const TopoDS_Shape& shape) {
 // Surface outputs have their own contract. Solid validation above stays strict:
 // an open shell can never satisfy a solid operation or manufacturing promise.
 void check_surface_shape(const TopoDS_Shape& shape) {
-  if(shape.IsNull()||!BRepCheck_Analyzer(shape).IsValid())throw Error("invalid_shape","Surface result must have a valid exact B-rep");
+  if(shape.IsNull())throw Error("invalid_shape","Surface result must have a valid exact B-rep");
+  if(!BRepCheck_Analyzer(shape).IsValid()){try{check_shape(shape);}catch(const Error& e){throw Error("invalid_shape","Surface result must have a valid exact B-rep",e.details);}}
   std::vector<TopoDS_Shape> pending{shape};std::size_t faces=0;
   while(!pending.empty()) {
     const auto current=pending.back();pending.pop_back();
@@ -323,8 +333,49 @@ void check_surface_intent(const Json& feature,const TopoDS_Shape& shape) {
     if(shells.Extent()!=1||shape.ShapeType()!=TopAbs_SHELL)throw Error("invalid_shape","Surface shell must contain one connected shell");
     const auto closed=BRepCheck_Shell(TopoDS::Shell(shape)).Closed()==BRepCheck_NoError;
     if(closed!=feature.at("closed").get<bool>())throw Error("invalid_shape","Sewn shell closure differs from the authored closed flag",{{"requested_closed",feature.at("closed")},{"actual_closed",closed}});
-  } else if(shape.ShapeType()!=TopAbs_FACE)throw Error("invalid_shape","A parametric surface patch or UV trim must be one exact face");
+  } else if(feature.at("type")=="import_step_surface") { /* Explicit captured surface containers retain their exact topology. */ }
+  else if(shape.ShapeType()!=TopAbs_FACE)throw Error("invalid_shape","A parametric surface patch or UV trim must be one exact face");
 }
+void check_curve_shape(const TopoDS_Shape& shape) {
+  if(shape.IsNull()||!BRepCheck_Analyzer(shape).IsValid())throw Error("invalid_shape","Curve result must have a valid exact B-rep");
+  std::vector<TopoDS_Shape> pending{shape};std::size_t edges=0;
+  while(!pending.empty()) {const auto current=pending.back();pending.pop_back();
+    if(current.ShapeType()==TopAbs_EDGE){BRepAdaptor_Curve curve(TopoDS::Edge(current));const auto length=GCPnts_AbscissaPoint::Length(curve);if(!std::isfinite(length)||length<=1e-7)throw Error("invalid_shape","Curve edges require positive finite length");if(++edges>1024)throw Error("limit_exceeded","Curve outputs permit at most 1024 exact edges");}
+    else if(current.ShapeType()==TopAbs_WIRE||current.ShapeType()==TopAbs_COMPOUND){TopoDS_Iterator children(current);if(!children.More())throw Error("invalid_shape","Empty curve container");for(;children.More();children.Next())pending.push_back(children.Value());}
+    else throw Error("invalid_shape","Curve outputs may contain wires and edges only");
+  }
+  if(!edges)throw Error("invalid_shape","Curve result has no exact edges");
+  BRepAlgoAPI_Check check(shape,false,true);if(!check.IsValid())throw Error("invalid_shape","Curve result self-intersects");
+}
+// Restrict polynomial support surfaces to the face's existing UV domain before
+// offsetting. Segment is exact knot insertion, with unchanged 3D boundaries and
+// unchanged UV parameters. OCCT's Bezier offset side-wall construction otherwise
+// extrapolates the full support and makes unorientable trimmed crown faces.
+class BoundedPolynomialSupports final : public BRepTools_Modification {
+public:
+  bool NewSurface(const TopoDS_Face& f,occ::handle<Geom_Surface>& surface,TopLoc_Location& location,double& tolerance,bool& reverse_wires,bool& reverse_face) override {
+    auto original=BRep_Tool::Surface(f,location);if(!occ::down_cast<Geom_BezierSurface>(original)&&!occ::down_cast<Geom_BSplineSurface>(original))return false;
+    auto spline=GeomConvert::SurfaceToBSplineSurface(original);spline=occ::down_cast<Geom_BSplineSurface>(spline->Copy());
+    double u0,u1,v0,v1;BRepTools::UVBounds(f,u0,u1,v0,v1);spline->Segment(u0,u1,v0,v1);surface=spline;tolerance=BRep_Tool::Tolerance(f);reverse_wires=false;reverse_face=false;return true;
+  }
+  bool NewCurve(const TopoDS_Edge& edge,occ::handle<Geom_Curve>& curve,TopLoc_Location& location,double& tolerance) override {
+    double first,last;auto original=BRep_Tool::Curve(edge,location,first,last);if(original.IsNull()||(!occ::down_cast<Geom_BezierCurve>(original)&&!occ::down_cast<Geom_BSplineCurve>(original)))return false;
+    auto spline=GeomConvert::CurveToBSplineCurve(original);spline=occ::down_cast<Geom_BSplineCurve>(spline->Copy());spline->Segment(first,last);curve=spline;tolerance=BRep_Tool::Tolerance(edge);return true;
+  }
+  bool NewPoint(const TopoDS_Vertex&,gp_Pnt&,double&) override {return false;}
+  bool NewCurve2d(const TopoDS_Edge& e,const TopoDS_Face& f,const TopoDS_Edge&,const TopoDS_Face&,occ::handle<Geom2d_Curve>& curve,double& tolerance) override {
+    auto surface=BRep_Tool::Surface(f);if(!occ::down_cast<Geom_BezierSurface>(surface)&&!occ::down_cast<Geom_BSplineSurface>(surface))return false;
+    double first,last;curve=BRep_Tool::CurveOnSurface(e,f,first,last);tolerance=BRep_Tool::Tolerance(e);return !curve.IsNull();
+  }
+  bool NewParameter(const TopoDS_Vertex&,const TopoDS_Edge&,double&,double&) override {return false;}
+  GeomAbs_Shape Continuity(const TopoDS_Edge& e,const TopoDS_Face& f1,const TopoDS_Face& f2,const TopoDS_Edge&,const TopoDS_Face&,const TopoDS_Face&) override {return BRep_Tool::Continuity(e,f1,f2);}
+};
+struct OffsetSupportHistory {
+  BRepOffset_MakeOffset& operation;BRepTools_Modifier& normalization;
+  bool IsDeleted(const TopoDS_Shape& s){return operation.IsDeleted(normalization.ModifiedShape(s));}
+  NCollection_List<TopoDS_Shape> Modified(const TopoDS_Shape& s){const auto& n=normalization.ModifiedShape(s);auto result=operation.Modified(n);result.Append(n);return result;}
+  NCollection_List<TopoDS_Shape> Generated(const TopoDS_Shape& s){return operation.Generated(normalization.ModifiedShape(s));}
+};
 struct SewingHistory {
   BRepBuilderAPI_Sewing& operation;
   bool IsDeleted(const TopoDS_Shape&){return false;}
@@ -580,7 +631,7 @@ std::vector<int> select_faces(const FeatureGeometry& source,const Json& selectio
   }
   return result;
 }
-TopoDS_Shell open_connected_patch(const std::vector<TopoDS_Face>& faces,const std::string& input) {
+TopoDS_Shape open_connected_patch(const std::vector<TopoDS_Face>& faces,const std::string& input) {
   TopoDS_Shell shell;BRep_Builder builder;builder.MakeShell(shell);
   ShapeMap edges;std::vector<int> uses,first_owner;std::vector<std::set<int>> neighbors(faces.size());
   for(std::size_t f=0;f<faces.size();++f) {
@@ -599,7 +650,7 @@ TopoDS_Shell open_connected_patch(const std::vector<TopoDS_Face>& faces,const st
   if(std::any_of(uses.begin(),uses.end(),[](int n){return n>2;}))throw Error("invalid_model","Thicken requires a manifold surface patch",{{"source_feature_id",input}});
   if(std::none_of(uses.begin(),uses.end(),[](int n){return n==1;}))throw Error("invalid_model","Thicken requires an open surface patch; use shell for a closed body",{{"source_feature_id",input}});
   if(!BRepCheck_Analyzer(shell).IsValid())throw Error("invalid_model","Selected thickening patch is not a valid shell",{{"source_feature_id",input}});
-  return shell;
+  return faces.size()==1?TopoDS_Shape(faces.front()):TopoDS_Shape(shell);
 }
 void check_parallel_material(const TopoDS_Shape& source,const TopoDS_Shape& result,double distance,
                              bool shell_or_thicken,const std::string& input) {
@@ -984,6 +1035,7 @@ gp_Ax2 sketch_plane(const Json& feature,const Json& parameters,const std::map<st
 Json feature_provenance(const Json& feature,const Json& history,bool history_truncated) {
   Json dependencies=Json::array();
   for (const auto* key:{"input","left","right","target"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
+  if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input")&&std::find(dependencies.begin(),dependencies.end(),b.at("input"))==dependencies.end())dependencies.push_back(b.at("input"));
   if (feature.contains("sections")) dependencies=feature.at("sections");
   if (feature.contains("inputs")) dependencies=feature.at("inputs");
   if (feature.at("type")=="assembly") {
@@ -992,7 +1044,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   }
   Json result={{"feature_id",feature.at("id")},{"feature_type",feature.at("type")},{"dependencies",dependencies},
     {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
-  if (feature.at("type")=="import_step") result["content_sha256"]=feature.at("sha256");
+  if (feature.at("type")=="import_step"||feature.at("type")=="import_step_surface") result["content_sha256"]=feature.at("sha256");
   if(feature.at("type")=="sketch"){const auto& p=feature.at("profile");if(p.contains("sha256"))result["content_sha256"]=p.at("sha256");if(p.contains("font"))result["font_sha256"]=p.at("font").at("sha256");}
   return result;
 }
@@ -1011,7 +1063,8 @@ FeatureGeometry restore_feature(const Json& feature,const Json& parameters,
   std::istringstream stream(entry.at("brep").get<std::string>());
   TopoDS_Shape shape;BRepTools::Read(shape,stream,BRep_Builder{});
   if(stream.fail()||shape.IsNull())throw Error("cache_miss","Cannot read cached feature B-rep");
-  if(is_surface_feature_type(type))check_surface_intent(feature,shape);
+  if(is_curve_feature_type(type))check_curve_shape(shape);
+  else if(is_surface_feature_type(type))check_surface_intent(feature,shape);
   else if(!is_sketch_feature_type(type))check_shape(shape);
   else {ShapeMap faces;TopExp::MapShapes(shape,TopAbs_FACE,faces);if(faces.IsEmpty())throw Error("cache_miss","Invalid cached sketch");const auto surface=BRepAdaptor_Surface(TopoDS::Face(faces(1)));if(surface.GetType()!=GeomAbs_Plane)throw Error("cache_miss","Cached sketch is nonplanar");check_sketch_shape(shape,surface.Plane().Position().Ax2());}
   FeatureGeometry geometry(shape);
@@ -1206,6 +1259,153 @@ double shape_area(const TopoDS_Shape& shape) {GProp_GProps area;BRepGProp::Surfa
 double face_contact_area(const TopoDS_Shape& shape,const TopoDS_Shape& face) {
   return shape_area(extrusion_boolean<BRepAlgoAPI_Common>(shape,face));
 }
+TopoDS_Face uv_trim_face(const TopoDS_Face& source,const Json& feature,const Json& parameters) {
+  const gp_Ax2 xy(gp_Pnt(0,0,0),gp_Dir(0,0,1));
+  Json profile={{"type","wire"},{"segments",feature.at("boundary")}};if(feature.contains("holes"))profile["holes"]=feature.at("holes");
+  const auto evaluate_uv=[&](auto&& self,Json& value)->void{if(value.is_object()){if(value.contains("parameter")||value.contains("expression")){value=scalar(value,parameters,"dimensionless");return;}for(auto& item:value.items())self(self,item.value());}else if(value.is_array())for(auto& item:value)self(self,item);};evaluate_uv(evaluate_uv,profile);
+  const auto uv=sketch_face(profile,Json::object(),xy);const auto support=BRep_Tool::Surface(source);
+  BRepBuilderAPI_MakeFace result;result.Init(support,false,1e-7);
+  for(TopoDS_Iterator wires(uv);wires.More();wires.Next()) {
+    BRepBuilderAPI_MakeWire wire;
+    for(BRepTools_WireExplorer edges(TopoDS::Wire(wires.Value()),uv);edges.More();edges.Next()) {
+      double first,last;const auto curve=BRep_Tool::CurveOnSurface(edges.Current(),uv,first,last);
+      BRepBuilderAPI_MakeEdge edge(curve,support,first,last);if(!edge.IsDone())throw Error("invalid_shape","Cannot map trim contour to source UV surface");
+      auto mapped=edge.Edge();if(edges.Current().Orientation()==TopAbs_REVERSED)mapped.Reverse();wire.Add(mapped);
+    }
+    if(!wire.IsDone())throw Error("invalid_shape","Mapped trim contour is disconnected");result.Add(wire.Wire());
+  }
+  if(!result.IsDone())throw Error("kernel_failure","Surface contour trimming failed");auto face=result.Face();
+  BRepLib::BuildCurves3d(face,1e-7);if(source.Orientation()==TopAbs_REVERSED)face.Reverse();check_surface_shape(face);return face;
+}
+void require_surface_containment(const TopoDS_Face& source,const TopoDS_Face& trimmed) {
+  const auto outside=extrusion_boolean<BRepAlgoAPI_Cut>(trimmed,source);
+  const auto area=shape_area(trimmed);if(shape_area(outside)>std::max(1e-7,area*1e-8))throw Error("invalid_model","Trim contour must remain wholly inside the existing source face, including its holes");
+}
+TopoDS_Edge unique_surface_edge(const FeatureGeometry& source,const Json& selector,const Json& parameters,const std::string& input) {
+  std::vector<int> matched;for(int i=1;i<=source.edges.Extent();++i)if(matches(edge_descriptor(TopoDS::Edge(source.edges(i)),i),selector,parameters))matched.push_back(i);
+  if(matched.size()!=1)throw Error(matched.empty()?"selection_missing":"selection_ambiguous","Surface boundary requires one uniquely selected exact edge",{{"source_feature_id",input},{"actual_count",matched.size()}});
+  return TopoDS::Edge(source.edges(matched.front()));
+}
+TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources) {
+  const auto tolerance=feature.at("tolerance").get<double>(),angular=feature.value("angular_tolerance",1e-4),curvature=feature.value("curvature_tolerance",1e-4);
+  // Reserve an approximation margin for the plate-to-B-spline conversion;
+  // independently checked public tolerances are never enlarged.
+  BRepOffsetAPI_MakeFilling filling(4,50,4,false,1e-8,tolerance*.1,angular*.1,curvature*.1,14,16);
+  struct Constraint {TopoDS_Edge edge;TopoDS_Face face;GeomAbs_Shape order;int index;};std::vector<Constraint> constraints;
+  gp_Pnt start,previous;std::map<std::string,std::unique_ptr<BRepBuilderAPI_Copy>> copies;
+  for(const auto& boundary:feature.at("boundaries")) {
+    TopoDS_Edge edge;TopoDS_Face support;
+    if(boundary.contains("curve")){const auto wire=curve_wire(Json::array({boundary.at("curve")}),parameters).wire;edge=TopoDS::Edge(TopExp_Explorer(wire,TopAbs_EDGE).Current());}
+    else {const auto input=text_field(boundary,"input");const auto& source=sources.at(input);edge=unique_surface_edge(source,boundary.at("edge"),parameters,input);
+      if(boundary.contains("face")){support=TopoDS::Face(source.faces(select_faces(source,boundary.at("face"),parameters,input).front()));ShapeMap edges;TopExp::MapShapes(support,TopAbs_EDGE,edges);if(!edges.Contains(edge))throw Error("invalid_model","Filling edge must belong to its explicitly selected support face");}
+      if(!copies.contains(input))copies[input]=std::make_unique<BRepBuilderAPI_Copy>(source.shape);
+      auto& copy=*copies.at(input);const auto edge_orientation=edge.Orientation();edge=TopoDS::Edge(copy.ModifiedShape(edge));edge.Orientation(edge_orientation);if(!support.IsNull()){const auto face_orientation=support.Orientation();support=TopoDS::Face(copy.ModifiedShape(support));support.Orientation(face_orientation);}
+    }
+    if(boundary.value("reverse",false))edge.Reverse();
+    const auto first=BRep_Tool::Pnt(TopExp::FirstVertex(edge,true)),last=BRep_Tool::Pnt(TopExp::LastVertex(edge,true));
+    if(constraints.empty())start=first;else if(previous.Distance(first)>tolerance)throw Error("invalid_model","Filling boundaries must connect in their authored order; set reverse explicitly");previous=last;
+    const auto continuity=text_field(boundary,"continuity");const auto order=continuity=="C0"?GeomAbs_C0:continuity=="G1"?GeomAbs_G1:GeomAbs_G2;
+    // Pinned OCCT 8.0.1 call path: BRepOffsetAPI_MakeFilling::Add ->
+    // BRepFill_Filling::Build / AddConstraints -> BRepFill_CurveConstraint ->
+    // GeomPlate_CurveConstraint / GeomPlate_BuildPlateSurface. The GeomAbs
+    // enum becomes a derivative-order integer: G2 is 3, but the plate expects
+    // order 2. Map only this solver argument; retain the authored G2 contract
+    // and independently check nonplanar curvature (parity_surfaces regression).
+    const auto solver_order=order==GeomAbs_G2?static_cast<GeomAbs_Shape>(2):order;
+    const auto index=support.IsNull()?filling.Add(edge,solver_order):filling.Add(edge,support,solver_order);constraints.push_back({edge,support,order,index});
+  }
+  if(previous.Distance(start)>tolerance)throw Error("invalid_model","Filling boundary must close explicitly; no missing edges are synthesized");
+  if(feature.contains("points"))for(const auto& p:feature.at("points"))filling.Add(parameter_point(p,parameters));
+  filling.Build();if(!filling.IsDone())throw Error("kernel_failure","Constrained surface filling did not converge");
+  // OCCT 8.0.1's indexed G0Error accessor throws on valid C0 constraints;
+  // use the algorithm's global maximum, followed by independent boundary checks.
+  if(filling.G0Error()>tolerance||filling.G1Error()>angular||filling.G2Error()>curvature)throw Error("invalid_shape","Filling does not satisfy its explicit continuity tolerances",{{"distance_error_mm",filling.G0Error()},{"angular_error_rad",filling.G1Error()},{"curvature_error_per_mm",filling.G2Error()}});
+  const auto face=TopoDS::Face(filling.Shape());check_surface_shape(face);const auto result=BRep_Tool::Surface(face);
+  if(feature.contains("points"))for(const auto& p:feature.at("points")){BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(parameter_point(p,parameters)).Vertex(),face);if(!distance.IsDone()||distance.Value()>tolerance)throw Error("invalid_shape","Filling interior point constraint is not satisfied on the resulting face",{{"distance_mm",distance.IsDone()?distance.Value():-1}});}
+  // Independently interrogate constructed geometry. Kernel completion alone can
+  // silently ignore incompatible tangent/curvature constraints.
+  for(std::size_t i=0;i<constraints.size();++i){const auto& c=constraints[i];BRepAdaptor_Curve edge(c.edge);
+    for(int n=0;n<=32;++n){const auto point=edge.Value(edge.FirstParameter()+(edge.LastParameter()-edge.FirstParameter())*n/32.0);GeomAPI_ProjectPointOnSurf projected(point,result);
+      if(!projected.IsDone()||projected.NbPoints()==0||projected.LowerDistance()>tolerance)throw Error("invalid_shape","Filling boundary positional verification failed",{{"boundary_index",i}});
+      if(c.order==GeomAbs_C0)continue;double u,v;projected.LowerDistanceParameters(u,v);GeomLProp_SLProps a(result,u,v,2,1e-9);const auto support=BRep_Tool::Surface(c.face);GeomAPI_ProjectPointOnSurf on_support(point,support);if(!on_support.IsDone()||on_support.NbPoints()==0)throw Error("invalid_shape","Cannot verify filling support continuity");double su,sv;on_support.LowerDistanceParameters(su,sv);GeomLProp_SLProps b(support,su,sv,2,1e-9);
+      if(!a.IsNormalDefined()||!b.IsNormalDefined())throw Error("invalid_shape","Filling continuity has an undefined surface normal");const double dot=a.Normal().Dot(b.Normal());
+      if(std::acos(std::clamp(std::abs(dot),0.0,1.0))>angular)throw Error("invalid_shape","Filling tangent verification failed",{{"boundary_index",i}});
+      if(c.order==GeomAbs_G2){if(!a.IsCurvatureDefined()||!b.IsCurvatureDefined())throw Error("invalid_shape","Filling curvature is undefined");std::array<double,2> ka={a.MinCurvature(),a.MaxCurvature()},kb={b.MinCurvature()*(dot<0?-1:1),b.MaxCurvature()*(dot<0?-1:1)};std::sort(kb.begin(),kb.end());
+        // Principal values alone miss a rotation of the curvature directions.
+        // Compare world-space shape operators after aligning normal signs.
+        const auto tensor=[](GeomLProp_SLProps& props){std::array<std::array<double,3>,3> matrix{};const auto normal=props.Normal();
+          if(props.IsUmbilic()){const auto k=(props.MinCurvature()+props.MaxCurvature())*.5;for(int r=0;r<3;++r)for(int c=0;c<3;++c)matrix[r][c]=k*((r==c?1.0:0.0)-normal.Coord(r+1)*normal.Coord(c+1));}
+          else {gp_Dir maximum,minimum;props.CurvatureDirections(maximum,minimum);for(int r=0;r<3;++r)for(int c=0;c<3;++c)matrix[r][c]=props.MaxCurvature()*maximum.Coord(r+1)*maximum.Coord(c+1)+props.MinCurvature()*minimum.Coord(r+1)*minimum.Coord(c+1);}return matrix;};
+        const auto ta=tensor(a),tb=tensor(b);double tensor_error=0;for(int r=0;r<3;++r)for(int k=0;k<3;++k)tensor_error=std::max(tensor_error,std::abs(ta[r][k]-tb[r][k]*(dot<0?-1:1)));
+        if(std::abs(ka[0]-kb[0])>curvature||std::abs(ka[1]-kb[1])>curvature||tensor_error>curvature)throw Error("invalid_shape","Filling curvature verification failed",{{"boundary_index",i},{"sample_index",n},{"result_curvatures",ka},{"support_curvatures",kb},{"normal_dot",dot},{"curvature_tensor_error_per_mm",tensor_error}});}
+    }
+  }
+  return face;
+}
+using Spline=occ::handle<Geom_BSplineCurve>;
+Spline network_curve(const Json& value,const Json& parameters) {
+  const auto wire=curve_wire(Json::array({value}),parameters).wire;const auto edge=TopoDS::Edge(TopExp_Explorer(wire,TopAbs_EDGE).Current());double first,last;auto curve=BRep_Tool::Curve(edge,first,last);
+  auto spline=GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(curve,first,last));if(spline->IsRational()||spline->IsPeriodic())throw Error("invalid_model","Gordon curves must be nonperiodic polynomial curves");
+  auto knots=spline->Knots();BSplCLib::Reparametrize(0.0,1.0,knots);spline->SetKnots(knots);return spline;
+}
+double choose(int n,int k){double result=1;for(int j=1;j<=k;++j)result=result*(n-j+1)/j;return result;}
+std::vector<Spline> cardinal_splines(const Json& stations,const Json& parameters) {
+  std::vector<Spline> result;const auto degree=static_cast<int>(stations.size())-1;
+  for(int i=0;i<=degree;++i){std::vector<double> power{1};double denominator=1;const auto xi=scalar(stations[i],parameters,"dimensionless");
+    for(int j=0;j<=degree;++j)if(j!=i){const auto xj=scalar(stations[j],parameters,"dimensionless");std::vector<double> next(power.size()+1,0);for(std::size_t k=0;k<power.size();++k){next[k]-=xj*power[k];next[k+1]+=power[k];}power=std::move(next);denominator*=xi-xj;}
+    NCollection_Array1<gp_Pnt> poles(1,degree+1);for(int k=0;k<=degree;++k){double value=0;for(int j=0;j<=k;++j)value+=power[j]/denominator*choose(k,j)/choose(degree,j);poles.SetValue(k+1,gp_Pnt(value,0,0));}
+    result.push_back(GeomConvert::CurveToBSplineCurve(new Geom_BezierCurve(poles)));
+  }return result;
+}
+void compatible_network_basis(std::vector<Spline>& family,std::vector<Spline>& cardinal) {
+  std::vector<Spline> all=family;all.insert(all.end(),cardinal.begin(),cardinal.end());int degree=1;for(const auto& c:all)degree=std::max(degree,c->Degree());if(degree>25)throw Error("limit_exceeded","Gordon surface degree exceeds 25");
+  std::map<double,int> knots;for(auto& c:all){c->IncreaseDegree(degree);for(int i=1;i<=c->NbKnots();++i)knots[c->Knot(i)]=std::max(knots[c->Knot(i)],c->Multiplicity(i));}
+  if(knots.size()>512)throw Error("limit_exceeded","Gordon network exceeds 512 distinct knots per direction");
+  NCollection_Array1<double> values(1,static_cast<int>(knots.size()));NCollection_Array1<int> mults(1,static_cast<int>(knots.size()));int k=1;for(const auto& [value,mult]:knots){values.SetValue(k,value);mults.SetValue(k++,mult);}
+  for(auto& c:all)c->InsertKnots(values,mults,1e-12,false);
+  for(const auto& c:all){if(c->NbPoles()!=all.front()->NbPoles()||c->NbKnots()!=all.front()->NbKnots())throw Error("invalid_shape","Gordon basis could not be reconciled exactly");
+    for(int i=1;i<=c->NbKnots();++i)if(std::abs(c->Knot(i)-all.front()->Knot(i))>1e-12||c->Multiplicity(i)!=all.front()->Multiplicity(i))throw Error("invalid_shape","Gordon basis knot values or multiplicities differ");}
+}
+occ::handle<Geom_BSplineSurface> gordon_surface(const Json& feature,const Json& parameters) {
+  std::vector<Spline> us,vs;for(const auto& c:feature.at("u_curves"))us.push_back(network_curve(c,parameters));for(const auto& c:feature.at("v_curves"))vs.push_back(network_curve(c,parameters));
+  auto uc=cardinal_splines(feature.at("u_parameters"),parameters),vc=cardinal_splines(feature.at("v_parameters"),parameters);const auto tolerance=feature.at("tolerance").get<double>();
+  std::vector<std::vector<gp_Pnt>> crossings(us.size(),std::vector<gp_Pnt>(vs.size()));
+  for(std::size_t i=0;i<us.size();++i)for(std::size_t j=0;j<vs.size();++j){const auto a=us[i]->Value(scalar(feature.at("u_parameters")[j],parameters,"dimensionless")),b=vs[j]->Value(scalar(feature.at("v_parameters")[i],parameters,"dimensionless"));if(a.Distance(b)>tolerance)throw Error("invalid_model","Gordon network curves do not intersect at their explicit compatible parameter stations",{{"u_curve_index",i},{"v_curve_index",j},{"gap_mm",a.Distance(b)}});crossings[i][j]=a;}
+  compatible_network_basis(us,uc);compatible_network_basis(vs,vc);const auto nu=us.front()->NbPoles(),nv=vs.front()->NbPoles();if(static_cast<std::size_t>(nu)*nv>65536)throw Error("limit_exceeded","Gordon surface exceeds 65536 control points");NCollection_Array2<gp_Pnt> poles(1,nu,1,nv);
+  for(int k=1;k<=nu;++k)for(int l=1;l<=nv;++l){gp_XYZ point(0,0,0);for(std::size_t i=0;i<us.size();++i)point+=us[i]->Pole(k).XYZ()*vc[i]->Pole(l).X();for(std::size_t j=0;j<vs.size();++j)point+=vs[j]->Pole(l).XYZ()*uc[j]->Pole(k).X();for(std::size_t i=0;i<us.size();++i)for(std::size_t j=0;j<vs.size();++j)point-=crossings[i][j].XYZ()*(uc[j]->Pole(k).X()*vc[i]->Pole(l).X());poles.SetValue(k,l,gp_Pnt(point));}
+  auto surface=occ::handle<Geom_BSplineSurface>(new Geom_BSplineSurface(poles,us.front()->Knots(),vs.front()->Knots(),us.front()->Multiplicities(),vs.front()->Multiplicities(),us.front()->Degree(),vs.front()->Degree()));
+  // Algebraically equal bases interpolate complete polynomial curves. Retain an
+  // independent sampling bound to catch ill-conditioned user station networks.
+  for(std::size_t i=0;i<us.size();++i)for(int n=0;n<=128;++n){const double u=n/128.0,v=scalar(feature.at("v_parameters")[i],parameters,"dimensionless");if(surface->Value(u,v).Distance(us[i]->Value(u))>tolerance)throw Error("invalid_shape","Gordon surface fails U-network interpolation tolerance");}
+  for(std::size_t j=0;j<vs.size();++j)for(int n=0;n<=128;++n){const double v=n/128.0,u=scalar(feature.at("u_parameters")[j],parameters,"dimensionless");if(surface->Value(u,v).Distance(vs[j]->Value(v))>tolerance)throw Error("invalid_shape","Gordon surface fails V-network interpolation tolerance");}
+  return surface;
+}
+TopoDS_Wire projected_wire(const TopoDS_Wire& source,const TopoDS_Face& target,const gp_Dir& direction) {
+  // Require a unique forward hit over each source edge before asking OCCT to
+  // build the exact section. A target behind the curve is never selected.
+  for(TopExp_Explorer it(source,TopAbs_EDGE);it.More();it.Next()){BRepAdaptor_Curve edge(TopoDS::Edge(it.Current()));for(int n=0;n<=64;++n){const auto p=edge.Value(edge.FirstParameter()+(edge.LastParameter()-edge.FirstParameter())*n/64.0);IntCurvesFace_ShapeIntersector ray;ray.Load(target,1e-7);ray.Perform(gp_Lin(p,direction),-1e-7,1e9);if(!ray.IsDone()||ray.NbPnt()!=1)throw Error(ray.NbPnt()>1?"selection_ambiguous":"selection_missing","Projection needs exactly one forward target intersection along every source edge",{{"sample_index",n},{"intersection_count",ray.NbPnt()}});}}
+  BRepProj_Projection projection(source,target,direction);if(!projection.IsDone())throw Error("kernel_failure","Exact curved-surface projection failed");projection.Init();if(!projection.More())throw Error("selection_missing","Projection misses its target");const auto wire=projection.Current();projection.Next();if(projection.More())throw Error("selection_ambiguous","Projection produces multiple wires on the selected face");
+  // The boundary endpoints must be represented; projection is not an implicit
+  // trimming/clipping operation. Closedness must also survive the projection.
+  if(source.Closed()!=wire.Closed())throw Error("invalid_shape","Projection changed wire closure");check_curve_shape(wire);return wire;
+}
+TopoDS_Shape project_geometry(const Json& feature,const Json& parameters,const FeatureGeometry& source,const FeatureGeometry& target) {
+  const auto original_face=TopoDS::Face(target.faces(select_faces(target,feature.at("faces"),parameters,text_field(feature,"target")).front()));
+  BRepBuilderAPI_Copy target_copy(original_face),source_copy(source.shape);
+  auto face=TopoDS::Face(target_copy.Shape());face.Orientation(original_face.Orientation());const auto direction=parameter_direction(feature.at("direction"),parameters);const bool region=feature.at("type")=="surface_project";
+  if(region&&source.faces.Extent()>1)throw Error("invalid_model","Surface projection accepts one sketch region at a time");
+  TopoDS_Compound curves;BRep_Builder builder;builder.MakeCompound(curves);BRepBuilderAPI_MakeFace projected;
+  ShapeMap wires;TopExp::MapShapes(source_copy.Shape(),TopAbs_WIRE,wires);if(wires.IsEmpty())throw Error("invalid_model","Projection input must contain exact wires");
+  for(int i=1;i<=wires.Extent();++i){const auto wire=projected_wire(TopoDS::Wire(wires(i)),face,direction);if(region){
+      if(!wire.Closed())throw Error("invalid_model","Surface projection needs a closed boundary; use curve_project for open curves");
+      BRepBuilderAPI_MakeFace contour(BRep_Tool::Surface(face),wire,true);if(!contour.IsDone())throw Error("invalid_shape","Projected wire has no valid bounded surface region");
+      if(i==1)projected=contour;else projected.Add(TopoDS::Wire(BRepTools::OuterWire(contour.Face()).Reversed()));
+    }else builder.Add(curves,wire);}
+
+  if(!region)return curves;
+  if(!projected.IsDone())throw Error("kernel_failure","Projected surface boundary construction failed");auto result=projected.Face();if(face.Orientation()==TopAbs_REVERSED)result.Reverse();check_surface_shape(result);require_surface_containment(face,result);return result;
+}
+
 TopoDS_Shape join_extrusion_regions(const std::vector<TopoDS_Shape>& regions) {
   if(regions.empty())throw Error("invalid_shape","Extrusion has no material");
   auto result=regions.front();for(std::size_t i=1;i<regions.size();++i)result=extrusion_boolean<BRepAlgoAPI_Fuse>(result,regions[i]);
@@ -1568,7 +1768,15 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       bool history_truncated=false;
       const auto position = feature.contains("origin") ? vector3(feature.at("origin"), parameters) : std::array<double,3>{0,0,0};
       const gp_Pnt origin(position[0], position[1], position[2]);
-      if(type=="surface_bezier"||type=="surface_bspline") {
+      if(type=="curve") {
+        shape=curve_wire(feature.at("path").at("segments"),parameters).wire;
+      } else if(type=="curve_project"||type=="surface_project") {
+        shape=project_geometry(feature,parameters,impl_->features.at(text_field(feature,"input")),impl_->features.at(text_field(feature,"target")));
+      } else if(type=="surface_fill") {
+        shape=filling_surface(feature,parameters,impl_->features);
+      } else if(type=="surface_gordon") {
+        const auto surface=gordon_surface(feature,parameters);BRepBuilderAPI_MakeFace face(surface,0,1,0,1,1e-7);if(!face.IsDone())throw Error("kernel_failure","Gordon face construction failed");shape=face.Face();
+      } else if(type=="surface_bezier"||type=="surface_bspline") {
         const auto surface=parametric_surface(feature,parameters);double first_u,last_u,first_v,last_v;surface->Bounds(first_u,last_u,first_v,last_v);
         if(!std::isfinite(first_u)||!std::isfinite(last_u)||!std::isfinite(first_v)||!std::isfinite(last_v))throw Error("invalid_shape","Surface parameter domain must be finite");
         BRepBuilderAPI_MakeFace face(surface,first_u,last_u,first_v,last_v,1e-7);
@@ -1577,12 +1785,16 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
         if(source.faces.Extent()!=1)throw Error("invalid_model","Surface trim requires one exact face");
         const auto face=TopoDS::Face(source.faces(1));double first_u,last_u,first_v,last_v;BRepTools::UVBounds(face,first_u,last_u,first_v,last_v);
+        if(feature.contains("boundary"))shape=uv_trim_face(face,feature,parameters);
+        else {
         const auto u0=scalar(feature.at("u_range")[0],parameters,"dimensionless"),u1=scalar(feature.at("u_range")[1],parameters,"dimensionless"),
           v0=scalar(feature.at("v_range")[0],parameters,"dimensionless"),v1=scalar(feature.at("v_range")[1],parameters,"dimensionless");
         if(u0<first_u-1e-12||u1>last_u+1e-12||v0<first_v-1e-12||v1>last_v+1e-12)throw Error("invalid_model","Surface trim ranges must stay inside the source face UV domain",{{"source_feature_id",input},{"source_u_range",{first_u,last_u}},{"source_v_range",{first_v,last_v}}});
         BRepBuilderAPI_MakeFace operation(BRep_Tool::Surface(face),u0,u1,v0,v1,1e-7);
         if(!operation.IsDone())throw Error("kernel_failure","Exact UV surface trimming failed");shape=operation.Face();
         if(face.Orientation()==TopAbs_REVERSED)shape.Reverse();
+        }
+        require_surface_containment(face,TopoDS::Face(shape));
         history.push_back({{"source_feature_id",input},{"source_kind","face"},{"source_id","face-1"},{"relation","modified"},{"result_kind","face"},{"result_id","face-1"}});
       } else if(type=="surface_shell") {
         const auto tolerance=feature.at("tolerance").get<double>();BRepBuilderAPI_Sewing operation(tolerance,true,true,false,false);
@@ -2028,8 +2240,12 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           throw Error("invalid_model","Hole does not enter its input solid; it removes no material",
             {{"source_feature_id",input},{"removed_volume_mm3",removed},{"hole_volume_mm3",cutter.Mass()}});
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
-      } else if (type == "import_step") {
+      } else if (type == "import_step"||type=="import_step_surface") {
         shape=read_step(text_field(feature,"content"));
+        if(type=="import_step_surface") {
+          // Unwrap only singleton containers, preserving every face and shell.
+          while(shape.ShapeType()==TopAbs_COMPOUND){TopoDS_Iterator it(shape);if(!it.More())break;const auto one=it.Value();it.Next();if(it.More())break;shape=one;}
+        }
         if(feature.contains("solid_indices")) {
           ShapeMap solids;TopExp::MapShapes(shape,TopAbs_SOLID,solids);
           TopoDS_Compound selected;BRep_Builder builder;builder.MakeCompound(selected);
@@ -2189,19 +2405,23 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           else for(const auto& face:faces)patches.push_back(open_connected_patch({face},input));
           TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);
           std::vector<std::unique_ptr<BRepOffset_MakeOffset>> operations;
+          std::vector<std::unique_ptr<BRepTools_Modifier>> normalizations;
           for(const auto& patch:patches) {
             auto operation=std::make_unique<BRepOffset_MakeOffset>();
-            operation->Initialize(patch,distance,offset_tolerance,BRepOffset_Skin,false,false,join,true,false);
+            auto normalization=std::make_unique<BRepTools_Modifier>(patch,new BoundedPolynomialSupports);
+            if(!normalization->IsDone())throw Error("kernel_failure","Exact polynomial support restriction failed");
+            const auto normalized=normalization->ModifiedShape(patch);check_surface_shape(normalized);
+            operation->Initialize(normalized,distance,offset_tolerance,BRepOffset_Skin,false,false,join,true,false);
             operation->MakeOffsetShape();
             if(!operation->IsDone())throw Error("kernel_failure","Surface thickening failed; change thickness, joins or selected patch",{{"source_feature_id",input},{"offset_status",static_cast<int>(operation->Error())}});
             const auto result=operation->Shape();check_shape(result);
             if(count(result,TopAbs_SOLID)!=1)throw Error("invalid_shape","Thicken must produce one closed solid per connected patch",{{"source_feature_id",input}});
             if(feature.contains("faces")&&!is_surface_feature_type(source_type))check_parallel_material(copy.Shape(),result,distance,true,input);
-            builder.Add(compound,result);operations.push_back(std::move(operation));
+            builder.Add(compound,result);operations.push_back(std::move(operation));normalizations.push_back(std::move(normalization));
           }
           shape=patches.size()==1?operations.front()->Shape():TopoDS_Shape(compound);
           const FeatureGeometry target(shape);
-          for(std::size_t i=0;i<patches.size();++i)record_history(*operations[i],source,input,target,history,history_truncated,&copy,-1,&patches[i]);
+          for(std::size_t i=0;i<patches.size();++i){OffsetSupportHistory evidence{*operations[i],*normalizations[i]};record_history(evidence,source,input,target,history,history_truncated,&copy,-1,&patches[i]);}
         }
         BRepAlgoAPI_Check interference(shape,false,true);
         if(!interference.IsValid())throw Error("invalid_shape","Shell, offset or thicken produced self-interfering geometry",{{"source_feature_id",input}});
@@ -2255,7 +2475,8 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           }
         }
       }
-      if(is_surface_feature_type(type))check_surface_intent(feature,shape);
+      if(is_curve_feature_type(type))check_curve_shape(shape);
+      else if(is_surface_feature_type(type))check_surface_intent(feature,shape);
       else if (!is_sketch_feature_type(type)) check_shape(shape);
       else {
         check_sketch_shape(shape,planes.at(id));
@@ -2316,7 +2537,7 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     const auto& geometry = impl_->feature(feature_id);
     const auto& shape = geometry.shape;
     const auto solids = count(shape, TopAbs_SOLID);
-    GProp_GProps volume, area;
+    GProp_GProps volume, area, linear;
     // Native pipe surfaces may be rational B-splines even for analytic input.
     // Fixed-order quadrature can misreport their mass; use adaptive integration.
     if (solids) {
@@ -2337,7 +2558,8 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     Bnd_Box box;
     BRepBndLib::AddOptimal(shape, box, false, false);
     const auto limits = box.Get();
-    const auto center = solids ? volume.CentreOfMass() : area.CentreOfMass();
+    if(geometry.faces.IsEmpty())BRepGProp::LinearProperties(shape,linear);
+    const auto center = solids ? volume.CentreOfMass() : geometry.faces.IsEmpty()?linear.CentreOfMass():area.CentreOfMass();
     Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
       {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
       {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
@@ -2515,8 +2737,8 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
     const auto point_limit = std::min<std::size_t>(limits.edge_points, 200000);
     // Meshing only attaches triangulations to these exact retained faces. It does
     // not enumerate a copied shape and assume the copy kept its ordering.
-    BRepMesh_IncrementalMesh tessellation(geometry.shape, 0.1, false, 0.5, false);
-    if (!tessellation.IsDone()) throw Error("kernel_failure", "Tessellation failed");
+    if(!geometry.faces.IsEmpty()){BRepMesh_IncrementalMesh tessellation(geometry.shape, 0.1, false, 0.5, false);
+    if (!tessellation.IsDone()) throw Error("kernel_failure", "Tessellation failed");}
     Json result = {{"schema_version", 1}, {"units", "mm"}, {"feature_id", feature_id.empty() ? impl_->output : feature_id},
       {"selection_lifetime", "evaluation"}, {"linear_deflection_mm", 0.1}, {"angular_deflection_rad", 0.5},
       {"positions", Json::array()}, {"triangles", Json::array()}, {"triangle_faces", Json::array()}, {"edges", Json::array()}};

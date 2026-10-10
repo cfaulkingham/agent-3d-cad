@@ -11,6 +11,8 @@ void validate_face_selection(const Json& selection, const Json& parameters, cons
 bool is_sketch_feature_type(const std::string& type);
 // Explicit surface patches and shells are not solid modeling operands.
 bool is_surface_feature_type(const std::string& type);
+// Exact open or closed wires remain nonmaterial geometry.
+bool is_curve_feature_type(const std::string& type);
 void validate_step_solid_indices(const Json& indices);
 inline constexpr std::size_t assembly_leaf_limit = 1024;
 inline constexpr std::size_t assembly_depth_limit = 8;

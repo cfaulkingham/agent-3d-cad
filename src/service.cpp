@@ -168,8 +168,8 @@ Json tool_definitions() {
     tool("cad_capture_sketch","Capture a local font, SVG or ASCII DXF as a portable editable sketch feature. Embeds exact source bytes and SHA-256, validates closed exact planar geometry in a bounded native worker, and returns a feature for cad_create/add_feature. Text uses captured unhinted Unicode font outlines with editable text/height; SVG/DXF support documented filled planar curves and reject unsupported entities. No document is committed.",
       {{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"type","number"},{"minimum",0.00001},{"maximum",100000}}},{"spacing",{{"type","number"},{"minimum",-1000000},{"maximum",1000000}}},{"scale",{{"type","number"},{"minimum",0.000001},{"maximum",1000000}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}}}, {"format","path","feature_id","workplane"},
       object({{"feature",{{"$ref","#/$defs/authoring_feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
-    tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
-      {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
+    tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. geometry defaults to solid; surface explicitly imports face/shell-only sources without material semantics. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
+      {{"document_id",id},{"path",text},{"request_id",id},{"geometry",{{"enum",{"solid","surface"}}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
       {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh"}}}},{"feature_id",id}},
@@ -272,7 +272,7 @@ Json tool_definitions() {
   for(auto& definition:tools)if(definition.at("name")=="cad_printer_handoff")
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
   for(auto& tool:tools) {
-    if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};}
+    if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["geometry"],"properties":{"geometry":{"const":"surface"}}},"then":{"not":{"anyOf":[{"required":["solid_indices"]},{"required":["purchase"]}]}}}])JSON");}
     if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"properties",{{"format",{{"const","text"}}}}}}},{"then",{{"required",{"text","height"}},{"not",{{"required",{"scale"}}}}}},{"else",{{"not",{{"anyOf",Json::array({Json{{"required",{"text"}}},Json{{"required",{"height"}}},Json{{"required",{"spacing"}}},Json{{"required",{"face_index"}}}})}}}}}}});
     if(tool.at("name")=="cad_export"||tool.at("name")=="cad_drawing") {
       tool["outputSchema"]["properties"]["downloads"]={{"type","array"},{"items",download_link_schema()},{"maxItems",128}};
@@ -724,7 +724,8 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_apply") fields(args,{"document_id","expected_revision","operations"},{"request_id"});
   else if(tool=="cad_restore") fields(args,{"document_id","expected_revision","source_revision"},{"request_id"});
   else if(tool=="cad_import") {
-    fields(args,{"document_id","path"},{"request_id","expected_sha256","purchase","solid_indices"});
+    fields(args,{"document_id","path"},{"request_id","expected_sha256","purchase","solid_indices","geometry"});
+    const auto geometry=args.value("geometry",std::string("solid"));if(geometry!="solid"&&geometry!="surface")throw Error("invalid_argument","STEP geometry must be solid or surface");if(geometry=="surface"&&(args.contains("solid_indices")||args.contains("purchase")))throw Error("invalid_argument","Surface STEP imports cannot select solids or claim purchased solid material");
     if(args.contains("solid_indices")){if(args.contains("purchase"))throw Error("invalid_argument","Subset imports cannot claim an unchanged purchased artifact");validate_step_solid_indices(args.at("solid_indices"));if(!args.contains("expected_sha256"))throw Error("invalid_argument","STEP subset import requires expected_sha256 from inspection");}
     if(args.contains("expected_sha256")) {
       const auto hash=text_field(args,"expected_sha256");
@@ -881,7 +882,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
         const auto digest=sha256(content);
         if(args.contains("expected_sha256")&&args.at("expected_sha256")!=digest)
           throw Error("artifact_mismatch","STEP bytes do not match expected_sha256",{{"expected_sha256",args.at("expected_sha256")},{"actual_sha256",digest}});
-        Json feature={{"id","imported"},{"type","import_step"},{"content",content},{"sha256",digest}};
+        Json feature={{"id","imported"},{"type",args.value("geometry",std::string("solid"))=="surface"?"import_step_surface":"import_step"},{"content",content},{"sha256",digest}};
         if(args.contains("solid_indices"))feature["solid_indices"]=args.at("solid_indices");
         if(args.contains("purchase")) {
           auto purchase=args.at("purchase");

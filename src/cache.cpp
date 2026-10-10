@@ -52,6 +52,7 @@ Json feature_cache_keys(const Json& model) {
     collect(intent);
     const auto dependency=[&](const std::string& id){dependencies[id]=keys.at(id);};
     for(const auto* field:{"input","left","right","target"})if(feature.contains(field))dependency(text_field(feature,field));
+    if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input"))dependency(text_field(b,"input"));
     if(feature.contains("sections"))for(const auto& section:feature.at("sections"))dependency(section.get<std::string>());
     if(feature.contains("inputs"))for(const auto& input:feature.at("inputs"))dependency(input.get<std::string>());
     if(feature.at("type")=="assembly")for(const auto& part:feature.at("parts"))dependency(text_field(part,"input"));

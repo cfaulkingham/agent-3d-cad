@@ -52,9 +52,8 @@ in each dimensionless range. Each range must span at least 1e-9 and remain insid
 the source face's actual parameter bounds. It builds an exact trimmed native face
 and retains orientation. UV trim ranges are parameter coordinates rather than
 world lengths. Out-of-domain ranges fail with the source domain in error details.
-This phase implements rectangular UV trims; arbitrary UV contour trims, trimming
-holes and projection of planar sketches onto arbitrary curved patches remain
-separate work.
+Contour trims with holes, constrained filling, Gordon networks and curved
+projection are now specified in [PARITY_SURFACES.md](PARITY_SURFACES.md).
 
 `surface_shell.inputs` contains 1–64 distinct earlier patch or shell IDs, with
 at most 256 source faces in total. `tolerance` is an explicit numeric sewing
@@ -69,7 +68,8 @@ gap filling, tolerance escalation or mesh substitution is used.
 boundaries; `false` requires an open shell. A mismatch fails. A valid closed shell
 still remains a shell with zero solid material volume.
 
-`surface_solid` accepts only an earlier `surface_shell` that is actually closed.
+`surface_solid` accepts an earlier `surface_shell` or imported single surface
+shell that is actually closed.
 It materializes one exact solid and applies the existing rigorous positive-volume,
 closed-solid validation. No orientation repair is performed. An inward shell
 fails unless the caller explicitly sets `reverse: true`; inconsistent local
@@ -85,12 +85,10 @@ along the oriented surface normal; negative thickness extends to the other side.
 The result must be a valid closed solid. It is never enough for an offset to return
 an open shell or intersecting material. Closed shell inputs must first select an
 open patch or use `surface_solid`.
-Native offset support depends on the patch. A tested trimmed biquadratic Bezier
-crown remains a valid exact surface but its thickening produces native
-`UnorientableShape` diagnostics and fails explicitly. Planar and rational
-quarter-cylinder thickening have passing analytic regressions. The example
-`examples/freeform-panel.create.json` therefore keeps its editable trimmed
-surface as output; it does not substitute approximate solid geometry.
+Private exact polynomial support restriction now allows the trimmed biquadratic
+crown to thicken with either sign and either join. Existing shape/material
+validation remains strict; see PARITY_SURFACES.md for the construction and tests.
+The example keeps its editable surface as output, ready for explicit thickening.
 
 Surface features support summaries, evaluation-scoped face/edge topology and
 provenance, exact measurements, preview triangulation, orthographic drawings,
@@ -101,8 +99,8 @@ is a visualization/interchange output, not an assertion of printable material.
 roots and manufacturing preparation require solid material. An explicit
 `surface_solid` or valid `thicken` result meets that prerequisite.
 
-The existing STEP-import feature accepts solids; a surface STEP export is not
-silently promoted into solid material during import. Existing planar
+STEP import defaults to solids; explicit `geometry:"surface"` captures surface
+STEP exports without promoting them into material. Existing planar
 `sketch_face`/`sketch_projection` operations retain their planar-solid-face
 contract; arbitrary curved surface-to-sketch projection is not implied.
 

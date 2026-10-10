@@ -46,7 +46,7 @@ a receipt, not used as a file name, so it is not restricted either.
 A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
 is validated, including branches outside `output`. Output is solid material or
-an explicit surface feature. Sketches remain intermediate planar regions.
+an explicit surface or curve feature. Sketches remain intermediate planar regions.
 Surface patches and shells report zero material volume until `surface_solid`
 or `thicken` creates a valid solid; see [SURFACES.md](SURFACES.md).
 
@@ -104,7 +104,12 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `split` | `input`, `plane`, `keep` | Solid halfspace split; `keep: both|top|bottom`, both sides must contain material |
 | `surface_bezier` | `control_points` | World-space rectangular pole grid; optional rational `weights` |
 | `surface_bspline` | `control_points`, `degree_u`, `degree_v`, `knots_u`, `knots_v`, `multiplicities_u`, `multiplicities_v` | Nonperiodic exact patch; optional rational weights |
-| `surface_trim` | `input`, `u_range`, `v_range` | Exact rectangular UV trim of a patch |
+| `surface_trim` | `input`, either `u_range`/`v_range` or `boundary` | Exact UV trim; contour form supports `holes` |
+| `surface_fill` | `boundaries`, `tolerance` | Ordered exact boundary constraints with explicit C0/G1/G2 support continuity |
+| `surface_gordon` | `u_curves`, `v_curves`, `u_parameters`, `v_parameters`, `tolerance` | Compatible polynomial spline curve network interpolation |
+| `curve` | `path` | Exact open/closed 3D wire; nonmaterial output |
+| `curve_project`, `surface_project` | `input`, `target`, `faces`, `direction` | Uniquely selected curved face; exact projected wire or closed region |
+| `import_step_surface` | `content`, `sha256` | Explicit captured nonmaterial STEP faces/shells |
 | `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |
 | `surface_solid` | `input` | Closed shell materialization; optional explicit `reverse` |
 | `sheet_metal` | `input`, `thickness`, `k_factor`, `flanges` | One planar sketch region with holes; exact signed cylindrical bends and direct base-edge flanges |
@@ -211,6 +216,11 @@ hole in a very large body is accepted.
 Every STEP transfer root must transfer: a file where any root fails is rejected
 with `kernel_failure` and `transferred_roots`/`total_roots` details, never
 imported partially.
+
+Surface construction, explicit surface STEP import, exact curve outputs and
+curved projection are specified in [PARITY_SURFACES.md](PARITY_SURFACES.md).
+`cad_import.geometry` selects `solid` (default) or `surface`; the latter rejects
+solid/subset/purchasing semantics and retains nonmaterial source geometry.
 
 ### Exact curve profiles and sweep paths
 
