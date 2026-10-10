@@ -9,6 +9,8 @@ void validate_face_selector(const Json& selector, const Json& parameters, const 
 void validate_face_selection(const Json& selection, const Json& parameters, const std::string& input);
 // Sketch feature families share planar-region semantics, including exact face compounds.
 bool is_sketch_feature_type(const std::string& type);
+// Explicit surface patches and shells are not solid modeling operands.
+bool is_surface_feature_type(const std::string& type);
 void validate_step_solid_indices(const Json& indices);
 inline constexpr std::size_t assembly_leaf_limit = 1024;
 inline constexpr std::size_t assembly_depth_limit = 8;

@@ -8,12 +8,17 @@
 #include <numbers>
 #include <stdexcept>
 #include <vector>
+#include <limits>
 
 namespace agentcad {
 bool is_sketch_feature_type(const std::string& type) {
   static const std::set<std::string> types={"sketch","sketch_cut","sketch_fuse","sketch_intersection",
     "sketch_offset","sketch_fillet","sketch_chamfer","sketch_transform","sketch_instance","sketch_mirror",
     "sketch_face","sketch_projection"};
+  return types.contains(type);
+}
+bool is_surface_feature_type(const std::string& type) {
+  static const std::set<std::string> types={"surface_bezier","surface_bspline","surface_trim","surface_shell"};
   return types.contains(type);
 }
 void validate_purchase(const Json& purchase,bool require_artifact) {
@@ -115,6 +120,22 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"}),
     object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
+  const Json pole_row={{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",26}};
+  const Json poles={{"type","array"},{"items",pole_row},{"minItems",2},{"maxItems",26}};
+  const Json weight_row={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",26}};
+  const Json weights={{"type","array"},{"items",weight_row},{"minItems",2},{"maxItems",26}};
+  const Json knots={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",128}};
+  const Json multiplicities={{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",26}}},{"minItems",2},{"maxItems",128}};
+  const Json degree={{"type","integer"},{"minimum",1},{"maximum",25}};
+  const Json uv_range={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}};
+  features.push_back(object({{"id",id},{"type",{{"const","surface_bezier"}}},{"control_points",poles},{"weights",weights}}, {"id","type","control_points"}));
+  features.push_back(object({{"id",id},{"type",{{"const","surface_bspline"}}},{"control_points",poles},{"weights",weights},
+    {"degree_u",degree},{"degree_v",degree},{"knots_u",knots},{"knots_v",knots},{"multiplicities_u",multiplicities},{"multiplicities_v",multiplicities}},
+    {"id","type","control_points","degree_u","degree_v","knots_u","knots_v","multiplicities_u","multiplicities_v"}));
+  features.push_back(object({{"id",id},{"type",{{"const","surface_trim"}}},{"input",id},{"u_range",uv_range},{"v_range",uv_range}}, {"id","type","input","u_range","v_range"}));
+  features.push_back(object({{"id",id},{"type",{{"const","surface_shell"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}}},
+    {"tolerance",{{"type","number"},{"minimum",1e-9},{"maximum",1e-3}}},{"closed",{{"type","boolean"}}}}, {"id","type","inputs","tolerance","closed"}));
+  features.push_back(object({{"id",id},{"type",{{"const","surface_solid"}}},{"input",id},{"reverse",{{"type","boolean"}}}}, {"id","type","input"}));
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
   features.push_back(object({{"id",id},{"type",{{"const","shell"}}},{"input",id},
     {"thickness",scalar_ref},{"faces",shell_faces},{"join",offset_join}},{"id","type","input","thickness","faces"}));
@@ -526,7 +547,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
       model_identifier(part_id);
       if (!part_ids.insert(part_id).second) throw Error("invalid_model", "Duplicate assembly part: " + part_id);
       const auto input = text_field(part,"input");
-      if (!types.contains(input) || is_sketch_feature_type(types.at(input)))
+      if (!types.contains(input) || (is_sketch_feature_type(types.at(input))||is_surface_feature_type(types.at(input))))
         throw Error("invalid_model", "Assembly part input must name an earlier solid or assembly feature", {{"source_feature_id",input}});
       source_inputs.insert(input);
       if (part.contains("placement")) { placement(part.at("placement"),parameters); placed.insert(part_id); }
@@ -664,14 +685,66 @@ void validate_model(const Json& model) {
     auto dependency = [&](const char* key) {
       const auto target = text_field(feature, key);
       if (!prior.contains(target)) throw Error("invalid_model", "Feature must refer to an earlier feature: " + target, {{"feature_id", id}});
-      if (is_sketch_feature_type(types.at(target))) throw Error("invalid_model", "This operation requires a solid input, not an intermediate sketch", {{"feature_id", id}});
+      if (is_sketch_feature_type(types.at(target))||is_surface_feature_type(types.at(target))) throw Error("invalid_model", "This operation requires a solid input", {{"feature_id", id}});
       if (types.at(target) == "assembly") throw Error("invalid_model", "Edit assembly source parts before assembling; solid operations cannot consume assemblies", {{"feature_id", id}});
     };
     auto sketch_dependency = [&](const std::string& target) {
       if (!prior.contains(target) || !is_sketch_feature_type(types.at(target)))
         throw Error("invalid_model", "Profile reference must name an earlier sketch", {{"feature_id", id}, {"source_feature_id", target}});
     };
-    if (type == "box") {
+    if(type=="surface_bezier"||type=="surface_bspline") {
+      if(type=="surface_bezier")fields(feature,{"id","type","control_points"},{"weights"});
+      else fields(feature,{"id","type","control_points","degree_u","degree_v","knots_u","knots_v","multiplicities_u","multiplicities_v"},{"weights"});
+      const auto& points=feature.at("control_points");
+      if(!points.is_array()||points.size()<2||points.size()>26)throw Error("invalid_model","Surface control grid needs 2–26 rows and columns");
+      const auto columns=points[0].size();if(!points[0].is_array()||columns<2||columns>26)throw Error("invalid_model","Surface control grid needs 2–26 rows and columns");
+      for(const auto& row:points) {
+        if(!row.is_array()||row.size()!=columns)throw Error("invalid_model","Surface control grid must be rectangular");
+        for(const auto& point:row)vector3(point,parameters);
+      }
+      if(feature.contains("weights")) {
+        const auto& weights=feature.at("weights");if(!weights.is_array()||weights.size()!=points.size())throw Error("invalid_model","Surface weights must match the control grid");
+        for(const auto& row:weights) {
+          if(!row.is_array()||row.size()!=columns)throw Error("invalid_model","Surface weights must match the control grid");
+          for(const auto& value:row)if(scalar(value,parameters,"dimensionless")<1e-8)throw Error("invalid_model","Surface weights must be positive and at least 0.00000001");
+        }
+      }
+      if(type=="surface_bspline")for(const auto* suffix:{"u","v"}) {
+        const auto degree_name=std::string("degree_")+suffix,knot_name=std::string("knots_")+suffix,mult_name=std::string("multiplicities_")+suffix;
+        const auto& degree_value=feature.at(degree_name);
+        if(!degree_value.is_number_integer()||degree_value<1||degree_value>25)throw Error("invalid_model","B-spline surface degrees must be integers from 1 to 25");
+        const auto degree=degree_value.get<int>();const auto& knots=feature.at(knot_name);const auto& mults=feature.at(mult_name);
+        if(!knots.is_array()||knots.size()<2||knots.size()>128||!mults.is_array()||mults.size()!=knots.size())throw Error("invalid_model","Surface knot and multiplicity arrays must match with 2–128 distinct knots");
+        int sum=0;double previous=-std::numeric_limits<double>::infinity();
+        for(std::size_t k=0;k<knots.size();++k) {
+          const auto knot=scalar(knots[k],parameters,"dimensionless");if(knot<=previous)throw Error("invalid_model","Surface knots must be strictly increasing");previous=knot;
+          const auto maximum=(k==0||k+1==knots.size())?degree+1:degree;
+          if(!mults[k].is_number_integer()||mults[k]<1||mults[k]>maximum)throw Error("invalid_model","B-spline surface multiplicity exceeds its degree bound");sum+=mults[k].get<int>();
+        }
+        const auto pole_count=std::string(suffix)=="u"?points.size():columns;
+        if(sum-degree-1!=static_cast<int>(pole_count))throw Error("invalid_model","B-spline surface multiplicities must sum to pole count plus degree plus one");
+      }
+    } else if(type=="surface_trim") {
+      fields(feature,{"id","type","input","u_range","v_range"});const auto input=text_field(feature,"input");
+      if(!prior.contains(input)||!is_surface_feature_type(types.at(input))||types.at(input)=="surface_shell")throw Error("invalid_model","Surface trim requires one earlier parametric surface patch");
+      for(const auto* name:{"u_range","v_range"}) {
+        const auto& range=feature.at(name);if(!range.is_array()||range.size()!=2)throw Error("invalid_model","Surface UV ranges require two scalar bounds");
+        if(scalar(range[1],parameters,"dimensionless")-scalar(range[0],parameters,"dimensionless")<1e-9)throw Error("invalid_model","Surface UV bounds must increase by at least 0.000000001");
+      }
+    } else if(type=="surface_shell") {
+      fields(feature,{"id","type","inputs","tolerance","closed"});const auto& inputs=feature.at("inputs");std::set<std::string> used;
+      if(!inputs.is_array()||inputs.empty()||inputs.size()>64)throw Error("invalid_model","Surface shell needs 1–64 distinct surface inputs");
+      for(const auto& value:inputs) {
+        if(!value.is_string())throw Error("invalid_model","Surface shell input references must be strings");const auto input=value.get<std::string>();
+        if(!prior.contains(input)||!is_surface_feature_type(types.at(input))||!used.insert(input).second)throw Error("invalid_model","Surface shell inputs must name distinct earlier patches or shells");
+      }
+      if(!feature.at("tolerance").is_number()||!std::isfinite(feature.at("tolerance").get<double>())||feature.at("tolerance")<1e-9||feature.at("tolerance")>1e-3)throw Error("invalid_model","Sewing tolerance must be numeric from 0.000000001 to 0.001 mm");
+      if(!feature.at("closed").is_boolean())throw Error("invalid_model","Surface shell closed must be boolean");
+    } else if(type=="surface_solid") {
+      fields(feature,{"id","type","input"},{"reverse"});const auto input=text_field(feature,"input");
+      if(!prior.contains(input)||types.at(input)!="surface_shell")throw Error("invalid_model","Surface solid requires an earlier explicitly closed shell");
+      if(feature.contains("reverse")&&!feature.at("reverse").is_boolean())throw Error("invalid_model","Surface solid reverse must be boolean");
+    } else if (type == "box") {
       fields(feature, {"id", "type", "size"}, {"origin"});
       vector3(feature.at("size"), parameters);
       for (const auto& value : feature.at("size")) positive(value);
@@ -709,6 +782,9 @@ void validate_model(const Json& model) {
       const auto input=text_field(feature,"input");
       if(type=="thicken"&&prior.contains(input)&&is_sketch_feature_type(types.at(input))) {
         if(feature.contains("faces"))throw Error("invalid_model","Thickening a sketch uses its complete profile; omit faces");
+      } else if(type=="thicken"&&prior.contains(input)&&is_surface_feature_type(types.at(input))) {
+        // Surface patches and shells are explicit open geometry inputs. The kernel
+        // validates a single connected patch before thickening the selected faces.
       } else {
         dependency("input");
         if(type=="thicken"&&!feature.contains("faces"))throw Error("invalid_model","Thickening solid surfaces requires explicit faces");

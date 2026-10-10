@@ -30,6 +30,10 @@
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BezierCurve.hxx>
+#include <Geom_BezierSurface.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <BRepBuilderAPI_MakeSolid.hxx>
+#include <NCollection_Array2.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <GC_MakeArcOfCircle.hxx>
@@ -285,6 +289,71 @@ void check_shape(const TopoDS_Shape& shape) {
   BRepGProp::VolumeProperties(shape,aggregate);
   if (!std::isfinite(aggregate.Mass()) || aggregate.Mass()<=0)
     throw Error("invalid_shape", "Feature has nonpositive or nonfinite aggregate volume");
+}
+// Surface outputs have their own contract. Solid validation above stays strict:
+// an open shell can never satisfy a solid operation or manufacturing promise.
+void check_surface_shape(const TopoDS_Shape& shape) {
+  if(shape.IsNull()||!BRepCheck_Analyzer(shape).IsValid())throw Error("invalid_shape","Surface result must have a valid exact B-rep");
+  std::vector<TopoDS_Shape> pending{shape};std::size_t faces=0;
+  while(!pending.empty()) {
+    const auto current=pending.back();pending.pop_back();
+    if(current.ShapeType()==TopAbs_FACE) {
+      GProp_GProps area;BRepGProp::SurfaceProperties(current,area);
+      if(!std::isfinite(area.Mass())||area.Mass()<=1e-10)throw Error("invalid_shape","Surface patches require positive finite area");
+      Bnd_Box box;BRepBndLib::AddOptimal(current,box,false,false);
+      if(box.IsVoid()||box.IsOpen())throw Error("invalid_shape","Surface patches require finite bounds");
+      if(++faces>256)throw Error("limit_exceeded","A surface result permits at most 256 faces");
+    } else if(current.ShapeType()==TopAbs_SHELL||current.ShapeType()==TopAbs_COMPOUND) {
+      TopoDS_Iterator children(current);if(!children.More())throw Error("invalid_shape","Surface containers must not be empty");
+      for(;children.More();children.Next())pending.push_back(children.Value());
+    } else throw Error("invalid_shape","Surface results must contain faces or shells only");
+  }
+  if(!faces)throw Error("invalid_shape","Surface feature produced no finite patches");
+  BRepAlgoAPI_Check interference(shape,false,true);
+  if(!interference.IsValid())throw Error("invalid_shape","Surface result has self-interference");
+}
+void check_surface_intent(const Json& feature,const TopoDS_Shape& shape) {
+  check_surface_shape(shape);
+  if(feature.at("type")=="surface_shell") {
+    ShapeMap shells;TopExp::MapShapes(shape,TopAbs_SHELL,shells);
+    if(shells.Extent()!=1||shape.ShapeType()!=TopAbs_SHELL)throw Error("invalid_shape","Surface shell must contain one connected shell");
+    const auto closed=BRepCheck_Shell(TopoDS::Shell(shape)).Closed()==BRepCheck_NoError;
+    if(closed!=feature.at("closed").get<bool>())throw Error("invalid_shape","Sewn shell closure differs from the authored closed flag",{{"requested_closed",feature.at("closed")},{"actual_closed",closed}});
+  } else if(shape.ShapeType()!=TopAbs_FACE)throw Error("invalid_shape","A parametric surface patch or UV trim must be one exact face");
+}
+struct SewingHistory {
+  BRepBuilderAPI_Sewing& operation;
+  bool IsDeleted(const TopoDS_Shape&){return false;}
+  NCollection_List<TopoDS_Shape> Modified(const TopoDS_Shape& shape) {
+    NCollection_List<TopoDS_Shape> result;
+    if(operation.IsModified(shape))result.Append(operation.Modified(shape));
+    else if(operation.IsModifiedSubShape(shape))result.Append(operation.ModifiedSubShape(shape));
+    return result;
+  }
+  NCollection_List<TopoDS_Shape> Generated(const TopoDS_Shape&){return {};}
+};
+occ::handle<Geom_Surface> parametric_surface(const Json& feature,const Json& parameters) {
+  const auto& points=feature.at("control_points");const auto rows=static_cast<int>(points.size()),columns=static_cast<int>(points[0].size());
+  NCollection_Array2<gp_Pnt> poles(1,rows,1,columns);NCollection_Array2<double> weights(1,rows,1,columns);
+  for(int u=1;u<=rows;++u)for(int v=1;v<=columns;++v) {
+    const auto p=vector3(points[u-1][v-1],parameters);poles.SetValue(u,v,gp_Pnt(p[0],p[1],p[2]));
+    weights.SetValue(u,v,feature.contains("weights")?scalar(feature.at("weights")[u-1][v-1],parameters,"dimensionless"):1);
+  }
+  if(feature.at("type")=="surface_bezier") {
+    if(feature.contains("weights"))return new Geom_BezierSurface(poles,weights);
+    return new Geom_BezierSurface(poles);
+  }
+  const auto fill_knots=[&](const char* name) {
+    const auto& values=feature.at(name);NCollection_Array1<double> array(1,static_cast<int>(values.size()));
+    for(int i=1;i<=array.Length();++i)array.SetValue(i,scalar(values[i-1],parameters,"dimensionless"));return array;
+  };
+  const auto fill_mults=[&](const char* name) {
+    const auto& values=feature.at(name);NCollection_Array1<int> array(1,static_cast<int>(values.size()));
+    for(int i=1;i<=array.Length();++i)array.SetValue(i,values[i-1].get<int>());return array;
+  };
+  const auto u_knots=fill_knots("knots_u"),v_knots=fill_knots("knots_v");const auto u_mults=fill_mults("multiplicities_u"),v_mults=fill_mults("multiplicities_v");
+  if(feature.contains("weights"))return new Geom_BSplineSurface(poles,weights,u_knots,v_knots,u_mults,v_mults,feature.at("degree_u").get<int>(),feature.at("degree_v").get<int>(),false,false);
+  return new Geom_BSplineSurface(poles,u_knots,v_knots,u_mults,v_mults,feature.at("degree_u").get<int>(),feature.at("degree_v").get<int>(),false,false);
 }
 // Exact planar region validation is shared by numeric, derived and imported sketches.
 // Containers may only contain faces. BRep validity alone accepts loose geometry.
@@ -794,6 +863,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   Json dependencies=Json::array();
   for (const auto* key:{"input","left","right","target"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
   if (feature.contains("sections")) dependencies=feature.at("sections");
+  if (feature.contains("inputs")) dependencies=feature.at("inputs");
   if (feature.at("type")=="assembly") {
     std::set<std::string> added;
     for (const auto& part:feature.at("parts")) if (added.insert(text_field(part,"input")).second) dependencies.push_back(part.at("input"));
@@ -819,7 +889,8 @@ FeatureGeometry restore_feature(const Json& feature,const Json& parameters,
   std::istringstream stream(entry.at("brep").get<std::string>());
   TopoDS_Shape shape;BRepTools::Read(shape,stream,BRep_Builder{});
   if(stream.fail()||shape.IsNull())throw Error("cache_miss","Cannot read cached feature B-rep");
-  if(!is_sketch_feature_type(type))check_shape(shape);
+  if(is_surface_feature_type(type))check_surface_intent(feature,shape);
+  else if(!is_sketch_feature_type(type))check_shape(shape);
   else {ShapeMap faces;TopExp::MapShapes(shape,TopAbs_FACE,faces);if(faces.IsEmpty())throw Error("cache_miss","Invalid cached sketch");const auto surface=BRepAdaptor_Surface(TopoDS::Face(faces(1)));if(surface.GetType()!=GeomAbs_Plane)throw Error("cache_miss","Cached sketch is nonplanar");check_sketch_shape(shape,surface.Plane().Position().Ax2());}
   FeatureGeometry geometry(shape);
   if(type=="assembly") {
@@ -1375,7 +1446,50 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       bool history_truncated=false;
       const auto position = feature.contains("origin") ? vector3(feature.at("origin"), parameters) : std::array<double,3>{0,0,0};
       const gp_Pnt origin(position[0], position[1], position[2]);
-      if (type == "box") {
+      if(type=="surface_bezier"||type=="surface_bspline") {
+        const auto surface=parametric_surface(feature,parameters);double first_u,last_u,first_v,last_v;surface->Bounds(first_u,last_u,first_v,last_v);
+        if(!std::isfinite(first_u)||!std::isfinite(last_u)||!std::isfinite(first_v)||!std::isfinite(last_v))throw Error("invalid_shape","Surface parameter domain must be finite");
+        BRepBuilderAPI_MakeFace face(surface,first_u,last_u,first_v,last_v,1e-7);
+        if(!face.IsDone())throw Error("kernel_failure","Parametric surface face creation failed");shape=face.Face();
+      } else if(type=="surface_trim") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        if(source.faces.Extent()!=1)throw Error("invalid_model","Surface trim requires one exact face");
+        const auto face=TopoDS::Face(source.faces(1));double first_u,last_u,first_v,last_v;BRepTools::UVBounds(face,first_u,last_u,first_v,last_v);
+        const auto u0=scalar(feature.at("u_range")[0],parameters,"dimensionless"),u1=scalar(feature.at("u_range")[1],parameters,"dimensionless"),
+          v0=scalar(feature.at("v_range")[0],parameters,"dimensionless"),v1=scalar(feature.at("v_range")[1],parameters,"dimensionless");
+        if(u0<first_u-1e-12||u1>last_u+1e-12||v0<first_v-1e-12||v1>last_v+1e-12)throw Error("invalid_model","Surface trim ranges must stay inside the source face UV domain",{{"source_feature_id",input},{"source_u_range",{first_u,last_u}},{"source_v_range",{first_v,last_v}}});
+        BRepBuilderAPI_MakeFace operation(BRep_Tool::Surface(face),u0,u1,v0,v1,1e-7);
+        if(!operation.IsDone())throw Error("kernel_failure","Exact UV surface trimming failed");shape=operation.Face();
+        if(face.Orientation()==TopAbs_REVERSED)shape.Reverse();
+        history.push_back({{"source_feature_id",input},{"source_kind","face"},{"source_id","face-1"},{"relation","modified"},{"result_kind","face"},{"result_id","face-1"}});
+      } else if(type=="surface_shell") {
+        const auto tolerance=feature.at("tolerance").get<double>();BRepBuilderAPI_Sewing operation(tolerance,true,true,false,false);
+        ShapeMap original_faces;double source_area=0;
+        for(const auto& value:feature.at("inputs")) {
+          const auto input=value.get<std::string>();const auto& source=impl_->features.at(input);
+          for(int f=1;f<=source.faces.Extent();++f) {
+            if(original_faces.Contains(source.faces(f)))throw Error("invalid_model","Surface shell inputs repeat an exact source face");
+            original_faces.Add(source.faces(f));GProp_GProps area;BRepGProp::SurfaceProperties(source.faces(f),area);source_area+=area.Mass();operation.Add(source.faces(f));
+          }
+        }
+        if(original_faces.Extent()>256)throw Error("limit_exceeded","Surface shell permits at most 256 source patches");
+        operation.Perform();shape=operation.SewedShape();
+        if(shape.IsNull()||operation.NbMultipleEdges()!=0||operation.NbDeletedFaces()!=0||count(shape,TopAbs_FACE)!=original_faces.Extent())
+          throw Error("invalid_shape","Surface sewing must preserve every patch and produce a manifold shell",{{"nonmanifold_edges",operation.NbMultipleEdges()},{"deleted_faces",operation.NbDeletedFaces()}});
+        if(shape.ShapeType()==TopAbs_FACE) {TopoDS_Shell shell;BRep_Builder builder;builder.MakeShell(shell);builder.Add(shell,shape);shape=shell;}
+        check_surface_intent(feature,shape);
+        GProp_GProps area;BRepGProp::SurfaceProperties(shape,area);
+        if(std::abs(area.Mass()-source_area)>std::max(1e-8,source_area*1e-8))throw Error("invalid_shape","Surface sewing changed source patch area beyond tolerance");
+        SewingHistory evidence{operation};for(const auto& value:feature.at("inputs")){const auto input=value.get<std::string>();record_history(evidence,impl_->features.at(input),input,shape,history,history_truncated);}
+      } else if(type=="surface_solid") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        if(source.shape.ShapeType()!=TopAbs_SHELL||BRepCheck_Shell(TopoDS::Shell(source.shape)).Closed()!=BRepCheck_NoError)throw Error("invalid_model","Solid materialization requires one closed manifold shell");
+        auto shell=TopoDS::Shell(source.shape);if(feature.value("reverse",false))shell.Reverse();
+        BRepBuilderAPI_MakeSolid operation(shell);if(!operation.IsDone())throw Error("kernel_failure","Closed shell solid materialization failed");shape=operation.Solid();
+        // No implicit normal repair: the caller can explicitly reverse a globally
+        // inward shell; inconsistent local face orientations fail validation.
+        check_shape(shape);record_history(operation,source,input,shape,history,history_truncated);
+      } else if (type == "box") {
         const auto size = vector3(feature.at("size"), parameters);
         shape = BRepPrimAPI_MakeBox(origin, size[0], size[1], size[2]).Shape();
       } else if (type == "cylinder") {
@@ -1796,7 +1910,8 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           if(feature.contains("faces"))for(const auto i:select_faces(source,feature.at("faces"),parameters,input))faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
           else for(int i=1;i<=source.faces.Extent();++i)faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
           std::vector<TopoDS_Shape> patches;
-          if(feature.contains("faces"))patches.push_back(open_connected_patch(faces,input));
+          const auto source_type=[&]() {for(const auto& declaration:model.at("features"))if(declaration.at("id")==input)return text_field(declaration,"type");return std::string{};}();
+          if(feature.contains("faces")||is_surface_feature_type(source_type))patches.push_back(open_connected_patch(faces,input));
           else for(const auto& face:faces)patches.push_back(open_connected_patch({face},input));
           TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);
           std::vector<std::unique_ptr<BRepOffset_MakeOffset>> operations;
@@ -1807,7 +1922,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
             if(!operation->IsDone())throw Error("kernel_failure","Surface thickening failed; change thickness, joins or selected patch",{{"source_feature_id",input},{"offset_status",static_cast<int>(operation->Error())}});
             const auto result=operation->Shape();check_shape(result);
             if(count(result,TopAbs_SOLID)!=1)throw Error("invalid_shape","Thicken must produce one closed solid per connected patch",{{"source_feature_id",input}});
-            if(feature.contains("faces"))check_parallel_material(copy.Shape(),result,distance,true,input);
+            if(feature.contains("faces")&&!is_surface_feature_type(source_type))check_parallel_material(copy.Shape(),result,distance,true,input);
             builder.Add(compound,result);operations.push_back(std::move(operation));
           }
           shape=patches.size()==1?operations.front()->Shape():TopoDS_Shape(compound);
@@ -1850,7 +1965,8 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         if (type=="fillet") {BRepFilletAPI_MakeFillet operation(copy.Shape());finish(operation,"radius");}
         else {BRepFilletAPI_MakeChamfer operation(copy.Shape());finish(operation,"distance");}
       }
-      if (!is_sketch_feature_type(type)) check_shape(shape);
+      if(is_surface_feature_type(type))check_surface_intent(feature,shape);
+      else if (!is_sketch_feature_type(type)) check_shape(shape);
       else {
         check_sketch_shape(shape,planes.at(id));
         // A one-region boolean compound is a face just like an authored sketch;
@@ -2137,6 +2253,7 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
 Json BuiltModel::print_meshes(const std::string& feature_id) const {
   try {
     const auto& geometry=impl_->feature(feature_id);Json result=Json::array();
+    if(!count(geometry.shape,TopAbs_SOLID))throw Error("invalid_argument","3MF print meshes require closed solid geometry");
     std::vector<std::pair<std::string,TopoDS_Shape>> leaves;
     if(geometry.parts.empty())leaves.emplace_back(feature_id.empty()?impl_->output:feature_id,geometry.shape);
     else for(const auto& part:geometry.parts)leaves.emplace_back(part.id,part.shape);
@@ -3179,11 +3296,13 @@ void BuiltModel::export_file(const std::filesystem::path& path, const std::strin
       if (writer.Transfer(impl_->feature(feature_id).shape, STEPControl_AsIs) != IFSelect_RetDone || writer.Write(filename.c_str()) != IFSelect_RetDone)
         throw Error("export_failed", "STEP writer failed");
     } else if (format == "stl") {
-      const auto meshes=print_meshes(feature_id);std::uint32_t triangles=0;
+      const auto selected=feature_id.empty()?impl_->output:feature_id;
+      const auto is_surface=[&]() {for(const auto& declaration:impl_->model.at("features"))if(declaration.at("id")==selected)return is_surface_feature_type(text_field(declaration,"type"));return false;}();
+      const auto meshes=is_surface?Json::array({mesh(feature_id)}):print_meshes(feature_id);std::uint32_t triangles=0;
       for(const auto& mesh:meshes)triangles+=static_cast<std::uint32_t>(mesh.at("triangles").size());
       std::ofstream output(path,std::ios::binary|std::ios::trunc);
       if(!output)throw Error("export_failed","Cannot open STL output");
-      const std::string header="Agent CAD closed solid mesh";std::array<char,80> padded{};std::copy(header.begin(),header.end(),padded.begin());output.write(padded.data(),padded.size());
+      const std::string header=is_surface?"Agent CAD surface mesh (may be open)":"Agent CAD closed solid mesh";std::array<char,80> padded{};std::copy(header.begin(),header.end(),padded.begin());output.write(padded.data(),padded.size());
       const auto u32=[&](std::uint32_t value){for(int k=0;k<4;++k)output.put(static_cast<char>((value>>(8*k))&255));};
       const auto f32=[&](double value){const float f=static_cast<float>(value);if(!std::isfinite(f))throw Error("export_failed","STL coordinate exceeds float representation");u32(std::bit_cast<std::uint32_t>(f));};
       u32(triangles);
