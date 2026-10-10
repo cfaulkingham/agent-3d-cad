@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import struct
 import subprocess
 import sys
 import tempfile
@@ -14,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     bundle = root / 'bundle'
     binary = bundle / 'bin/agent-3d-cad'
     binary.parent.mkdir(parents=True)
-    binary.write_bytes(b'packaging inventory fixture\n')
+    binary.write_bytes(struct.pack('<II', 0xFEEDFACF, 0x0100000C) + bytes(248))
     binary.chmod(0o755)
     manifest = bundle / 'share/agent-3d-cad/provenance.json'
     manifest.parent.mkdir(parents=True)
@@ -45,13 +46,20 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
         assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
         assert not output.exists()
     (bundle / 'unlisted').unlink()
+    skill = bundle / 'share/agent-3d-cad/skills/native-cad/SKILL.md'
+    skill.parent.mkdir(parents=True)
+    skill.write_text('Packaging fixture skill; not a runnable native binary.\n')
+    skill_entry = {'path': skill.relative_to(bundle).as_posix(), 'sha256': hashlib.sha256(skill.read_bytes()).hexdigest()}
+    save([entry, skill_entry])
     output = root / 'valid.mcpb'
     result = run('make-mcpb.py', output)
     assert result.returncode == 0, result.stderr
     with zipfile.ZipFile(output) as archive:
         assert archive.read('bin/agent-3d-cad') == binary.read_bytes()
-        assert json.loads(archive.read('share/agent-3d-cad/provenance.json'))['files'] == [entry]
+        assert json.loads(archive.read('share/agent-3d-cad/provenance.json'))['files'] == [entry, skill_entry]
         extension = json.loads(archive.read('manifest.json'))
+        assert extension['_meta']['org.agentcad.native'] == {'system':'Darwin','architecture':'arm64','architecture_selection':'distribution_required'}
+        assert extension['compatibility'] == {'platforms':['darwin']}
         assert extension['user_config']['workspace']['required'] is False
         assert extension['user_config']['workspace']['default'] == ''
         args = extension['server']['mcp_config']['args']

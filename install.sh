@@ -24,6 +24,11 @@ case $(uname -s) in
   *) die 'Use install.ps1 on Windows; this OS is unsupported' ;;
 esac
 case $(uname -m) in arm64|aarch64) arch=arm64 ;; x86_64|amd64) arch=x64 ;; *) die 'Only arm64 and x64 are supported' ;; esac
+# A translated shell reports x86_64 on Apple silicon. Choose the native service
+# when Rosetta explicitly identifies the process; Intel/unknown stay x64.
+if [[ $system == Darwin && $arch == x64 ]] && [[ $(sysctl -n sysctl.proc_translated 2>/dev/null || true) == 1 ]]; then
+  arch=arm64
+fi
 for command in curl tar mktemp; do command -v "$command" >/dev/null || die "Missing OS utility: $command"; done
 if command -v shasum >/dev/null; then hash_file() { shasum -a 256 "$1" | cut -d' ' -f1; }
 elif command -v sha256sum >/dev/null; then hash_file() { sha256sum "$1" | cut -d' ' -f1; }

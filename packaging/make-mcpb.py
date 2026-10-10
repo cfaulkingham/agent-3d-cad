@@ -1,24 +1,18 @@
 """Wrap a verified native bundle for Claude Desktop (developer tool only)."""
-import hashlib
 import json
 from pathlib import Path
 import sys
 import zipfile
 
 root, output = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
-provenance = json.loads((root / 'share/agent-3d-cad/provenance.json').read_text())
-paths = [entry['path'] for entry in provenance['files']]
-actual = {file.relative_to(root).as_posix() for file in root.rglob('*') if file.is_file()}
-if not paths or len(paths) != len(set(paths)) or actual != set(paths) | {'share/agent-3d-cad/provenance.json'}:
-    raise SystemExit('Bundle provenance must cover every file exactly once')
-system = provenance['system']
+from bundle_validation import validate_bundle
+version = (Path(__file__).resolve().parent.parent / 'VERSION').read_text(encoding='utf-8').strip()
+try:
+    provenance, system, arch, binary = validate_bundle(root, version)
+except (ValueError, OSError, KeyError) as error:
+    raise SystemExit(str(error)) from error
 if system not in ('Darwin', 'Windows'):
     raise SystemExit('Claude Desktop packages are built only for macOS and Windows')
-binary = 'bin/agent-3d-cad' + ('.exe' if system == 'Windows' else '')
-for entry in provenance['files']:
-    file = (root / entry['path']).resolve()
-    if not file.is_relative_to(root) or hashlib.sha256(file.read_bytes()).hexdigest() != entry['sha256']:
-        raise SystemExit(f"Bundle integrity failure: {entry['path']}")
 manifest = {
     'manifest_version': '0.3', 'name': 'agent-3d-cad', 'display_name': 'Agent CAD',
     'version': provenance['project_version'], 'description': 'Create, edit, view and export saved CAD projects.',
@@ -27,6 +21,8 @@ manifest = {
     'server': {'type': 'binary', 'entry_point': binary, 'mcp_config': {
         'command': '${__dirname}/' + binary, 'args': ['serve', '--default-workspace', '--workspace-setting', '${user_config.workspace}']}},
     'compatibility': {'platforms': ['darwin' if system == 'Darwin' else 'win32']},
+    # Informational provenance only: MCPB 0.3 has no CPU selection constraint.
+    '_meta': {'org.agentcad.native': {'system': system, 'architecture': arch, 'architecture_selection': 'distribution_required'}},
     'user_config': {'workspace': {'type': 'directory', 'title': 'Project folder (optional)',
         'description': 'Ready to use in Documents/Agent CAD. Change this only to reopen an existing CAD workspace. Projects remain when the extension is updated or removed.',
         # Claude 2.26454.2 substitutes this value into args but does not expand

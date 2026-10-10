@@ -7,8 +7,10 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from package_documentation_test import verify as verify_documentation
 
 root = Path(sys.argv[1]).resolve()
+verify_documentation(root)
 manifest = json.loads((root / 'plugin.json').read_text(encoding='utf-8'))
 mcp = json.loads((root / 'mcp.json').read_text(encoding='utf-8'))
 assert manifest['$schema'] == 'https://agent-plugins.org/schemas/1.0.0/plugin.schema.json'

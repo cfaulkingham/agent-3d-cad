@@ -135,6 +135,8 @@ jobs:
           }
           python tests/client_config_test.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/package_architecture_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/packaging_provenance_test.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Relocated bundle without SDK environment
@@ -156,17 +158,23 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Package and test native ChatGPT plugin (no standalone app)
         run: |
+          python tests/package_documentation_test.py bundle .
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python packaging/make-plugin.py bundle build/plugins
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $plugin = Get-ChildItem build/plugins -Directory | Select-Object -First 1
           python tests/plugin_smoke.py $plugin.FullName
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $lifecycleArgs = @($plugin.FullName)
           if (-not $IsLinux) {
             $version = (Get-Content VERSION -Raw).Trim()
             $system = if ($IsMacOS) { 'Darwin' } else { 'Windows' }
             python packaging/make-mcpb.py bundle "build/plugins/agent-cad-claude-$version-$system-${{ matrix.architecture }}.mcpb"
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $lifecycleArgs += "build/plugins/agent-cad-claude-$version-$system-${{ matrix.architecture }}.mcpb"
           }
+          python tests/package_lifecycle_test.py @lifecycleArgs
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         with:
           name: agent-cad-plugins-${{ matrix.runner }}-${{ matrix.architecture }}

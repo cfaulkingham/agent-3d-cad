@@ -38,19 +38,49 @@ file(SHA256 "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" AGENTCAD_APP_SHA
 install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/occt)
 install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples)
 install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
-install(FILES docs/ANNOTATIONS.md DESTINATION share/agent-3d-cad)
-install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/ARTIFACT_REVIEW.md docs/PRESENTATION.md docs/APPEARANCE.md docs/MEASUREMENTS.md docs/SECTIONS.md docs/DRAWINGS.md docs/ASSEMBLIES.md docs/ROBOT_EXPORT.md docs/MANUFACTURING.md docs/FABRICATION_REVIEW.md docs/GCODE_REVIEW.md docs/PRINTER_HANDOFF.md docs/SLICING.md docs/PURCHASED_PARTS.md docs/COMPONENTS.md docs/DEPENDENCY_CACHE.md docs/COMPOSITION_FABRICATION_REVIEW.md DESTINATION share/agent-3d-cad)
-install(FILES docs/PLAYBACK.md DESTINATION share/agent-3d-cad)
-install(FILES docs/SHELL_OFFSET_THICKEN.md docs/SKETCH_OPERATIONS.md docs/AUTHORING_IMPORTS.md
-  docs/RICHER_MODELING.md docs/SHEET_METAL.md docs/PARITY_SHEET_METAL.md docs/MESH_RECONSTRUCTION.md docs/SURFACES.md DESTINATION share/agent-3d-cad)
-# References must resolve beside the installed skill in both desktop packages.
+# Curated product documentation, shared by the archive and native skill. Keep
+# transitive product references available; repository implementation history has
+# an explicit immutable-source reference below instead of a stale copied ledger.
+set(AGENTCAD_PRODUCT_DOCUMENTS
+  ANNOTATIONS APPEARANCE ARTIFACT_REVIEW ASSEMBLIES AUTHORING_IMPORTS
+  COMPONENTS COMPOSITION_FABRICATION_REVIEW DEPENDENCIES DEPENDENCY_CACHE
+  DISTRIBUTION DRAWINGS EXPORT_DOWNLOADS FABRICATION_REVIEW GCODE_REVIEW
+  LIVE_VIEWER LOCAL_PACKAGE_ACCEPTANCE MANUFACTURING MEASUREMENTS
+  MESH_RECONSTRUCTION PARAMETRIC_EXPRESSIONS PARITY_AUTHORING PARITY_CURVES
+  PARITY_SHEET_METAL PARITY_SOLIDS PARITY_SURFACES PLAYBACK PRESENTATION
+  PRINTER_HANDOFF PROTOCOL PURCHASED_PARTS RELEASE_1_0 RICHER_MODELING
+  ROBOT_EXPORT SECTIONS SHEET_METAL SHELL_OFFSET_THICKEN SKETCH_OPERATIONS
+  SLICING SPEC SURFACES)
+foreach(document IN LISTS AGENTCAD_PRODUCT_DOCUMENTS)
+  install(FILES "docs/${document}.md" DESTINATION share/agent-3d-cad)
+  install(FILES "docs/${document}.md" DESTINATION share/agent-3d-cad/skills/native-cad)
+endforeach()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/skills/native-cad/SKILL.md")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/skills/native-cad/SKILL.md" AGENTCAD_SKILL_TEXT)
 string(REGEX MATCHALL "[A-Z][A-Z_0-9]+[.]md" AGENTCAD_SKILL_REFERENCES "${AGENTCAD_SKILL_TEXT}")
 list(REMOVE_DUPLICATES AGENTCAD_SKILL_REFERENCES)
 foreach(reference IN LISTS AGENTCAD_SKILL_REFERENCES)
-  install(FILES "docs/${reference}" DESTINATION share/agent-3d-cad/skills/native-cad)
+  string(REGEX REPLACE "[.]md$" "" document "${reference}")
+  if(NOT document IN_LIST AGENTCAD_PRODUCT_DOCUMENTS AND NOT reference STREQUAL "HANDOFF.md")
+    message(FATAL_ERROR "Skill reference is missing from bundled product documents: ${reference}")
+  endif()
 endforeach()
+# These paths preserve DEPENDENCIES.md's source-relative Markdown link in both
+# layouts. make-plugin copies the complete skills tree, including this sibling.
+install(FILES cmake/dependencies/OCCT-HLR-PATCH.md DESTINATION share/cmake/dependencies)
+install(FILES cmake/dependencies/OCCT-HLR-PATCH.md DESTINATION share/agent-3d-cad/skills/cmake/dependencies)
+execute_process(COMMAND git rev-parse HEAD WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  OUTPUT_VARIABLE AGENTCAD_DOC_SOURCE_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+execute_process(COMMAND git remote get-url origin WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+  OUTPUT_VARIABLE AGENTCAD_DOC_SOURCE_ORIGIN OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+set(AGENTCAD_DOC_SOURCE_NOTE "The repository implementation ledger is not included in this native package. The bundled product guides describe its contracts; provenance.json inventories their exact bytes. This reference does not establish current host acceptance or the latest repository state.")
+if(AGENTCAD_DOC_SOURCE_ORIGIN MATCHES "^(https://github.com/|git@github.com:)cfaulkingham/agent-3d-cad([.]git)?$"
+    AND AGENTCAD_DOC_SOURCE_COMMIT MATCHES "^[0-9a-f]+$")
+  string(APPEND AGENTCAD_DOC_SOURCE_NOTE "\n\n[Implementation ledger at configure-time source commit ${AGENTCAD_DOC_SOURCE_COMMIT}](https://github.com/cfaulkingham/agent-3d-cad/blob/${AGENTCAD_DOC_SOURCE_COMMIT}/docs/HANDOFF.md). That commit may require publication before the link is accessible. Local uncommitted changes are represented only by the bundled file inventory, not by this link.")
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/package-HANDOFF.md" "# Repository implementation ledger reference\n\n${AGENTCAD_DOC_SOURCE_NOTE}\n")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/package-HANDOFF.md" DESTINATION share/agent-3d-cad RENAME HANDOFF.md)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/package-HANDOFF.md" DESTINATION share/agent-3d-cad/skills/native-cad RENAME HANDOFF.md)
 install(FILES LICENSE NOTICE packaging/THIRD_PARTY.md DESTINATION share/agent-3d-cad/notices)
 configure_file(cmake/InstallBundle.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle.cmake" @ONLY)
 file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundle-$<CONFIG>.cmake"
