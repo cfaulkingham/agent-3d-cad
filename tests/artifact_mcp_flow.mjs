@@ -57,7 +57,14 @@ try{
  const step=await tool('cad_export',{document_id:'Source',revision:1,format:'step'});
  const stepReviewed=await tool('cad_artifact',{action:'review',path:step.path,format:'step',units:'file',expected_sha256:hash(readFileSync(step.path))});
  await tool('cad_artifact',{action:'verify',review_path:stepReviewed.path,expected_sha256:stepReviewed.sha256});await tool('cad_artifact_show',{review_path:stepReviewed.path,expected_sha256:stepReviewed.sha256,view_id:'review'});await ready();
- check(controller.value.payload.summary.representation==='exact_brep_import'&&controller.value.payload.metadata.exact_summary.volume_mm3===6000,'STEP exact work stays in bounded kernel worker and reaches read-only viewer');
+ const stepExact=controller.value.payload.metadata.exact_summary;
+ check(controller.value.payload.summary.representation==='exact_brep_import'&&stepExact.valid&&stepExact.solid_count===1&&stepExact.face_count===6,'STEP exact work stays in bounded kernel worker and reaches read-only viewer');
+ // Adaptive native integration can differ in the last floating-point bit.
+ // Verify analytic geometry within tolerances rather than exact JSON numbers.
+ check(Math.abs(stepExact.volume_mm3-6000)<=1e-6&&Math.abs(stepExact.area_mm2-2200)<=1e-6&&
+  stepExact.center_of_mass_mm.every((v,i)=>Math.abs(v-[5,10,15][i])<=1e-9)&&
+  stepExact.bounds_mm.min.every(v=>Math.abs(v)<=1e-9)&&
+  stepExact.bounds_mm.max.every((v,i)=>Math.abs(v-[10,20,30][i])<=1e-9),'STEP viewer preserves analytic volume, area, centroid and bounds');
  const done=await job(input('nested-stored.3mf','3mf','file'),'artifact_job');check(done.state==='succeeded'&&done.result.read_only&&!done.document_id,'durable artifact job succeeds without fake document_id');
  const bad=await job({...input('triangle.stl','stl','mm'),expected_sha256:'0'.repeat(64)},'artifact_bad');check(bad.state==='failed'&&bad.error.code==='artifact_mismatch','durable source mismatch remains explicit failure');
  // A large valid ASCII STL exercises parser checkpoints in the real worker.

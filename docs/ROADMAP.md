@@ -97,6 +97,19 @@ Acceptance: multiple representative parts can be authored and edited using
 reusable parameters/features; imported components remain reproducible; Windows
 passes the same persistence and geometry contracts.
 
+## Modeling gap phases — authorized 2026-10-10
+
+Implemented native phases add shell/offset/thicken, geometric face references,
+exact derived sketches, solid mirror/split/intersection, captured text/SVG/DXF,
+and extrusion/sweep controls. Separate sheet-metal and freeform-surface phases
+add intent-derived direct bends/blanks and exact rational patches/trims/shells.
+See [MODELING_GAP.md](MODELING_GAP.md) for supported scope and remaining gaps.
+
+Acceptance requires the six dedicated native suites, combined cache/component
+and transactional regressions, independent live JSON Schema validation and
+bounded discovery with unchanged validation. HANDOFF records actual evidence;
+these phases do not establish cross-platform or two-host release acceptance.
+
 ## M4 — integrated create–view–select–edit experience (authorized 2026-10-06)
 
 - Embedded MCP App resource and host bridge; no end-user JS tooling or network.

@@ -3,11 +3,12 @@
 Implemented contracts for the native preview. Runtime discovery (`tools` or MCP
 `tools/list`) publishes input and output JSON Schemas. Model definitions live in
 `model_definitions()`; service contracts live in `tool_definitions()`. Each
-published schema is standalone: its `$defs` contains exactly the definitions its
-`#/$defs/<name>` references reach, transitively, and is omitted when it has none.
-Lossless sharing, private alias names and inlining keep discovery compact while
-retaining every constraint. Resolve the published references rather than assuming
-private definition names. The MCP server builds this catalog once per process.
+published Draft 2020-12 schema is standalone: its `$defs` contains exactly the
+definitions its local JSON pointer or `$anchor` references reach, transitively,
+and is omitted when it has none. Lossless sharing, private aliases, inlining and
+short local anchors keep discovery compact while retaining every constraint.
+Resolve the published references rather than assuming private definition names
+or pointer syntax. The MCP server builds this catalog once per process.
 
 Plugin startup: `agent-3d-cad serve --default-workspace` uses a persistent
 Documents/Agent CAD folder outside the plugin installation. Adding
@@ -44,18 +45,22 @@ A `request_id` on a document tool is stored in
 a receipt, not used as a file name, so it is not restricted either.
 A document has at most 128 finite numeric parameters and 256 ordered features.
 Dependencies name earlier features; IDs survive parameter edits. Every feature
-is validated, including branches outside `output`. The output must be solid.
-An intermediate numeric sketch is validated as a planar face, not as a solid.
+is validated, including branches outside `output`. Output is solid material or
+an explicit surface feature. Sketches remain intermediate planar regions.
+Surface patches and shells report zero material volume until `surface_solid`
+or `thicken` creates a valid solid; see [SURFACES.md](SURFACES.md).
 
 Optional `components` records up to 64 captured source revisions, embedded model
 snapshots and SHA-256 checksums, scalar bindings, and feature/parameter identity
 maps. Their materialized dependencies are ordinary local editable features.
 Snapshots have at most four provenance levels and count toward the 1 MiB document
-metadata limit; embedded `import_step.content` bytes are excluded. Rebuilding a consumer needs no source document. See [COMPONENTS.md](COMPONENTS.md).
+metadata limit; embedded STEP, SVG/DXF source and font bytes have separate
+budgets. Rebuilding a consumer needs no source document. See [COMPONENTS.md](COMPONENTS.md).
 
 A scalar is a finite number within ±1,000,000, a parameter reference, or a bounded
 arithmetic tree. Dimensions use mm; directions are dimensionless; rotation uses
-degrees; selection angular tolerance uses radians. Numeric literals and parameter
+degrees; selection angular tolerance uses radians and face-area predicates use
+`mm2`. Numeric literals and parameter
 references take their argument's unit. Explicit expressions must declare the
 matching unit; no strings, scripts or implicit conversion are evaluated.
 
@@ -82,8 +87,23 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `chamfer` | `input`, `distance`, `edges` | Symmetric chamfer; same edge selector contract as fillet |
 | `shell` | `input`, signed `thickness`, `faces` | One solid; explicit oriented geometric face selectors remove openings; `faces:[]` makes a sealed cavity; optional `join: arc|intersection` |
 | `offset` | `input`, signed `distance` | Independent parallel offset of each source solid; optional `join: arc|intersection` |
-| `thicken` | `input`, signed `thickness` | Planar sketch regions or explicit selected connected open faces of a solid; `faces` required for solid inputs; optional join |
-| `sketch` | `workplane`, `profile` | Numeric profile; no constraint solver |
+| `thicken` | `input`, signed `thickness` | Sketch regions, an open surface patch/shell, or selected connected open solid faces; `faces` required for solids; optional join |
+| `sketch` | `workplane`, `profile` | Numeric or captured text/SVG/DXF profile; no constraint solver |
+| `sketch_cut`, `sketch_fuse`, `sketch_intersection` | `left`, `right` | Exact coplanar planar regions, with holes retained |
+| `sketch_offset` | `input`, signed `distance` | Optional `join: arc|intersection` |
+| `sketch_fillet`, `sketch_chamfer` | `input`, `radius` or `distance`, `vertices` | All eligible corners or an expected-count geometric point selector |
+| `sketch_transform`, `sketch_instance` | `input` | Optional `translation`, `rotation` |
+| `sketch_mirror`, `mirror` | `input`, `plane` | Exact sketch or solid reflection in an explicit workplane |
+| `sketch_face` | `input`, `faces` | Selected coplanar solid faces as a sketch |
+| `sketch_projection` | `input`, `faces`, `workplane` | Exact orthogonal projection of planar solid-face boundaries |
+| `split` | `input`, `plane`, `keep` | Solid halfspace split; `keep: both|top|bottom`, both sides must contain material |
+| `surface_bezier` | `control_points` | World-space rectangular pole grid; optional rational `weights` |
+| `surface_bspline` | `control_points`, `degree_u`, `degree_v`, `knots_u`, `knots_v`, `multiplicities_u`, `multiplicities_v` | Nonperiodic exact patch; optional rational weights |
+| `surface_trim` | `input`, `u_range`, `v_range` | Exact rectangular UV trim of a patch |
+| `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |
+| `surface_solid` | `input` | Closed shell materialization; optional explicit `reverse` |
+| `sheet_metal` | `input`, `thickness`, `k_factor`, `flanges` | One planar sketch region with holes; exact signed cylindrical bends and direct base-edge flanges |
+| `sheet_unfold` | `input` | Developed solid blank from unchanged sheet-metal intent |
 | `extrude` | `input`, either `distance` or `until` + `target` | Signed travel; optional `direction`, `both`, `taper_deg`; first/last exact target termination excludes distance/both/taper |
 | `revolve` | `input`, `axis`, `angle_deg` | Sketch; angle in (0,360] |
 | `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
@@ -112,6 +132,9 @@ area expressions declare `mm2`. [RICHER_MODELING.md](RICHER_MODELING.md) defines
 extent, taper, path-station and sweep frame controls. Summary area/volume use
 adaptive integration of the exact native surfaces, including rational swept
 surfaces; triangulated volume is not substituted.
+[SKETCH_OPERATIONS.md](SKETCH_OPERATIONS.md),
+[AUTHORING_IMPORTS.md](AUTHORING_IMPORTS.md), [SHEET_METAL.md](SHEET_METAL.md)
+and [SURFACES.md](SURFACES.md) define the additional bounds and explicit limits.
 
 Circular patterns rotate each copy by `index * angle_deg` around the supplied
 world axis. The signed step must have magnitude at least 0.00001 degrees, and
@@ -287,8 +310,10 @@ metadata remains resolvable after restart; resolving a pick requires current HEA
 to still equal its revision. Metadata of superseded revisions may be deleted by
 live-view retention (see LIVE_VIEWER.md); such picks are stale either way. Draft
 picks, missing evaluations and identity
-mismatches fail explicitly. Geometry selectors can be suggested for unique edges;
-faces return measurements but have no face-based editing operation yet.
+mismatches fail explicitly. Unique source geometry may receive a suggested edge
+or face selector; ambiguous rules fail explicitly. Face selectors support shell
+openings, thickening patches, planar face reuse and projection. Assembly picks
+remain occurrence-qualified inspection references; edit their source features.
 
 ## STEP diagnosis and explicit extraction
 
@@ -319,6 +344,8 @@ JSON-safe integers. See runtime schemas for exact closed field definitions.
 |---|---|---|
 | `cad_create` | `model`, optional `request_id` | Committed record + summary, revision 1 |
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
+| `cad_capture_sketch` | No document ID; `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions and optional source hash | Worker-validated portable text/SVG/DXF sketch, captured bytes/hash and contour/segment counts |
+| `cad_import_sketch` | `expected_revision`, `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions; optional source hash and request ID | Atomic appended sketch, compact committed/source identity and existing output summary; retrieve editable bytes with `cad_read` |
 | `cad_apply` | `expected_revision`, `operations`, optional `request_id` | New committed record + summary |
 | `cad_restore` | `expected_revision`, `source_revision`, optional `request_id` | Historical intent rebuilt as a new revision |
 | `cad_inspect_step` | No `document_id`; `path`, optional `expected_sha256` | Source-qualified per-solid validity, meshability, bounds and BRep diagnostics; no document creation |
@@ -503,6 +530,10 @@ solid/face/edge counts. `cad_query.kind` defaults `summary`; `topology` returns
 face/edge geometric descriptors; `mesh` includes topology and tessellation from
 the **same** evaluated shape. `feature_id` scopes the shape (defaults to output)
 and is always included in query results, including summaries.
+Explicit surface summaries use area-weighted centers, `solid_count: 0` and
+`volume_mm3: 0`. Direct formed/flat sheet features additionally report
+`sheet_metal` with caller K-factor, developed bend lines/allowances and distinct
+formed/flat modeled volumes. Reports do not assume physical volume preservation.
 
 Documents with component metadata also report `components`, with each tracked
 `id`, pinned `source`, snapshot `sha256`, `modified`, and `changes` listing local
@@ -532,8 +563,10 @@ follows the corresponding face descriptor.
 The mesh and edge mappings share the topology identity. The hard bounds are 10,000
 combined faces/edges, 200,000 vertices, 200,000 triangles and 200,000 edge points.
 Persisted evaluation metadata, worker results and artifacts are each bounded to
-64 MiB. Embedded STEP source bytes in model-bearing internal payloads are
-excluded from JSON byte budgets; model metadata remains limited to 1 MiB.
+64 MiB. Embedded STEP and bounded captured sketch asset bytes in model-bearing
+internal payloads are excluded from metadata byte budgets; ordinary model
+metadata remains limited to 1 MiB. SVG/DXF sources are bounded to 4 MiB each;
+decoded fonts to 8 MiB. Captured sources are hashed and never executed.
 Transport request envelopes remain limited to 1 MiB. Exceeding a bound is explicit
 `limit_exceeded`, not truncation of geometry.
 

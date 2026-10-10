@@ -259,6 +259,25 @@ must have the same tool contracts and alias names. JSON headers are found in the
 local pinned dependency or CMake FetchContent directories; use
 `--json-include /path/to/include` for another nlohmann JSON 3.12.0 installation.
 
+For union/schema normalization changes, run
+`python tests/discovery_hoist_check.py --source .` in that environment. It compiles
+exact production statements privately and compares independent Draft 2020-12
+acceptance, including closed field sets, cardinality, mandatory discriminators,
+reference/literal/annotation safeguards and schema-keyword property names.
+For the final local-anchor pass, run
+`python tests/discovery_anchor_check.py --source . --catalog before-tools.json`.
+It compiles the exact production pass and verifies deterministic, reversible
+reference shortening against independent Draft 2020-12 acceptance, including
+recursive graphs, pointer suffixes, reference siblings, scopes and literal data.
+The optional catalog is the native catalog immediately before anchoring; use
+that pre-anchor catalog as the final input to the inlining check above.
+`python tests/modeling_gap_schema_tests.py /absolute/path/to/agent-3d-cad` validates
+actual combined modeling calls, saved records, sheet reports, surface outputs and
+live face-selection context.
+`python tests/authoring_schema_tests.py /absolute/path/to/agent-3d-cad` exercises
+captured sources and jobs. These remain
+developer tests; the native product has no Python dependency.
+
 External-artifact acceptance uses `tests/artifact_mcp_sdk_smoke.py` with the same
 official SDK environment. After the `artifact_mcp_flow` CTest produces
 `build/artifact-flow-evidence.json`, run

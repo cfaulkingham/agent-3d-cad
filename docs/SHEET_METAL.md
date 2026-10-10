@@ -65,7 +65,10 @@ The resulting blank is an actual exact solid of the same nominal thickness,
 with original base holes retained. Overlapping developed regions fail. It can
 be saved as output, assembled and exported independently as STEP/STL/3MF; the
 normal native top-view drawing workflow produces its exact outline and holes
-as DXF. Imported or arbitrarily modified solids cannot be unfolded by this
+as DXF when the blank lies in XY. Drawing frames use fixed world directions;
+an arbitrarily oriented blank must be aligned with the chosen orthographic
+frame to retain cutting dimensions. There is no automatic flatten-to-XY drawing
+alignment. Imported or arbitrarily modified solids cannot be unfolded by this
 feature. It derives the blank from captured bend intent, rather than guessing
 radii, neutral axes or a fabrication history from geometry.
 

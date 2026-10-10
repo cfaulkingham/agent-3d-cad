@@ -1130,10 +1130,11 @@ Json live_tool_definitions() {
   auto saved_sequence=sequence;saved_sequence["properties"]["source"]=sequence_source_schema;saved_sequence["required"].push_back("source");
   const Json sequences={{"type","array"},{"maxItems",16},{"items",saved_sequence}};
   const Json playback=nullable(object({{"name",preset_name},{"time_s",{{"type","number"},{"minimum",0},{"maximum",3600}}},{"speed",{{"type","number"},{"minimum",0.1},{"maximum",4}}},{"loop",{{"type","boolean"}}},{"source",sequence_source_schema},{"state",{{"enum",{"unapplied","pending","displayed"}}}}}, {"name","time_s","speed","loop","source","state"}));
+  const Json edit_selector={{"oneOf",Json::array({Json{{"$ref","#/$defs/selector"}},Json{{"$ref","#/$defs/face_selector"}}})}};
   Json context = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},{"evaluation_id",nullable(id)},{"feature_id",nullable(id)},
     {"head_revision",nullable(revision)},{"stale",{{"type","boolean"}}},{"selection",selection},
     {"resolved_selection",object({{"reference",pick},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},
-      {"selector",{{"$ref","#/$defs/selector"}}}}, {"reference","geometry"})},
+      {"selector",edit_selector}}, {"reference","geometry"})},
     {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},{"updated_at_unix_ms",{{"type","integer"}}},
     {"draft",{{"type","boolean"}}},{"preview_operations",operations}},
     {"view_id","document_id","revision","evaluation_id","feature_id","head_revision","stale","selection","hidden_part_ids","presentation","appearance","presets","annotations"});
@@ -1146,6 +1147,7 @@ Json live_tool_definitions() {
     {"center_of_mass_mm",point},{"bounds_mm",object({{"min",point},{"max",point}},{"min","max"})},
     {"solid_count",{{"type","integer"},{"minimum",0}}},{"face_count",{{"type","integer"},{"minimum",0}}},{"edge_count",{{"type","integer"},{"minimum",0}}},
     {"assembly",{{"$ref","#/$defs/assembly_summary"}}},
+    {"sheet_metal",{{"$ref","#/$defs/sheet_metal_report"}}},
     {"components",{{"type","array"},{"maxItems",64},{"items",{{"$ref","#/$defs/component_status"}}}}}},
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
   Json sync = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},

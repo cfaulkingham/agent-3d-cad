@@ -1,0 +1,85 @@
+{
+  "document_id": "freeform_panel",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "crown": 4
+    },
+    "features": [
+      {
+        "id": "patch",
+        "type": "surface_bezier",
+        "control_points": [
+          [
+            [
+              0,
+              0,
+              0
+            ],
+            [
+              0,
+              10,
+              0
+            ],
+            [
+              0,
+              20,
+              0
+            ]
+          ],
+          [
+            [
+              10,
+              0,
+              0
+            ],
+            [
+              10,
+              10,
+              {
+                "parameter": "crown"
+              }
+            ],
+            [
+              10,
+              20,
+              0
+            ]
+          ],
+          [
+            [
+              20,
+              0,
+              0
+            ],
+            [
+              20,
+              10,
+              0
+            ],
+            [
+              20,
+              20,
+              0
+            ]
+          ]
+        ]
+      },
+      {
+        "id": "trimmed",
+        "type": "surface_trim",
+        "input": "patch",
+        "u_range": [
+          0.1,
+          0.9
+        ],
+        "v_range": [
+          0.1,
+          0.9
+        ]
+      }
+    ],
+    "output": "trimmed"
+  }
+}

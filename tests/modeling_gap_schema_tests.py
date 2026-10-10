@@ -58,10 +58,16 @@ def rejected(tool, kind, value):
 def dereference(schema, root):
     while "$ref" in schema:
         reference = schema["$ref"]
-        check(reference.startswith("#/"), "Discovery uses local JSON pointers")
-        schema = root
-        for token in reference[2:].split("/"):
-            schema = schema[token.replace("~1", "/").replace("~0", "~")]
+        check(reference.startswith("#"), "Discovery references stay local")
+        if reference.startswith("#/"):
+            schema = root
+            for token in reference[2:].split("/"):
+                schema = schema[token.replace("~1", "/").replace("~0", "~")]
+        else:
+            matches = [body for body in root.get("$defs", {}).values()
+                       if isinstance(body, dict) and body.get("$anchor") == reference[1:]]
+            check(len(matches) == 1, "Discovery anchor resolves uniquely")
+            schema = matches[0]
     return schema
 
 

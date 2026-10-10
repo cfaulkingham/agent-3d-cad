@@ -1,0 +1,81 @@
+{
+  "document_id": "sheet_bracket",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "thickness": 2,
+      "wall": 10,
+      "k": 0.5
+    },
+    "features": [
+      {
+        "id": "profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "rectangle",
+          "width": 20,
+          "height": 30
+        }
+      },
+      {
+        "id": "formed",
+        "type": "sheet_metal",
+        "input": "profile",
+        "thickness": {
+          "parameter": "thickness"
+        },
+        "k_factor": {
+          "parameter": "k"
+        },
+        "flanges": [
+          {
+            "id": "wall",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  10,
+                  30,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 3,
+            "angle_deg": 90,
+            "length": {
+              "parameter": "wall"
+            }
+          }
+        ]
+      },
+      {
+        "id": "flat",
+        "type": "sheet_unfold",
+        "input": "formed"
+      }
+    ],
+    "output": "formed"
+  }
+}

@@ -118,15 +118,16 @@ void session_contract(Service& service, bool apps) {
 }
 void schema_pruning_contract() {
   const Json missing = {{"$ref", "#/$defs/missing"}};
-  for (const auto* keyword : {"const", "enum", "default"}) {
-    const Json literal = std::string(keyword) == "enum" ? Json::array({missing}) : missing;
+  for (const auto* keyword : {"const", "enum", "default", "examples"}) {
+    const bool array_literal=std::string(keyword)=="enum"||std::string(keyword)=="examples";
+    const Json literal = array_literal ? Json::array({missing}) : missing;
     Json schema = {{"type", "object"}, {keyword, literal},
       {"$defs", {{"unused", {{"type", "string"}}}}}};
     auto expected = schema; expected.erase("$defs");
     prune_definitions(schema);
     require(schema == expected, std::string(keyword) + " literal references neither resolve nor add definitions");
     const Json present = {{"$ref", "#/$defs/literal_only"}};
-    schema = {{"type", "object"}, {keyword, std::string(keyword) == "enum" ? Json::array({present}) : present},
+    schema = {{"type", "object"}, {keyword, array_literal ? Json::array({present}) : present},
       {"$defs", {{"literal_only", {{"type", "string"}, {"minLength", 1}}}}}};
     expected = schema; expected.erase("$defs");
     prune_definitions(schema);
@@ -139,7 +140,7 @@ void schema_pruning_contract() {
   for (const auto* map : {"properties", "patternProperties", "dependentSchemas"}) {
     Json schema = {{"type", "object"}, {map, {
       {"const", {{"$ref", "#/$defs/first"}}}, {"enum", {{"$ref", "#/$defs/second"}}},
-      {"default", {{"$ref", "#/$defs/leaf"}}}}}, {"$defs", definitions}, {"default", missing}};
+      {"default", {{"$ref", "#/$defs/leaf"}}}, {"examples", {{"$ref", "#/$defs/leaf"}}}}}, {"$defs", definitions}, {"default", missing}};
     auto expected = schema; expected["$defs"].erase("unused");
     prune_definitions(schema);
     require(schema == expected, std::string(map) + " keyword-named properties preserve real and transitive references");
@@ -160,16 +161,21 @@ void schema_pruning_contract() {
   prune_definitions(recursive);
   require(recursive == expected, "Recursive real schemas remain closed while nested literal references stay data");
 }
-// Collects "#/$defs/<name>" targets, ignoring the schema's own $defs map.
-void references(const Json& value, std::set<std::string>& names) {
-  if (value.is_array()) for (const auto& item : value) references(item, names);
+// Resolve local pointer and anchor targets, ignoring definitions and literals.
+void references(const Json& value, std::set<std::string>& names,const std::map<std::string,std::string>& anchors) {
+  if (value.is_array()) for (const auto& item : value) references(item, names,anchors);
   if (!value.is_object()) return;
   for (const auto& [key, item] : value.items()) {
     if (key == "$ref") {
       const auto target = item.get<std::string>();
-      require(target.rfind("#/$defs/", 0) == 0, "Schema references stay inside the standalone schema: " + target);
-      names.insert(target.substr(8));
-    } else if (key != "$defs") references(item, names);
+      if(target.rfind("#/$defs/",0)==0)names.insert(target.substr(8,target.find('/',8)-8));
+      else {
+        require(anchors.contains(target),"Schema references resolve a local anchor: "+target);
+        names.insert(anchors.at(target));
+      }
+    } else if(key=="properties"||key=="patternProperties"||key=="dependentSchemas") {
+      for(const auto& child:item.items())references(child.value(),names,anchors);
+    } else if(key!="$defs"&&key!="const"&&key!="enum"&&key!="default"&&key!="examples")references(item,names,anchors);
   }
 }
 void discovery_contract(Service& service) {
@@ -186,16 +192,23 @@ void discovery_contract(Service& service) {
     require(tool.at(key).value("type",std::string{})=="object","MCP discovery schemas explicitly declare object roots");
     const auto& schema = tool.at(key);
     const auto name = tool.at("name").get<std::string>() + "." + key;
+    std::map<std::string,std::string> anchors;
+    const auto definitions = schema.value("$defs", Json::object());
+    for(const auto& entry:definitions.items())if(entry.value().is_object()&&entry.value().contains("$anchor")) {
+      const auto anchor=entry.value().at("$anchor").get<std::string>();
+      require(!anchor.empty()&&anchor.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")==std::string::npos,
+              name+" has a valid local anchor");
+      require(anchors.emplace("#"+anchor,entry.key()).second,name+" has unique local anchors");
+    }
     std::set<std::string> reachable, pending;
-    references(schema, pending);
+    references(schema, pending,anchors);
     while (!pending.empty()) {
       const auto next = *pending.begin(); pending.erase(pending.begin());
       if (!reachable.insert(next).second) continue;
       require(schema.contains("$defs") && schema.at("$defs").contains(next), name + " resolves #/$defs/" + next);
-      references(schema.at("$defs").at(next), pending);
+      references(schema.at("$defs").at(next), pending,anchors);
     }
     std::set<std::string> attached;
-    const auto definitions = schema.value("$defs", Json::object());
     for (const auto& [definition, unused] : definitions.items()) { (void)unused; attached.insert(definition); }
     require(attached == reachable, name + " carries only the definitions it references");
   }

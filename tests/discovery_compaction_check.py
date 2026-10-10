@@ -20,7 +20,7 @@ from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 MAPS = {"$defs", "properties", "patternProperties", "dependentSchemas"}
-LITERALS = {"const", "enum", "default"}
+LITERALS = {"const", "enum", "default", "examples"}
 SCOPES = {"$id", "$anchor", "$dynamicAnchor", "$dynamicRef", "$recursiveAnchor", "$recursiveRef"}
 PUBLIC = {"model", "operation"}
 checks = 0
@@ -143,7 +143,7 @@ def source_fixture(source, compiler, fixture, json_include, build_dirs):
     service = (source / "src/service.cpp").read_text(encoding="utf-8")
     model = (source / "src/model.cpp").read_text(encoding="utf-8")
     start = service.index("      // Final aliases make the cost of every private definition comparable.")
-    block = service[start:service.index("\n    }\n  }\n  return tools;", start)]
+    block = service[start:service.index("\n    }\n    // Final local anchors", start)]
     functions = []
     for name in ("collect_references", "prune_definitions"):
         start = model.index("void " + name + "(")

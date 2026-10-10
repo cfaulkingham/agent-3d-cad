@@ -41,6 +41,8 @@ install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
 install(FILES docs/ANNOTATIONS.md DESTINATION share/agent-3d-cad)
 install(FILES docs/DISTRIBUTION.md docs/DEPENDENCIES.md docs/PROTOCOL.md docs/SPEC.md docs/LIVE_VIEWER.md docs/ARTIFACT_REVIEW.md docs/PRESENTATION.md docs/APPEARANCE.md docs/MEASUREMENTS.md docs/SECTIONS.md docs/DRAWINGS.md docs/ASSEMBLIES.md docs/ROBOT_EXPORT.md docs/MANUFACTURING.md docs/FABRICATION_REVIEW.md docs/GCODE_REVIEW.md docs/PRINTER_HANDOFF.md docs/SLICING.md docs/PURCHASED_PARTS.md docs/COMPONENTS.md docs/DEPENDENCY_CACHE.md docs/COMPOSITION_FABRICATION_REVIEW.md DESTINATION share/agent-3d-cad)
 install(FILES docs/PLAYBACK.md DESTINATION share/agent-3d-cad)
+install(FILES docs/SHELL_OFFSET_THICKEN.md docs/SKETCH_OPERATIONS.md docs/AUTHORING_IMPORTS.md
+  docs/RICHER_MODELING.md docs/SHEET_METAL.md docs/SURFACES.md DESTINATION share/agent-3d-cad)
 # References must resolve beside the installed skill in both desktop packages.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/skills/native-cad/SKILL.md")
 file(READ "${CMAKE_CURRENT_SOURCE_DIR}/skills/native-cad/SKILL.md" AGENTCAD_SKILL_TEXT)

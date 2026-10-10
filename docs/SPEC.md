@@ -21,6 +21,18 @@ make requests in the main host chat. The embedded Quick Edit composer is removed
 agents retrieve the current qualified selection through `cad_context` using the
 retained view ID. Native context contracts and stale-reference checks remain.
 
+Modeling extension (2026-10-10): native shell/offset/thicken, derived planar
+sketch operations, solid mirror/split/intersection, captured text/SVG/DXF and
+controlled extrusions/sweeps are implemented. Separate sheet-metal and surface
+phases add exact direct-edge bends/developed blanks and editable rational
+patches, rectangular UV trims, manifold sewing and explicit solid creation.
+Intentional surface outputs extend the original solid-only output contract;
+they retain zero material volume until solid creation or thickening. Sketches
+remain intermediate regions. Manufacturing and assembly roots require solids.
+These bounded operations do not establish a constraint solver, arbitrary-source
+reconstruction or full build123d API parity. See the current protocol and
+SHEET_METAL.md/SURFACES.md for exact supported scope.
+
 Drawing extension (2026-10-06): the user authorized M5 native engineering
 drawings. `cad_drawing` derives revision-qualified views and geometry-checked
 dimensions from exact solids in isolated workers, exports PDF/SVG sheets and
@@ -311,6 +323,8 @@ M0 bounds documents to 1 MiB of JSON, nesting depth 64, 128 parameters, 256
 features, and 256 operations per edit. The current STEP importer excludes embedded
 STEP source strings from internal document/worker JSON byte budgets; imports
 have no fixed file-size cap and remain subject to worker memory/time budgets.
+Captured SVG/DXF source and font bytes have separate bounded asset budgets and
+raw hashes; their geometry remains native and their source is never executed.
 Transport input envelopes and ordinary metadata retain their byte limits. Input numbers are finite and within
 plus/minus 1,000,000; positive primitive dimensions/radii are at least 0.00001 mm.
 These limits do not bound kernel execution time. M2 must add process deadlines,

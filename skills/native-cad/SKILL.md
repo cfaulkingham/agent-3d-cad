@@ -92,6 +92,47 @@ sections must have a single boundary. `circular_pattern` repeats an input about
 an `axis` with `count` and signed step `angle_deg`; four copies at 90 degrees
 form a full ring. Patterns keep distinct solids; fuse explicitly when needed.
 
+Use `shell` with signed `thickness` and explicit geometric `faces` selectors;
+`faces: []` creates a sealed cavity. `offset` independently offsets source
+solids. `thicken` creates solid material from sketches, open surfaces or selected
+connected solid-face patches. Face selectors require `surface_kind`, source
+`feature_id` and `expected_count`; oriented normals distinguish opposite faces.
+Use a current suggested selector only after resolving the qualified pick. See
+SHELL_OFFSET_THICKEN.md. Never save evaluation-local face/edge numbers.
+
+Derived sketch Booleans, offsets, corner fillets/chamfers, transforms, mirrors
+and planar face reuse/projection preserve exact curves and holes. Solid `mirror`,
+`split` and `intersection` are separate material operations. Split requires
+an explicit workplane and `keep: both|top|bottom`. See SKETCH_OPERATIONS.md.
+
+Capture a local font/SVG/DXF with `cad_import_sketch` and the document's current
+`expected_revision`; it appends a portable sketch and keeps the existing output.
+Then add ordinary extrusion/cut/fuse features and choose the intended output.
+`cad_capture_sketch` is a read-only helper when a returned portable feature is
+useful. Captured bytes/hashes remain in the model; rebuilding needs no original
+path or system font. Unsupported source semantics fail. See AUTHORING_IMPORTS.md.
+
+Extrusion accepts signed `distance`, optional `direction`, `both` and `taper_deg`,
+or `until: first|last` with an earlier solid `target`. Target mode excludes
+distance/both/taper. Sweeps accept one input or ordered varying `sections`,
+orientation/binormal/guide controls and transition styles. Section planes must
+occupy distinct ordered path stations, including endpoints. See RICHER_MODELING.md.
+
+`sheet_metal` uses one planar sketch, explicit thickness/K-factor and named
+direct base-edge flanges with signed angles, inside radii and straight lengths.
+`sheet_unfold` derives a solid blank from preserved bend intent. Inspect
+`summary.sheet_metal`; K-factor is an explicit engineering input, and non-midplane
+values give different formed/flat modeled volumes. Chained bends, hems and
+generated relief are unsupported. See SHEET_METAL.md.
+
+Use `surface_bezier`/`surface_bspline` for exact world-space rational patches,
+`surface_trim` for rectangular UV trimming, and `surface_shell` for connected
+manifold sewing with an explicit closure claim. Surface outputs have area and
+zero solid volume. `surface_solid` explicitly materializes a closed shell;
+`thicken` requires an open patch. Solid creation is required for assembly or
+manufacturing material. Arbitrary trim wires and curved projection remain
+unsupported. See SURFACES.md.
+
 For an assembly, create source solid features, then an `assembly` feature with
 named `parts`: each part has `id`, earlier solid or assembly `input`, and optional `placement`
 with translation/rotation. Reusing an input creates distinct instances that

@@ -306,7 +306,7 @@ Json tool_definitions() {
   for (auto& definition : live_tool_definitions()) tools.push_back(std::move(definition));
   // Each standalone schema keeps only the model definitions it references.
   for(auto& definition:tools)for(const auto* key:{"inputSchema","outputSchema"}) {
-    auto& schema=definition[key];prune_definitions(schema);
+    auto& schema=definition[key];
     // Common object constraints apply once around a union. A closed branch
     // that does not declare a property already forbids it, so it need not
     // repeat the constraint used by the other branches. Empty declarations
@@ -317,7 +317,7 @@ Json tool_definitions() {
         const auto& name=item.key();
         if((name=="$defs"||name=="properties"||name=="patternProperties"||name=="dependentSchemas")&&item.value().is_object())
           for(auto& child:item.value().items())apply(child.value());
-        else if(name!="const"&&name!="enum"&&name!="default")apply(item.value());
+        else if(name!="const"&&name!="enum"&&name!="default"&&name!="examples")apply(item.value());
       }
     };
     std::function<void(const Json&)> hoist_scope=[&](const Json& node) {
@@ -327,11 +327,74 @@ Json tool_definitions() {
       schema_children(node,hoist_scope);
     };
     hoist_scope(schema);
+    // References inside nested resources resolve against their own $id.
+    // Keep scoped contracts intact, including their local definition closures.
+    if(hoist_scoped)continue;
+    prune_definitions(schema);
     std::function<void(Json&)> hoist=[&](Json& node) {
       if(node.is_array()){for(auto& child:node)hoist(child);return;}
       if(!node.is_object())return;
       schema_children(node,hoist);
+      if(node.contains("required")&&node.at("required").is_array()&&node.at("required").empty())node.erase("required");
+      // A closed finite field set with its full cardinality has exactly the
+      // same mandatory fields as listing every key in required. This retains
+      // property constraints and annotations, including contradictory bounds.
+      if(node.value("additionalProperties",Json())==false&&node.contains("properties")&&node.at("properties").is_object()&&
+         !node.contains("patternProperties")&&node.contains("required")&&node.at("required").is_array()) {
+        std::set<std::string> declared,mandatory;
+        for(const auto& property:node.at("properties").items())declared.insert(property.key());
+        bool strings=true;for(const auto& name:node.at("required")){if(!name.is_string()){strings=false;break;}mandatory.insert(name.get<std::string>());}
+        if(strings&&mandatory==declared) {
+          auto compact=node;compact.erase("required");
+          compact["minProperties"]=std::max(node.value("minProperties",std::size_t{}),declared.size());
+          if(compact.dump().size()<node.dump().size())node=std::move(compact);
+        }
+      }
       if(node.contains("type")&&node.at("type")!="object")return;
+      // Merge only otherwise identical branches whose mandatory string
+      // discriminators cannot overlap. Optional discriminators must remain
+      // separate: absent fields can change oneOf cardinality.
+      for(const auto* union_key:{"oneOf","anyOf"})if(node.contains(union_key)&&node.at(union_key).is_array()) {
+        auto& branches=node[union_key];
+        const auto strings=[](const Json& constraint) {
+          Json values=Json::array();
+          if(constraint.is_object()&&constraint.size()==1) {
+            if(constraint.contains("const")&&constraint.at("const").is_string())values.push_back(constraint.at("const"));
+            else if(constraint.contains("enum")&&constraint.at("enum").is_array()) {
+              for(const auto& value:constraint.at("enum")){if(!value.is_string())return Json::array();values.push_back(value);}
+            }
+          }
+          return values;
+        };
+        const auto mandatory=[&](const Json& branch,const std::string& key) {
+          for(const auto* owner:{static_cast<const Json*>(&node),&branch})if(owner->contains("required")&&owner->at("required").is_array())
+            if(std::find(owner->at("required").begin(),owner->at("required").end(),Json(key))!=owner->at("required").end())return true;
+          return branch.value("additionalProperties",Json())==false&&!branch.contains("patternProperties")&&
+            branch.contains("properties")&&branch.contains("minProperties")&&branch.at("minProperties").is_number_unsigned()&&
+            branch.at("minProperties").get<std::size_t>()>=branch.at("properties").size();
+        };
+        for(std::size_t i=0;i<branches.size();++i) {
+          auto& first=branches[i];
+          if(!first.is_object()||!first.contains("properties")||!first.at("properties").is_object()||
+             (node.value("type",Json())!="object"&&first.value("type",Json())!="object"))continue;
+          for(const auto* discriminator:{"type","op","action","operation","kind"}) {
+            if(!first.at("properties").contains(discriminator)||!mandatory(first,discriminator))continue;
+            auto values=strings(first.at("properties").at(discriminator));if(values.empty())continue;
+            auto base=first;base["properties"].erase(discriminator);
+            for(std::size_t j=i+1;j<branches.size();) {
+              const auto& other=branches[j];
+              if(!other.is_object()||!other.contains("properties")||!other.at("properties").is_object()||
+                 !other.at("properties").contains(discriminator)||!mandatory(other,discriminator)){++j;continue;}
+              const auto more=strings(other.at("properties").at(discriminator));bool disjoint=!more.empty();
+              for(const auto& value:more)if(std::find(values.begin(),values.end(),value)!=values.end())disjoint=false;
+              auto comparable=other;comparable["properties"].erase(discriminator);
+              if(!disjoint||comparable!=base){++j;continue;}
+              for(const auto& value:more)values.push_back(value);
+              first["properties"][discriminator]={{"enum",values}};branches.erase(branches.begin()+j);
+            }
+          }
+        }
+      }
       if(node.contains("unevaluatedProperties"))return;
       for(const auto* union_key:{"oneOf","anyOf"}) {
         if(!node.contains(union_key)||!node.at(union_key).is_array()||node.at(union_key).size()<2)continue;
@@ -400,7 +463,7 @@ Json tool_definitions() {
     std::function<void(const Json&)> count=[&](const Json& value) {
       if(eligible(value)){auto& item=repeated[value.dump()];item.first=value;++item.second;}
       if(value.is_array())for(const auto& child:value)count(child);
-      else if(value.is_object())for(const auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")count(item.value());
+      else if(value.is_object())schema_children(value,count);
     };
     count(schema);std::map<std::string,std::string> names;Json shared=Json::object();
     const auto alias=[](std::size_t ordinal) {
@@ -421,7 +484,7 @@ Json tool_definitions() {
     std::function<void(Json&,bool)> replace=[&](Json& value,bool root) {
       if(!root&&eligible(value))if(const auto found=names.find(value.dump());found!=names.end()){value={{"$ref","#/$defs/"+found->second}};return;}
       if(value.is_array())for(auto& child:value)replace(child,false);
-      else if(value.is_object())for(auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")replace(item.value(),false);
+      else if(value.is_object())schema_children(value,[&](Json& child){replace(child,false);});
     };
     replace(schema,true);
     for(auto& item:shared.items()){replace(item.value(),true);schema["$defs"][item.key()]=std::move(item.value());}
@@ -439,7 +502,7 @@ Json tool_definitions() {
             const auto& ref=value.at("$ref").get_ref<const std::string&>();
             if(ref.starts_with("#/$defs/"))++references[ref.substr(8)];
           }
-          for(const auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")count_references(item.value());
+          schema_children(value,count_references);
         }
       };
       count_references(schema);
@@ -457,7 +520,7 @@ Json tool_definitions() {
       std::function<void(Json&)> inline_reference=[&](Json& value) {
         if(value==reference){value=body;return;}
         if(value.is_array())for(auto& child:value)inline_reference(child);
-        else if(value.is_object())for(auto& item:value.items())if(item.key()!="const"&&item.key()!="enum"&&item.key()!="default")inline_reference(item.value());
+        else if(value.is_object())schema_children(value,inline_reference);
       };
       inline_reference(schema);prune_definitions(schema);
     }
@@ -480,7 +543,7 @@ Json tool_definitions() {
             const auto& key=item.key();
             if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
               for(auto& child:item.value().items())rewrite(child.value());
-            else if(key!="const"&&key!="enum"&&key!="default")rewrite(item.value());
+            else if(key!="const"&&key!="enum"&&key!="default"&&key!="examples")rewrite(item.value());
           }
         }
       };
@@ -501,7 +564,7 @@ Json tool_definitions() {
               const auto& key=item.key();
               if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
                 for(const auto& child:item.value().items())visit(child.value(),inspect);
-              else if(key!="const"&&key!="enum"&&key!="default")visit(item.value(),inspect);
+              else if(key!="const"&&key!="enum"&&key!="default"&&key!="examples")visit(item.value(),inspect);
             }
           }
         };
@@ -554,10 +617,67 @@ Json tool_definitions() {
             const auto& key=item.key();
             if((key=="$defs"||key=="properties"||key=="patternProperties"||key=="dependentSchemas")&&item.value().is_object())
               for(auto& child:item.value().items())inline_reference(child.value());
-            else if(key!="const"&&key!="enum"&&key!="default")inline_reference(item.value());
+            else if(key!="const"&&key!="enum"&&key!="default"&&key!="examples")inline_reference(item.value());
           }
         };
         inline_reference(schema);prune_definitions(schema);
+      }
+    }
+    // Final local anchors shorten profitable whole-definition references.
+    // The definition entries and every assertion stay in place. Draft 2020-12
+    // anchors name the exact same targets as their longer JSON pointers.
+    // Existing resource scopes, public roots and pointer suffixes stay intact.
+    {
+      const auto anchor_children=[](auto& node,const auto& apply) {
+        for(auto& item:node.items()) {
+          const auto& name=item.key();
+          if((name=="$defs"||name=="properties"||name=="patternProperties"||name=="dependentSchemas")&&item.value().is_object())
+            for(auto& child:item.value().items())apply(child.value());
+          else if(name!="const"&&name!="enum"&&name!="default"&&name!="examples")apply(item.value());
+        }
+      };
+      bool anchor_scoped=false;std::map<std::string,std::size_t> anchor_references;
+      std::function<void(const Json&)> anchor_scan=[&](const Json& node) {
+        if(node.is_array()){for(const auto& child:node)anchor_scan(child);return;}
+        if(!node.is_object())return;
+        for(const auto* key:{"$id","$anchor","$dynamicAnchor","$dynamicRef","$recursiveAnchor","$recursiveRef"})if(node.contains(key))anchor_scoped=true;
+        if(node.contains("$ref")&&node.at("$ref").is_string()) {
+          const auto& ref=node.at("$ref").get_ref<const std::string&>();
+          if(ref.starts_with("#/$defs/")&&ref.find('/',8)==std::string::npos)++anchor_references[ref.substr(8)];
+        }
+        anchor_children(node,anchor_scan);
+      };
+      anchor_scan(schema);
+      if(!anchor_scoped&&schema.contains("$defs")) {
+        std::vector<std::string> candidates;
+        for(const auto& entry:schema.at("$defs").items())if(entry.key()!="model"&&entry.key()!="operation"&&
+          entry.value().is_object()&&anchor_references[entry.key()])candidates.push_back(entry.key());
+        std::sort(candidates.begin(),candidates.end(),[&](const auto& left,const auto& right) {
+          if(anchor_references[left]!=anchor_references[right])return anchor_references[left]>anchor_references[right];
+          return left<right;
+        });
+        std::map<std::string,std::string> anchors;
+        for(const auto& name:candidates) {
+          constexpr std::string_view alphabet="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+          auto ordinal=anchors.size();std::string anchor;
+          do{anchor.insert(anchor.begin(),alphabet[ordinal%alphabet.size()]);ordinal/=alphabet.size();}while(ordinal);
+          const auto old_bytes=Json{{"$ref","#/$defs/"+name}}.dump().size();
+          const auto new_bytes=Json{{"$ref","#"+anchor}}.dump().size();
+          auto& body=schema["$defs"][name];auto anchored=body;anchored["$anchor"]=anchor;
+          if(old_bytes>new_bytes&&anchor_references[name]*(old_bytes-new_bytes)>anchored.dump().size()-body.dump().size()) {
+            anchors.emplace(name,anchor);body=std::move(anchored);
+          }
+        }
+        std::function<void(Json&)> anchor_rewrite=[&](Json& node) {
+          if(node.is_array()){for(auto& child:node)anchor_rewrite(child);return;}
+          if(!node.is_object())return;
+          if(node.contains("$ref")&&node.at("$ref").is_string()) {
+            const auto& ref=node.at("$ref").get_ref<const std::string&>();
+            if(ref.starts_with("#/$defs/"))if(const auto found=anchors.find(ref.substr(8));found!=anchors.end())node["$ref"]="#"+found->second;
+          }
+          anchor_children(node,anchor_rewrite);
+        };
+        anchor_rewrite(schema);
       }
     }
   }

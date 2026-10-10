@@ -61,8 +61,9 @@ at most 256 source faces in total. `tolerance` is an explicit numeric sewing
 tolerance from 1e-9 to 1e-3 mm. Sewing must retain every source face, preserve area
 within the geometry tolerance and yield one connected manifold shell. Disconnected
 inputs, repeated source faces, nonmanifold edges, removed faces and interference
-fail. Native free-edge cutting and nonmanifold sewing are disabled; no shape
-fixing, mesh substitution or automatic gap repair is used.
+fail. Native sewing matches and merges boundaries within the supplied tolerance.
+Free-edge cutting and nonmanifold sewing are disabled; no extra shape fixing,
+gap filling, tolerance escalation or mesh substitution is used.
 
 `closed` is a required claim about the result. `true` requires closed manifold
 boundaries; `false` requires an open shell. A mismatch fails. A valid closed shell
@@ -84,6 +85,12 @@ along the oriented surface normal; negative thickness extends to the other side.
 The result must be a valid closed solid. It is never enough for an offset to return
 an open shell or intersecting material. Closed shell inputs must first select an
 open patch or use `surface_solid`.
+Native offset support depends on the patch. A tested trimmed biquadratic Bezier
+crown remains a valid exact surface but its thickening produces native
+`UnorientableShape` diagnostics and fails explicitly. Planar and rational
+quarter-cylinder thickening have passing analytic regressions. The example
+`examples/freeform-panel.create.json` therefore keeps its editable trimmed
+surface as output; it does not substitute approximate solid geometry.
 
 Surface features support summaries, evaluation-scoped face/edge topology and
 provenance, exact measurements, preview triangulation, orthographic drawings,

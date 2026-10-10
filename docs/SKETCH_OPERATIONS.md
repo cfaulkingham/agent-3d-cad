@@ -26,8 +26,9 @@ All coordinates are model millimeters; direction vectors are dimensionless.
 Scalar fields accept numeric values or existing bounded parameter expressions.
 Sketch offsets and extrusion distances are signed; magnitudes must be at least
 0.00001 mm. Fillet radius and chamfer distance must be positive and at least that
-minimum. These new sketch feature families are intermediates: a model output,
-assembly part, solid mirror or boolean operand must still be solid geometry.
+minimum. Sketch feature families remain intermediates. Solid mirror, Boolean
+operands and assembly parts require solid material. Explicit surface feature
+outputs are described separately in [SURFACES.md](SURFACES.md).
 
 ## Material regions, holes and planes
 

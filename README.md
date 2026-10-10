@@ -44,8 +44,8 @@ Once the plugin is connected, ask:
 > Create an editable 80 × 50 × 6 mm mounting plate with four mounting holes.
 > Save it as mounting_plate and show it. Then make it 8 mm thick and export STEP.
 
-The agent opens the viewer in chat. Select a face or edge, describe an edit in
-**Quick Edit**, and send the reference to your chat. Saved changes refresh the
+The agent opens the viewer in chat. Select a face or edge and describe the edit
+in your main chat. The agent reads the selected geometry. Saved changes refresh the
 same view. Choose a saved model from the library to return to an older project.
 
 Use **Export** for STEP, STL or 2D drawings. Default drawings use an A4 sheet
@@ -92,6 +92,12 @@ in [advanced client setup](docs/GETTING_STARTED.md) and
 - [Saved inspection notes and revision-qualified pins](docs/ANNOTATIONS.md)
 - [Coordinated mechanism and presentation sequences](docs/PLAYBACK.md)
 - [Modeling tools and CLI protocol](docs/PROTOCOL.md)
+- [Shell, offset and thickening](docs/SHELL_OFFSET_THICKEN.md)
+- [Exact sketch operations, mirror and split](docs/SKETCH_OPERATIONS.md)
+- [Editable text, SVG and DXF](docs/AUTHORING_IMPORTS.md)
+- [Extrusion extents and sweep controls](docs/RICHER_MODELING.md)
+- [Sheet-metal bends and flat patterns](docs/SHEET_METAL.md)
+- [Parametric surfaces, trims and shells](docs/SURFACES.md)
 - [Drawings](docs/DRAWINGS.md) and [assemblies](docs/ASSEMBLIES.md)
 - [Manufacturing packages](docs/MANUFACTURING.md): editable source, per-part exports,
   drawings, BOM and a portable manifest

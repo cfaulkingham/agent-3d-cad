@@ -380,7 +380,7 @@ void collect_references(const Json& value, std::set<std::string>& names, std::ve
       // These maps contain property names, not schema keywords. A property
       // named const/enum/default can itself contain a real schema reference.
       for (const auto& property : item.items()) collect_references(property.value(), names, pending);
-    } else if (key != "$defs" && key != "const" && key != "enum" && key != "default")
+    } else if (key != "$defs" && key != "const" && key != "enum" && key != "default" && key != "examples")
       collect_references(item, names, pending);
   }
 }
