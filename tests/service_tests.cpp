@@ -1,3 +1,4 @@
+#include "mutation_test_support.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/kernel.hpp"
@@ -192,6 +193,36 @@ void publication_wait_tests() {
     require(outcomes == std::vector<std::string>{"ok","revision_conflict"}, "Concurrent edits: one commit and one revision_conflict (got " + outcomes[0] + ", " + outcomes[1] + ")");
     require(head(service) == base + 1, "Exactly one concurrent edit published");
   }
+}
+
+void compact_receipt_tests() {
+  Temp temp;Service service(temp.path);
+  const auto inspect=[&](const Json& receipt,std::size_t fields=6) {
+    require(receipt.size()==fields&&!receipt.contains("model"),"Mutation receipt contains only committed identity, model hash and summary");
+    require(receipt.at("schema_version")==1&&receipt.at("kernel_version")==kernel_version(),"Receipt pins schema and kernel version");
+    const auto source=test::receipt_source(service,receipt);
+    require(receipt.at("model_sha256")==sha256(source.dump()),"Receipt digest matches independently read source at its exact revision");
+    require(service.call("cad_query",{{"document_id",receipt.at("document_id")},{"revision",receipt.at("revision")}}).at("summary")==receipt.at("summary"),"Receipt summary agrees with an independent revision query");
+    return source;
+  };
+  const Json create={{"document_id","part"},{"model",box()},{"request_id","compactCreate"}};
+  const auto created=service.call("cad_create",create);require(inspect(created)==box(),"Create receipt resolves complete editable intent");
+  const auto edited=service.call("cad_apply",edit(1,9,"compactEdit"));require(inspect(edited)==box(9),"Apply receipt resolves edited intent");
+  const auto restored=service.call("cad_restore",{{"document_id","part"},{"expected_revision",2},{"source_revision",1},{"request_id","compactRestore"}});
+  require(restored.at("revision")==3&&inspect(restored)==box(),"Restore receipt identifies a new revision containing historical intent");
+  require(inspect(created)==box()&&inspect(edited)==box(9),"Historical receipts retain their own source after HEAD advances");
+  require(service.call("cad_create",create)==created,"Compact create replay preserves the original receipt after later edits");
+  const auto step=service.call("cad_export",{{"document_id","part"},{"revision",1},{"format","step"}});
+  const auto raw=read_text(path_from_utf8(step.at("path")));
+  const Json import_args={{"document_id","imported"},{"path",step.at("path")},{"expected_sha256",sha256(raw)},{"request_id","compactImport"}};
+  const auto imported=service.call("cad_import",import_args);const auto imported_source=inspect(imported);
+  require(imported_source.at("features")[0].at("content")==raw,"Compact STEP receipt resolves every captured source byte");
+  fs::remove(path_from_utf8(step.at("path")));require(service.call("cad_import",import_args)==imported,"Compact STEP replay does not reopen a deleted source file");
+  const std::string svg="<svg><rect width='2' height='3'/></svg>";const auto sketch_path=temp.path/"source.svg";atomic_text(sketch_path,svg);
+  const Json sketch={{"document_id","part"},{"expected_revision",3},{"format","svg"},{"path",path_to_utf8(sketch_path)},{"feature_id","artwork"},{"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"request_id","compactSketch"}};
+  const auto captured=service.call("cad_import_sketch",sketch);const auto captured_source=inspect(captured,8);
+  require(captured.at("feature_id")=="artwork"&&captured.at("source_sha256")==sha256(svg)&&captured_source.at("features").back().at("profile").at("content")==svg,"Sketch receipt qualifies the committed feature and captured source");
+  fs::remove(sketch_path);require(service.call("cad_import_sketch",sketch)==captured,"Compact sketch replay preserves identity after source deletion");
 }
 
 void receipt_tests() {
@@ -406,7 +437,7 @@ int main(int argc, char** argv) {
     const std::string only = argc > 1 ? argv[1] : "";
     const std::vector<std::pair<std::string, void(*)()>> sections = {
       {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"locks", lock_wait_tests},
-      {"receipts", receipt_tests}, {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
+      {"receipts", receipt_tests}, {"compact_receipts", compact_receipt_tests}, {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
     for (const auto& [name, run] : sections) if (only.empty() || only == name) run();
     std::cout << "service: " << checks << " checks passed\n";
     return 0;

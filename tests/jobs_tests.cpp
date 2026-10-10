@@ -135,10 +135,66 @@ void write_job(const fs::path& root, const Json& state, const Json& input) {
 bool lock_free(const fs::path& path) {
   try { WorkspaceLock probe(path); return true; } catch (const Error&) { return false; }
 }
+void legacy_mutation_receipts() {
+  Temp temp;Service service(temp.path);
+  const auto save_legacy=[&](const std::string& id,const std::string& tool,const Json& arguments,const Json& result,bool running) {
+    const auto old=now_ms()-60000;auto state=state_record(id,tool,arguments,running?"running":"succeeded",old,old);
+    const auto bytes=Json{{"schema_version",2},{"job_id",id},{"fingerprint",state.at("fingerprint")},{"result",result}}.dump(2)+"\n";
+    if(!running){state["progress"]=1.0;state["result_sha256"]=sha256(bytes);state["result_bytes"]=bytes.size();}
+    write_job(temp.path,state,arguments);atomic_text(temp.path/"jobs"/id/"result.json",bytes);
+    return bytes;
+  };
+  const auto unchanged=[&](const std::string& id,const std::string& bytes) {
+    const auto path=temp.path/"jobs"/id;
+    require(read_text(path/"result.json")==bytes,"Legacy projection preserves exact stored result bytes, whitespace and source");
+    const auto state=stored_state(path);
+    require(state.at("result_sha256")==sha256(bytes)&&state.at("result_bytes")==bytes.size(),"Stored result digest and byte count continue to describe the original envelope");
+  };
+  // No transaction receipt backs this fixture: recovery must use the durable
+  // old result itself, so a replay fallback cannot mask broken projection.
+  const Json create={{"document_id","part"},{"model",box()}};
+  const auto created=service.call("cad_create",create);const auto source=service.call("cad_read",{{"document_id","part"},{"revision",1}}).at("model");
+  auto full=created;full.erase("model_sha256");full["model"]=source;
+  const auto full_bytes=save_legacy("legacyFull","cad_create",create,full,true);
+  service.call("cad_apply",{{"document_id","part"},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","size"},{"value",17}}})}});
+  const auto part_head=read_text(temp.path/"documents/part/HEAD.json");
+  const auto recovered=dispatch(temp.path,{{"action","get"},{"job_id","legacyFull"}});
+  require(recovered.at("state")=="succeeded"&&recovered.at("result")==created,"Interrupted legacy full-result job projects the original compact receipt after HEAD advances");
+  require(!recovered.at("result").contains("model")&&recovered.at("result").at("model_sha256")==sha256(source.dump()),"Legacy full result hashes its captured source rather than current HEAD");
+  unchanged("legacyFull",full_bytes);
+  require(dispatch(temp.path,{{"action","submit"},{"request_id","legacyFull"},{"tool","cad_create"},{"arguments",create}}).at("result")==created,"Duplicate submit returns the same projected legacy full receipt");
+  unchanged("legacyFull",full_bytes);require(read_text(temp.path/"documents/part/HEAD.json")==part_head,"Legacy full-result recovery never republishes HEAD");
+
+  service.call("cad_create",{{"document_id","sketch"},{"model",box()}});
+  const auto path=temp.path/"legacy.svg";const std::string svg="<svg><rect width='2' height='3'/></svg>";atomic_text(path,svg);
+  const Json capture={{"document_id","sketch"},{"expected_revision",1},{"format","svg"},{"path",path_to_utf8(path)},{"feature_id","outline"},
+    {"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"request_id","legacySketch"}};
+  const auto captured=service.call("cad_import_sketch",capture);auto legacy_sketch=captured;legacy_sketch.erase("model_sha256");
+  const auto sketch_bytes=save_legacy("legacySketch","cad_import_sketch",capture,legacy_sketch,false);
+  const auto historical_path=temp.path/"documents/sketch/revisions/2.json",held_path=temp.path/"held-revision.json";const auto historical_bytes=read_text(historical_path);
+  fs::remove(path);
+  const auto advanced=service.call("cad_apply",{{"document_id","sketch"},{"expected_revision",2},{"operations",Json::array({{{"op","set_parameter"},{"name","size"},{"value",19}}})}});
+  require(advanced.at("model_sha256")!=captured.at("model_sha256"),"Legacy sketch fixture has distinct historical and current source hashes");
+  const auto sketch_head=read_text(temp.path/"documents/sketch/HEAD.json");
+  const auto projected=dispatch(temp.path,{{"action","get"},{"job_id","legacySketch"}});
+  require(projected.at("state")=="succeeded"&&projected.at("result")==captured,"Legacy sketch receipt recovers its hash from the exact historical revision after source deletion and HEAD advance");
+  require(projected.at("result").at("revision")==2&&projected.at("result").at("source_sha256")==sha256(svg),"Projected sketch receipt retains original revision and captured artifact identity");
+  unchanged("legacySketch",sketch_bytes);
+  require(dispatch(temp.path,{{"action","submit"},{"request_id","legacySketch"},{"tool","cad_import_sketch"},{"arguments",capture}}).at("result")==captured,"Legacy sketch retry preserves historical identity without rereading its deleted file");
+  fs::rename(historical_path,held_path);
+  const auto missing=dispatch(temp.path,{{"action","get"},{"job_id","legacySketch"}});
+  require(missing.at("state")=="failed"&&missing.at("error").at("code")=="job_record_corrupt"&&!missing.contains("result"),"Missing historical sketch source fails explicitly instead of substituting HEAD or inventing a hash");
+  unchanged("legacySketch",sketch_bytes);fs::rename(held_path,historical_path);
+  require(dispatch(temp.path,{{"action","get"},{"job_id","legacySketch"}}).at("result")==captured,"Restoring historical evidence restores the same projected receipt");
+  require(read_text(historical_path)==historical_bytes&&read_text(temp.path/"documents/sketch/HEAD.json")==sketch_head,"Legacy sketch projection preserves immutable source bytes and advanced HEAD");
+  unchanged("legacySketch",sketch_bytes);
+}
 }
 int run_tests(int argc, const char* const* argv) {
   try {
     if (argc > 1) set_worker_executable(path_from_utf8(argv[1]));
+    legacy_mutation_receipts();
+    if(argc>2&&std::string(argv[2])=="receipts"){std::cout<<checks<<" legacy mutation receipt checks passed\n";return 0;}
     require(sha256("")=="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","SHA256 empty standard vector");
     require(sha256("abc")=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad","SHA256 abc standard vector");
     Temp temp; Service service(temp.path);
