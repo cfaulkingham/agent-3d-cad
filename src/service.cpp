@@ -234,7 +234,7 @@ Json tool_definitions() {
       {"document_id","expected_revision","operations"},preview_output,true),
     tool("cad_resolve_selection","Resolve a saved evaluation pick. Reject stale revisions, draft picks and mismatched evaluations. Persistent selectors are geometric rules, never pick tokens.",
       reference_properties,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"},
-      object({{"reference",reference},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},{"selector",{{"$ref","#/$defs/selector"}}}},{"reference","geometry"}),true),
+      object({{"reference",reference},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},{"selector",{{"oneOf",Json::array({Json{{"$ref","#/$defs/selector"}},Json{{"$ref","#/$defs/face_selector"}}})}}}},{"reference","geometry"}),true),
     tool("cad_compare","Compare committed revisions by parameters, named features, output and geometric measurements.",
       {{"document_id",id},{"from_revision",revision},{"to_revision",revision}},{"document_id","from_revision","to_revision"},
       object({{"document_id",id},{"from_revision",revision},{"to_revision",revision},{"parameters",{{"type","object"}}},

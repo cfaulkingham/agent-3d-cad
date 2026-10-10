@@ -88,6 +88,17 @@ Json model_definitions() {
     {"center", object({{"point", vector_ref}, {"tolerance", scalar_ref}}, {"point", "tolerance"})},
     {"length", object({{"value", scalar_ref}, {"tolerance", scalar_ref}}, {"value", "tolerance"})}
   }, {"type", "feature_id", "curve_kind", "expected_count"});
+  const Json face_selector = object({
+    {"type",{{"const","geometric"}}},{"feature_id",id},
+    {"surface_kind",{{"enum",{"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"}}}},
+    {"expected_count",{{"type","integer"},{"minimum",1},{"maximum",10000}}},
+    {"normal",object({{"vector",vector_ref},{"tolerance",scalar_ref}},{"vector","tolerance"})},
+    {"center",object({{"point",vector_ref},{"tolerance",scalar_ref}},{"point","tolerance"})},
+    {"area",object({{"value",scalar_ref},{"tolerance",scalar_ref}},{"value","tolerance"})}
+  },{"type","feature_id","surface_kind","expected_count"});
+  const Json face_selection={{"oneOf",Json::array({Json{{"$ref","#/$defs/face_selector"}},
+    Json{{"type","array"},{"items",{{"$ref","#/$defs/face_selector"}}},{"minItems",1},{"maxItems",64}}})}};
+  const Json offset_join={{"enum",{"arc","intersection"}}};
   Json features = Json::array({
     object({{"id", id}, {"type", {{"const", "box"}}}, {"size", vector_ref}, {"origin", vector_ref}}, {"id", "type", "size"}),
     object({{"id", id}, {"type", {{"const", "cylinder"}}}, {"radius", scalar_ref}, {"height", scalar_ref}, {"origin", vector_ref}}, {"id", "type", "radius", "height"}),
@@ -97,6 +108,12 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
+  features.push_back(object({{"id",id},{"type",{{"const","shell"}}},{"input",id},
+    {"thickness",scalar_ref},{"faces",face_selection},{"join",offset_join}},{"id","type","input","thickness","faces"}));
+  features.push_back(object({{"id",id},{"type",{{"const","offset"}}},{"input",id},
+    {"distance",scalar_ref},{"join",offset_join}},{"id","type","input","distance"}));
+  features.push_back(object({{"id",id},{"type",{{"const","thicken"}}},{"input",id},
+    {"thickness",scalar_ref},{"faces",face_selection},{"join",offset_join}},{"id","type","input","thickness"}));
   const Json profile_schema = {{"oneOf", Json::array({
     object({{"type",{{"const","rectangle"}}},{"width",scalar_ref},{"height",scalar_ref}}, {"type","width","height"}),
     object({{"type",{{"const","circle"}}},{"radius",scalar_ref}}, {"type","radius"}),
@@ -172,7 +189,7 @@ Json model_definitions() {
   const Json expression = object({{"expression", object({
     {"op",{{"enum",{"add","subtract","multiply","divide"}}}},
     {"args",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}},
-    {"unit",{{"enum",{"mm","deg","rad","dimensionless"}}}}
+    {"unit",{{"enum",{"mm","mm2","deg","rad","dimensionless"}}}}
   }, {"op","args","unit"})}}, {"expression"});
   const Json operations = Json::array({
     object({{"op", {{"const", "set_parameter"}}}, {"name", id}, {"value", numeric}}, {"op", "name", "value"}),
@@ -195,6 +212,8 @@ Json model_definitions() {
   Json definitions = {
     {"model_id", {{"type", "string"}, {"pattern", "^[A-Za-z][A-Za-z0-9_-]{0,63}$"}}},
     {"selector", selector},
+    {"face_selector",face_selector},
+    {"face_selection",face_selection},
     {"workplane",workplane_schema},{"placement",placement_schema}, {"assembly_part",part_schema}, {"mate",mate_schema}, {"bom_item",bom_item_schema},{"purchase",purchase},
     {"coupling",coupling_schema},{"pose",pose_schema},
     {"scalar", {{"oneOf", Json::array({numeric, object({{"parameter", id}}, {"parameter"}), expression})}}},
@@ -261,7 +280,8 @@ Json model_definitions() {
   }, {"feature_id","feature_type","dependencies","reference_policy","history_lifetime","history","history_truncated"});
   const Json face_output = object({
     {"id",face_id},{"surface_kind",{{"enum",{"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"}}}},
-    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",occurrence}
+    {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",occurrence},
+    {"selector",{{"$ref","#/$defs/face_selector"}}}
   }, {"id","surface_kind","area_mm2","center_mm","bounds_mm"});
   const Json edge_output = object({
     {"id",edge_id},{"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},
@@ -561,6 +581,37 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
 }
 }
 
+void validate_face_selector(const Json& selector,const Json& parameters,const std::string& input) {
+  fields(selector,{"type","feature_id","surface_kind","expected_count"},{"normal","center","area"});
+  if(text_field(selector,"type")!="geometric")throw Error("invalid_model","Only geometric face references can be persisted");
+  if(text_field(selector,"feature_id")!=input)throw Error("invalid_model","Face selector feature_id must equal its input feature");
+  static const std::set<std::string> kinds={"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"};
+  if(!kinds.contains(text_field(selector,"surface_kind")))throw Error("invalid_model","Unsupported face selector surface_kind");
+  const auto& count=selector.at("expected_count");
+  if(!count.is_number_integer()||count<1||count>10000)throw Error("invalid_model","Face selector expected_count must be between 1 and 10000");
+  for(const auto* key:{"normal","center","area"}) {
+    if(!selector.contains(key))continue;
+    const auto& predicate=selector.at(key);const std::string name=key;
+    const auto unit=name=="normal"?"rad":name=="area"?"mm2":"mm";
+    if(name=="normal")fields(predicate,{"vector","tolerance"});
+    else if(name=="center")fields(predicate,{"point","tolerance"});
+    else fields(predicate,{"value","tolerance"});
+    const auto tolerance=scalar(predicate.at("tolerance"),parameters,unit);
+    if(tolerance<1e-9||(name=="normal"&&tolerance>std::numbers::pi/2))
+      throw Error("invalid_model","Face selector tolerances must be positive; normal tolerance cannot exceed pi/2 radians");
+    if(name=="normal") {
+      if(selector.at("surface_kind")!="plane")throw Error("invalid_model","A normal predicate requires a planar face");
+      unit_vector(predicate.at("vector"),parameters);
+    } else if(name=="center")vector3(predicate.at("point"),parameters);
+    else if(scalar(predicate.at("value"),parameters,"mm2")<=0)throw Error("invalid_model","Selected face area must be positive");
+  }
+}
+void validate_face_selection(const Json& selection,const Json& parameters,const std::string& input) {
+  if(selection.is_array()) {
+    if(selection.empty()||selection.size()>64)throw Error("invalid_model","Face selection requires 1–64 geometric selectors");
+    for(const auto& selector:selection)validate_face_selector(selector,parameters,input);
+  } else validate_face_selector(selection,parameters,input);
+}
 void validate_model(const Json& model) {
   fields(model, {"schema_version", "units", "parameters", "features", "output"}, {"components"});
   validate_payload_size(model);
@@ -626,6 +677,21 @@ void validate_model(const Json& model) {
       if (edges.is_string()) {
         if (edges != "all") throw Error("invalid_model", "Edges must be all or a geometric selector");
       } else validate_selector(edges, parameters, text_field(feature, "input"));
+    } else if(type=="shell"||type=="offset"||type=="thicken") {
+      const auto dimension=type=="offset"?"distance":"thickness";
+      if(type=="shell")fields(feature,{"id","type","input",dimension,"faces"},{"join"});
+      else if(type=="offset")fields(feature,{"id","type","input",dimension},{"join"});
+      else fields(feature,{"id","type","input",dimension},{"faces","join"});
+      if(std::abs(scalar(feature.at(dimension),parameters))<1e-5)throw Error("invalid_model","Shell, offset and thicken dimensions must have magnitude at least 0.00001 mm");
+      if(feature.contains("join")&&feature.at("join")!="arc"&&feature.at("join")!="intersection")throw Error("invalid_model","Offset join must be arc or intersection");
+      const auto input=text_field(feature,"input");
+      if(type=="thicken"&&prior.contains(input)&&types.at(input)=="sketch") {
+        if(feature.contains("faces"))throw Error("invalid_model","Thickening a sketch uses its complete profile; omit faces");
+      } else {
+        dependency("input");
+        if(type=="thicken"&&!feature.contains("faces"))throw Error("invalid_model","Thickening solid surfaces requires explicit faces");
+      }
+      if(feature.contains("faces"))validate_face_selection(feature.at("faces"),parameters,input);
     } else if (type == "sketch") {
       fields(feature, {"id", "type", "workplane", "profile"});
       workplane(feature.at("workplane"), parameters);

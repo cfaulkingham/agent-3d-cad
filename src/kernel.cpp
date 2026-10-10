@@ -18,6 +18,9 @@
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffset_MakeOffset.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BezierCurve.hxx>
@@ -78,6 +81,7 @@
 #include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Compound.hxx>
+#include <TopoDS_Shell.hxx>
 #include <TopoDS_Iterator.hxx>
 #include <TopExp_Explorer.hxx>
 #include <gp_Ax2.hxx>
@@ -408,6 +412,82 @@ bool matches(const Json& descriptor, const Json& selector, const Json& parameter
   if (selector.contains("length") && std::abs(descriptor.at("length_mm").get<double>() - scalar(selector.at("length").at("value"), parameters)) > scalar(selector.at("length").at("tolerance"), parameters)) return false;
   return true;
 }
+Json face_descriptor(const TopoDS_Face& face,int index) {
+  GProp_GProps props;BRepGProp::SurfaceProperties(face,props);
+  BRepAdaptor_Surface surface(face);
+  Json result={{"id","face-"+std::to_string(index)},{"surface_kind",surface_kind(surface.GetType())},
+    {"area_mm2",props.Mass()},{"center_mm",point(props.CentreOfMass())},{"bounds_mm",bounds(face)}};
+  if(surface.GetType()==GeomAbs_Plane) {
+    auto normal=surface.Plane().Axis().Direction();
+    if(face.Orientation()==TopAbs_REVERSED)normal.Reverse();
+    result["normal"]=direction(normal);
+  }
+  return result;
+}
+bool matches_face(const Json& descriptor,const Json& selector,const Json& parameters) {
+  if(descriptor.at("surface_kind")!=selector.at("surface_kind"))return false;
+  if(selector.contains("normal")) {
+    if(!descriptor.contains("normal"))return false;
+    const auto wanted=vector3(selector.at("normal").at("vector"),parameters,"dimensionless");
+    const auto actual=descriptor.at("normal").get<std::array<double,3>>();
+    const auto dot=(wanted[0]*actual[0]+wanted[1]*actual[1]+wanted[2]*actual[2])/std::hypot(wanted[0],wanted[1],wanted[2]);
+    if(std::acos(std::clamp(dot,-1.0,1.0))>scalar(selector.at("normal").at("tolerance"),parameters,"rad"))return false;
+  }
+  if(selector.contains("center")) {
+    const auto wanted=vector3(selector.at("center").at("point"),parameters);
+    const auto actual=descriptor.at("center_mm").get<std::array<double,3>>();
+    if(std::hypot(wanted[0]-actual[0],wanted[1]-actual[1],wanted[2]-actual[2])>scalar(selector.at("center").at("tolerance"),parameters))return false;
+  }
+  if(selector.contains("area")&&std::abs(descriptor.at("area_mm2").get<double>()-scalar(selector.at("area").at("value"),parameters,"mm2"))>
+    scalar(selector.at("area").at("tolerance"),parameters,"mm2"))return false;
+  return true;
+}
+std::vector<int> select_faces(const FeatureGeometry& source,const Json& selection,const Json& parameters,const std::string& input) {
+  const auto selectors=selection.is_array()?selection:Json::array({selection});
+  Json candidates=Json::array();std::vector<Json> descriptors;
+  for(int i=1;i<=source.faces.Extent();++i) {
+    descriptors.push_back(face_descriptor(TopoDS::Face(source.faces(i)),i));
+    if(candidates.size()<64)candidates.push_back(descriptors.back());
+  }
+  std::vector<int> result;std::set<int> selected;
+  for(std::size_t rule=0;rule<selectors.size();++rule) {
+    const auto& selector=selectors[rule];std::vector<int> matches;
+    for(int i=1;i<=source.faces.Extent();++i)if(matches_face(descriptors[i-1],selector,parameters))matches.push_back(i);
+    const auto expected=selector.at("expected_count").get<std::size_t>();
+    if(matches.size()!=expected) {
+      Json matched=Json::array();for(const auto i:matches)if(matched.size()<64)matched.push_back(descriptors[i-1]);
+      const auto code=matches.empty()?"selection_missing":matches.size()>expected?"selection_ambiguous":"selection_count_mismatch";
+      throw Error(code,"Geometric selector did not match its expected face count",{{"source_feature_id",input},{"selector_index",rule},
+        {"expected_count",expected},{"actual_count",matches.size()},{"matches",matched},{"candidates",candidates},{"candidates_truncated",source.faces.Extent()>64}});
+    }
+    for(const auto i:matches) {
+      if(!selected.insert(i).second)throw Error("invalid_model","Face selection rules overlap; each source face must be selected once",{{"source_feature_id",input},{"selector_index",rule},{"source_id","face-"+std::to_string(i)}});
+      result.push_back(i);
+    }
+  }
+  return result;
+}
+TopoDS_Shell open_connected_patch(const std::vector<TopoDS_Face>& faces,const std::string& input) {
+  TopoDS_Shell shell;BRep_Builder builder;builder.MakeShell(shell);
+  ShapeMap edges;std::vector<int> uses,first_owner;std::vector<std::set<int>> neighbors(faces.size());
+  for(std::size_t f=0;f<faces.size();++f) {
+    builder.Add(shell,faces[f]);
+    for(TopExp_Explorer it(faces[f],TopAbs_EDGE);it.More();it.Next()) {
+      const auto edge=TopoDS::Edge(it.Current());if(BRep_Tool::Degenerated(edge))continue;
+      const auto n=edges.Add(edge);
+      if(static_cast<std::size_t>(n)>uses.size()){uses.push_back(0);first_owner.push_back(static_cast<int>(f));}
+      ++uses[n-1];const auto other=first_owner[n-1];
+      if(other!=static_cast<int>(f)){neighbors[f].insert(other);neighbors[other].insert(static_cast<int>(f));}
+    }
+  }
+  std::set<int> visited;std::vector<int> pending{0};
+  while(!pending.empty()) {const auto f=pending.back();pending.pop_back();if(!visited.insert(f).second)continue;for(auto other:neighbors[f])pending.push_back(other);}
+  if(visited.size()!=faces.size())throw Error("invalid_model","Thicken requires one connected surface patch; selected faces are disconnected",{{"source_feature_id",input}});
+  if(std::any_of(uses.begin(),uses.end(),[](int n){return n>2;}))throw Error("invalid_model","Thicken requires a manifold surface patch",{{"source_feature_id",input}});
+  if(std::none_of(uses.begin(),uses.end(),[](int n){return n==1;}))throw Error("invalid_model","Thicken requires an open surface patch; use shell for a closed body",{{"source_feature_id",input}});
+  if(!BRepCheck_Analyzer(shell).IsValid())throw Error("invalid_model","Selected thickening patch is not a valid shell",{{"source_feature_id",input}});
+  return shell;
+}
 void topology_limit(const FeatureGeometry& feature, const QueryLimits& limits) {
   const auto requested = static_cast<std::size_t>(feature.faces.Extent()) + feature.edges.Extent();
   const auto maximum = std::min<std::size_t>(limits.topology_entities, 10000);
@@ -416,7 +496,7 @@ void topology_limit(const FeatureGeometry& feature, const QueryLimits& limits) {
 template<class Operation>
 void record_history(Operation& operation, const FeatureGeometry& source, const std::string& source_id,
                     const FeatureGeometry& target, Json& history, bool& truncated,
-                    BRepBuilderAPI_Copy* copy = nullptr, int instance_index = -1) {
+                    BRepBuilderAPI_Copy* copy = nullptr, int instance_index = -1, const TopoDS_Shape* source_scope = nullptr) {
   if (truncated) return;
   const auto append = [&](Json item) {
     if (history.size() >= 10000) { truncated=true; return false; }
@@ -424,9 +504,12 @@ void record_history(Operation& operation, const FeatureGeometry& source, const s
     return true;
   };
   for (const auto& [kind, entities] : std::initializer_list<std::pair<std::string,const ShapeMap*>>{{"face",&source.faces},{"edge",&source.edges}}) {
+    ShapeMap scope;
+    if(source_scope)TopExp::MapShapes(*source_scope,kind=="face"?TopAbs_FACE:TopAbs_EDGE,scope);
     for (int i=1; i<=entities->Extent(); ++i) {
       const auto original=(*entities)(i);
       const auto entity=copy ? copy->ModifiedShape(original) : original;
+      if(source_scope&&!scope.Contains(entity))continue;
       Json entry={{"source_feature_id",source_id},{"source_kind",kind},{"source_id",kind+"-"+std::to_string(i)}};
       if (instance_index >= 0) entry["instance_index"]=instance_index;
       if (operation.IsDeleted(entity)) { auto deleted=entry; deleted["relation"]="deleted"; if (!append(deleted)) return; }
@@ -1297,6 +1380,60 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           const auto input=text_field(feature,key);
           record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
+      } else if(type=="shell"||type=="offset"||type=="thicken") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        BRepBuilderAPI_Copy copy(source.shape);
+        const auto distance=scalar(feature.at(type=="offset"?"distance":"thickness"),parameters);
+        const auto join=feature.value("join",std::string("arc"))=="arc"?GeomAbs_Arc:GeomAbs_Intersection;
+        constexpr double offset_tolerance=1e-7;
+        if(type=="shell") {
+          ShapeMap solids;TopExp::MapShapes(copy.Shape(),TopAbs_SOLID,solids);
+          if(solids.Extent()!=1)throw Error("invalid_model","Shell requires exactly one source solid; shell individual parts before combining",{{"source_feature_id",input},{"solid_count",solids.Extent()}});
+          const auto selected=select_faces(source,feature.at("faces"),parameters,input);
+          if(selected.size()==static_cast<std::size_t>(source.faces.Extent()))throw Error("invalid_model","Shell must retain at least one source face",{{"source_feature_id",input}});
+          NCollection_List<TopoDS_Shape> closing;
+          for(const auto i:selected)closing.Append(copy.ModifiedShape(source.faces(i)));
+          BRepOffsetAPI_MakeThickSolid operation;
+          operation.MakeThickSolidByJoin(solids(1),closing,distance,offset_tolerance,BRepOffset_Skin,false,false,join,false);
+          if(!operation.IsDone())throw Error("kernel_failure","Shell failed; change thickness, joins or selected opening faces",{{"source_feature_id",input}});
+          shape=operation.Shape();check_shape(shape);
+          record_history(operation,source,input,shape,history,history_truncated,&copy);
+        } else if(type=="offset") {
+          ShapeMap solids;TopExp::MapShapes(copy.Shape(),TopAbs_SOLID,solids);
+          TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);
+          std::vector<std::unique_ptr<BRepOffsetAPI_MakeOffsetShape>> operations;
+          for(int i=1;i<=solids.Extent();++i) {
+            auto operation=std::make_unique<BRepOffsetAPI_MakeOffsetShape>();
+            operation->PerformByJoin(solids(i),distance,offset_tolerance,BRepOffset_Skin,false,false,join,false);
+            if(!operation->IsDone())throw Error("kernel_failure","Solid offset failed; change distance or input geometry",{{"source_feature_id",input},{"solid_index",i}});
+            const auto result=operation->Shape();check_shape(result);
+            if(count(result,TopAbs_SOLID)!=1)throw Error("invalid_shape","Offset must preserve each source solid; collapsed or split results are rejected",{{"source_feature_id",input},{"solid_index",i}});
+            GProp_GProps before,after;BRepGProp::VolumeProperties(solids(i),before);BRepGProp::VolumeProperties(result,after);
+            if((after.Mass()-before.Mass())*distance<=0)throw Error("invalid_shape","Solid offset must expand for positive distance and shrink for negative distance",{{"source_feature_id",input},{"solid_index",i},{"source_volume_mm3",before.Mass()},{"result_volume_mm3",after.Mass()}});
+            builder.Add(compound,result);operations.push_back(std::move(operation));
+          }
+          shape=solids.Extent()==1?operations.front()->Shape():TopoDS_Shape(compound);
+          const FeatureGeometry target(shape);
+          // Result IDs come from the final compound, not from per-solid local
+          // enumerations. Do not label source entities outside this operation
+          // deleted: restrict each history query to its actual source solid.
+          for(int i=1;i<=solids.Extent();++i) {
+            const auto& scope=solids(i);
+            record_history(*operations[i-1],source,input,target,history,history_truncated,&copy,-1,&scope);
+          }
+        } else {
+          std::vector<TopoDS_Face> faces;
+          if(feature.contains("faces"))for(const auto i:select_faces(source,feature.at("faces"),parameters,input))faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
+          else for(int i=1;i<=source.faces.Extent();++i)faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
+          const auto patch=open_connected_patch(faces,input);
+          BRepOffset_MakeOffset operation;
+          operation.Initialize(patch,distance,offset_tolerance,BRepOffset_Skin,false,false,join,true,false);
+          operation.MakeOffsetShape();
+          if(!operation.IsDone())throw Error("kernel_failure","Surface thickening failed; change thickness, joins or selected patch",{{"source_feature_id",input},{"offset_status",static_cast<int>(operation.Error())}});
+          shape=operation.Shape();check_shape(shape);
+          if(count(shape,TopAbs_SOLID)!=1)throw Error("invalid_shape","Thicken must produce one closed solid from its connected patch",{{"source_feature_id",input}});
+          record_history(operation,source,input,shape,history,history_truncated,&copy);
+        }
       } else if (type == "fillet" || type == "chamfer") {
         const auto input=text_field(feature,"input");
         const auto& source=impl_->features.at(input);
@@ -1508,17 +1645,8 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       {"faces", Json::array()}, {"edges", Json::array()}, {"provenance",geometry.provenance}};
     for (int i = 1; i <= geometry.faces.Extent(); ++i) {
       const auto face = TopoDS::Face(geometry.faces(i));
-      GProp_GProps props;
-      BRepGProp::SurfaceProperties(face, props);
-      BRepAdaptor_Surface surface(face);
-      Json item = {{"id", "face-" + std::to_string(i)}, {"surface_kind", surface_kind(surface.GetType())},
-        {"area_mm2", props.Mass()}, {"center_mm", point(props.CentreOfMass())}, {"bounds_mm", bounds(face)}};
+      auto item=face_descriptor(face,i);
       if (!geometry.parts.empty()) item["part_id"]=geometry.face_parts[i];
-      if (surface.GetType() == GeomAbs_Plane) {
-        auto normal = surface.Plane().Axis().Direction();
-        if (face.Orientation() == TopAbs_REVERSED) normal.Reverse();
-        item["normal"] = direction(normal);
-      }
       result["faces"].push_back(item);
     }
     for (int i = 1; i <= geometry.edges.Extent(); ++i) {
@@ -1528,6 +1656,16 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
     }
     // A pick suggests a geometric rule only when that rule is unique here. The
     // caller must keep the rule, never the enumeration ID, for future rebuilds.
+    for(auto& face:result["faces"]) {
+      if(!geometry.parts.empty()||face.at("area_mm2").get<double>()>1e6)continue;
+      const auto center=face.at("center_mm").get<std::array<double,3>>();
+      if(std::any_of(center.begin(),center.end(),[](double n){return std::abs(n)>1e6;}))continue;
+      Json selector={{"type","geometric"},{"feature_id",id},{"surface_kind",face.at("surface_kind")},{"expected_count",1},
+        {"center",{{"point",face.at("center_mm")},{"tolerance",1e-5}}},{"area",{{"value",face.at("area_mm2")},{"tolerance",1e-5}}}};
+      if(face.contains("normal"))selector["normal"]={{"vector",face.at("normal")},{"tolerance",1e-6}};
+      int matching=0;for(const auto& candidate:result.at("faces"))if(matches_face(candidate,selector,Json::object()))++matching;
+      if(matching==1)face["selector"]=selector;
+    }
     for (auto& edge : result["edges"]) {
       // Assembly picks identify editable source parts. A geometric rule on the
       // placed aggregate is not an edit rule for those source coordinates.

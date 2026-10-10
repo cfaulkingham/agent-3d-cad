@@ -93,6 +93,11 @@ Materialized materialize(const Json& component) {
     for(const auto* key:{"input","left","right","target"})if(copy.contains(key))copy[key]=result.feature_map.at(text_field(copy,key));
     if(copy.contains("sections"))for(auto& section:copy["sections"])section=result.feature_map.at(section.get<std::string>());
     if(copy.contains("edges")&&copy.at("edges").is_object())copy["edges"]["feature_id"]=result.feature_map.at(text_field(copy.at("edges"),"feature_id"));
+    if(copy.contains("faces")) {
+      auto rewrite_face=[&](Json& selector){selector["feature_id"]=result.feature_map.at(text_field(selector,"feature_id"));};
+      if(copy["faces"].is_array())for(auto& selector:copy["faces"])rewrite_face(selector);
+      else rewrite_face(copy["faces"]);
+    }
     if(copy.at("type")=="assembly") {
       for(auto& part:copy["parts"])part["input"]=result.feature_map.at(text_field(part,"input"));
       if(copy.contains("bom"))for(auto& item:copy["bom"])item["input"]=result.feature_map.at(text_field(item,"input"));
