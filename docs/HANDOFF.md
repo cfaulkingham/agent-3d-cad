@@ -50,13 +50,43 @@ normalization, interning and short local anchors preserve validation; independen
 proofs cover literals, annotations, scopes, recursive/sibling/pointer references
 and accepted/rejected behavior.
 
-Current macOS arm64 evidence: native build succeeds. A serial 64-suite CTest run
-took **245.82 s** with 63 passing; the existing artifact controller test used
-exact floating-point equality for a 6000 mm³ box. Its valid native STEP result
-has volume 5999.999999999999 mm³ and expected area/centroid/bounds. The test now
-checks all those analytic measurements within geometric tolerances and passed
-in **2.47 s**. All 64 have passing evidence across those runs; a clean combined
-rerun and final independent clients/packaging checks are still pending.
+Validation on macOS arm64 / OCCT 8.0.1:
+
+- Native build succeeds. A serial 64-suite CTest run took **245.82 s** with 63
+  passing; the existing artifact controller test used exact floating-point
+  equality for a 6000 mm³ box. Its valid native STEP result has volume
+  5999.999999999999 mm³ and expected area/centroid/bounds. The test now checks all
+  those analytic measurements within geometric tolerances and passed in
+  **2.47 s**. All 64 have passing evidence across those runs; no single clean
+  full-suite run is claimed. No product geometry change was needed for that fix.
+- Independent native schema conformance: **897 checks / 31 tools**. Combined
+  modeling validation: **984 checks / 54 models / all 43 feature kinds**, including
+  preview/edit/rollback, sheet/surface summaries and real live face contexts.
+  Captured authoring validation: **115 checks / 31 tools**.
+- Official MCP SDK 2.3.0: **2,044 core interoperability checks** and **450
+  external-artifact checks**, including actual auto/legacy session lifecycle,
+  restart, jobs, source preservation and exports. Actual artifact controller
+  calls/results pass **197 independent schema checks**.
+- Exact-production schema proofs: **51,552 checks / 614 fixtures** for
+  normalization/interning and **16,987 checks / 232 fixtures** for anchors.
+  Anchoring reversibly saves **16,776 bytes** from the actual 62-schema catalog;
+  assertions, source literals, scopes and reference targets remain unchanged.
+- Relocated native bundle smoke passes complete provenance (**329 files**),
+  empty-PATH startup, create/edit/reopen, STEP/STL/drawings/BOM/balloons, MCP App
+  resources and read-only external reviews. Packaged plugin smoke passes complete
+  provenance (**360 files**), all six installed skill guides, empty-PATH
+  create/edit/history and STEP/STL/3MF/PDF/SVG/four-DXF exports. The packaged
+  service independently repeats all **115 authoring schema checks** with an empty
+  PATH and development loader overrides removed. Both new portable examples
+  pass create, parameter edit, schema validation, STEP export and exact saved
+  revision-byte preservation in that same environment.
+- The tested implementation is `0bd689a`, with native binary SHA-256
+  `290518c0b2ab29b0fff4b692becb79ca7cc4666befa604fbe173196493e95a39`.
+  The local plugin archive is
+  `build/packages/modeling-gap-20261010/agent-cad-plugin-0.1.0-preview.1-Darwin-arm64.zip`.
+  Reproducible probe scripts, catalogs, client logs and package evidence are in
+  `.local/evidence/modeling-gap-20261010/`. VERSION is unchanged; no release or
+  installed host registration was modified.
 
 Limits: no full build123d API parity, general sketch constraint solver, complex
 text shaping, SVG strokes/CSS, chained sheet bends/hems/jogs/relief, arbitrary
@@ -67,10 +97,11 @@ tolerance without extra healing or escalation. Cutting-outline DXF requires the
 blank to align with its fixed world drawing frame. See the operation guides for
 these explicit errors and boundaries. No current Windows/Linux, installed-plugin
 GUI or 1.0 host/signing/notarization acceptance is claimed by this increment.
-Next: finish the final independent clients, clean CTest rerun and relocated
-package smoke, then record their exact evidence here. Future modeling increments
-should target the remaining operations in MODELING_GAP.md; separate cross-platform
-and two-host acceptance remains required before a release compatibility claim.
+The authorized modeling phases are complete within their documented bounds.
+Future modeling increments should target the remaining operations in
+MODELING_GAP.md. Separate cross-platform and two-host acceptance remains required
+before a release compatibility claim; installed hosts need an explicit update
+to use this build.
 
 ## Carousel workflow: STEP diagnosis, periodic meshes and native 3MF — 2026-10-10
 
