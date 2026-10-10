@@ -7,6 +7,44 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Modeling gap closure — active integration, 2026-10-10
+
+The comparison target is the actual sibling `../build123d/`. The user authorized
+native shell/offset/thicken, sketch operations and mirror/split/intersection,
+captured text/SVG/DXF authoring, richer extrusions/sweeps, followed by separate
+sheet-metal and freeform-surface implementation phases. Work is on
+`codex/modeling-gap` with isolated managed worktrees; no sibling runtime or source
+dependency is added. This goal remains active and does not claim full library
+parity or host installation readiness.
+
+The current integration branch implements controlled extrusions and sweeps in
+`RICHER_MODELING.md`: signed directed/bidirectional travel, exact contour taper,
+finite target first/last termination, native frame/guide/transition controls,
+varying sections and holes. Dependencies include termination targets in cache,
+components and provenance. Varying sections must occupy unique ordered path
+stations including both endpoints. Complete profile coverage, solid validity and
+positive volume are required; failed edits preserve the committed record.
+
+The dedicated native test executable passed **43 checks** on macOS arm64 /
+OCCT 8.0.1, including analytic volumes/bounds, invalid and collapsed geometry,
+sloping target termination, curved auxiliary guides, varying hollow sections,
+cache invalidation, worker rollback, cold reopening and STEP export. Testing
+exposed an OCCT medial-axis crash for a full circle inset beyond its center;
+exact circle construction and a preflight collapse error replace that case.
+Parallel straight auxiliary guides use their exact constant frame instead of an
+unnecessary native law approximation. Summary mass/area use adaptive exact
+surface integration for native rational sweep surfaces. The native build and
+`git diff --check` pass. A combined full-suite run is still pending integration;
+no current Windows/Linux or installed-plugin verification is claimed.
+
+Other agents have individually tested shell/offset/thicken, derived sketches,
+and text/SVG/DXF authoring in separate worktrees. Their APIs remain pending on
+this branch until their commits are integrated and checked together. Sheet metal
+and freeform surfaces are separate authorized phases still being implemented.
+Next: integrate those tested core commits, check schema/discovery and shared
+classification/cache/component behavior, finish the two larger phases, then run
+the complete native and independent live-schema suites.
+
 ## Carousel workflow: STEP diagnosis, periodic meshes and native 3MF — 2026-10-10
 
 Investigated the actual failures in Codex chat `01a12666-30df-7f70-93d1-6b1df443ca91`

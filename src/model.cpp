@@ -133,13 +133,26 @@ Json model_definitions() {
   const Json pose_schema=object({{"id",id},{"values",{{"type","array"},{"items",pose_value},{"maxItems",126}}}},{"id","values"});
   const Json part_schema = object({{"id",id},{"input",id},{"placement",{{"$ref","#/$defs/placement"}}}}, {"id","input"});
   features.push_back(object({{"id",id},{"type",{{"const","sketch"}}},{"workplane",{{"$ref","#/$defs/workplane"}}},{"profile",profile_schema}}, {"id","type","workplane","profile"}));
-  features.push_back(object({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar_ref}}, {"id","type","input","distance"}));
+  auto extrude_schema=object({{"id",id},{"type",{{"const","extrude"}}},{"input",id},{"distance",scalar_ref},
+    {"direction",vector_ref},{"both",{{"type","boolean"}}},{"taper_deg",scalar_ref},
+    {"until",{{"enum",{"first","last"}}}},{"target",id}}, {"id","type","input"});
+  Json distance_mode={{"required",{"distance"}}},target_mode={{"required",{"until","target"}}};
+  distance_mode["not"]["anyOf"]=Json::array({Json{{"required",{"until"}}},Json{{"required",{"target"}}}});
+  target_mode["not"]["anyOf"]=Json::array({Json{{"required",{"distance"}}},Json{{"required",{"both"}}},Json{{"required",{"taper_deg"}}}});
+  extrude_schema["oneOf"]=Json::array({distance_mode,target_mode});
+  features.push_back(extrude_schema);
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"}));
-  features.push_back(object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},{"path",{{"oneOf",Json::array({
+  const auto sweep_wire=object({{"type",{{"const","wire"}}},{"segments",segments3}},{"type","segments"});
+  auto sweep_schema=object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},
+    {"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"path",{{"oneOf",Json::array({
     Json{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",64}},
-    object({{"type",{{"const","wire"}}},{"segments",segments3}},{"type","segments"})
-  })}}}}, {"id","type","input","path"}));
+    sweep_wire
+  })}}},{"orientation",{{"enum",{"corrected_frenet","frenet","fixed"}}}},
+    {"binormal",vector_ref},{"guide",sweep_wire},{"transition",{{"enum",{"transformed","right_corner","round_corner"}}}}}, {"id","type","path"});
+  sweep_schema["oneOf"]=Json::array({Json{{"required",{"input"}},{"not",{{"required",{"sections"}}}}},Json{{"required",{"sections"}},{"not",{{"required",{"input"}}}}}});
+  sweep_schema["not"]["anyOf"]=Json::array({Json{{"required",{"orientation","binormal"}}},Json{{"required",{"orientation","guide"}}},Json{{"required",{"binormal","guide"}}}});
+  features.push_back(sweep_schema);
   features.push_back(object({{"id",id},{"type",{{"enum",{"transform","instance"}}}},{"input",id},{"translation",vector_ref},{"rotation",rotation_schema}}, {"id","type","input"}));
   features.push_back(object({{"id",id},{"type",{{"const","pattern"}}},{"input",id},{"count",{{"type","integer"},{"minimum",2},{"maximum",64}}},{"step",vector_ref}}, {"id","type","input","count","step"}));
   features.push_back(object({{"id",id},{"type",{{"const","circular_pattern"}}},{"input",id},
@@ -645,10 +658,22 @@ void validate_model(const Json& model) {
         }
       } else throw Error("invalid_model", "Unsupported sketch profile");
     } else if (type == "extrude") {
-      fields(feature, {"id", "type", "input", "distance"});
+      fields(feature, {"id", "type", "input"}, {"distance","direction","both","taper_deg","until","target"});
       sketch_dependency(text_field(feature,"input"));
-      if (std::abs(scalar(feature.at("distance"),parameters)) < 1e-5)
-        throw Error("invalid_model", "Extrusion distance magnitude must be at least 0.00001 mm");
+      if(feature.contains("direction"))unit_vector(feature.at("direction"),parameters);
+      if(feature.contains("until") || feature.contains("target")) {
+        if(!feature.contains("until")||!feature.contains("target")||feature.contains("distance")||feature.contains("both")||feature.contains("taper_deg"))
+          throw Error("invalid_model","Target extrusion requires until and target, without distance, both or taper_deg");
+        const auto until=text_field(feature,"until");
+        if(until!="first"&&until!="last")throw Error("invalid_model","Extrusion until must be first or last");
+        dependency("target");
+      } else {
+        if(!feature.contains("distance")||std::abs(scalar(feature.at("distance"),parameters))<1e-5)
+          throw Error("invalid_model", "Extrusion distance magnitude must be at least 0.00001 mm");
+        if(feature.contains("both")&&!feature.at("both").is_boolean())throw Error("invalid_model","Extrusion both must be boolean");
+        if(feature.contains("taper_deg")&&std::abs(scalar(feature.at("taper_deg"),parameters,"deg"))>=89)
+          throw Error("invalid_model","Extrusion taper angle magnitude must be less than 89 degrees");
+      }
     } else if (type == "revolve") {
       fields(feature, {"id", "type", "input", "axis", "angle_deg"});
       sketch_dependency(text_field(feature,"input")); axis(feature.at("axis"), parameters, "direction");
@@ -665,7 +690,14 @@ void validate_model(const Json& model) {
       }
       if (feature.contains("ruled") && !feature.at("ruled").is_boolean()) throw Error("invalid_model", "ruled must be boolean");
     } else if (type == "sweep") {
-      fields(feature, {"id", "type", "input", "path"}); sketch_dependency(text_field(feature,"input"));
+      fields(feature, {"id", "type", "path"}, {"input","sections","orientation","binormal","guide","transition"});
+      if(feature.contains("input")==feature.contains("sections"))throw Error("invalid_model","Sweep requires exactly one of input or sections");
+      if(feature.contains("input"))sketch_dependency(text_field(feature,"input"));
+      else {
+        const auto& sections=feature.at("sections");
+        if(!sections.is_array()||sections.size()<2||sections.size()>32)throw Error("invalid_model","Sweep permits 2–32 section sketches");
+        for(const auto& section:sections) {if(!section.is_string())throw Error("invalid_model","Sweep sections must name sketch features");sketch_dependency(section.get<std::string>());}
+      }
       const auto& path = feature.at("path");
       if (path.is_object()) {
         fields(path,{"type","segments"});
@@ -675,6 +707,12 @@ void validate_model(const Json& model) {
         if (!path.is_array() || path.size() < 2 || path.size() > 64) throw Error("invalid_model", "A sweep path needs 2 to 64 points");
         for (const auto& p : path) vector3(p,parameters);
       }
+      if(static_cast<int>(feature.contains("orientation"))+static_cast<int>(feature.contains("binormal"))+static_cast<int>(feature.contains("guide"))>1)
+        throw Error("invalid_model","Sweep orientation, binormal and guide are mutually exclusive");
+      if(feature.contains("orientation")) {const auto v=text_field(feature,"orientation");if(v!="corrected_frenet"&&v!="frenet"&&v!="fixed")throw Error("invalid_model","Unsupported sweep orientation");}
+      if(feature.contains("binormal"))unit_vector(feature.at("binormal"),parameters);
+      if(feature.contains("guide")) {fields(feature.at("guide"),{"type","segments"});if(feature.at("guide").at("type")!="wire")throw Error("invalid_model","Sweep guide must be an exact wire");curve_segments(feature.at("guide").at("segments"),parameters,3);}
+      if(feature.contains("transition")) {const auto v=text_field(feature,"transition");if(v!="transformed"&&v!="right_corner"&&v!="round_corner")throw Error("invalid_model","Unsupported sweep transition");}
     } else if (type == "transform" || type == "instance") {
       fields(feature, {"id", "type", "input"}, {"translation", "rotation"}); dependency("input");
       if (types.at(text_field(feature,"input")) == "sketch") throw Error("invalid_model", "Transform and instance currently require solid inputs");

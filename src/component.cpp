@@ -17,7 +17,7 @@ std::string local_name(const std::string& kind,const std::string& component,cons
 }
 std::set<std::string> dependencies(const Json& feature) {
   std::set<std::string> result;
-  for(const auto* key:{"input","left","right"})if(feature.contains(key))result.insert(text_field(feature,key));
+  for(const auto* key:{"input","left","right","target"})if(feature.contains(key))result.insert(text_field(feature,key));
   if(feature.contains("sections"))for(const auto& id:feature.at("sections"))result.insert(id.get<std::string>());
   if(feature.at("type")=="assembly")for(const auto& part:feature.at("parts"))result.insert(text_field(part,"input"));
   return result;
@@ -90,7 +90,7 @@ Materialized materialize(const Json& component) {
   for(const auto& feature:snapshot.at("features")) {
     const auto original=text_field(feature,"id");if(!selected.contains(original))continue;
     auto copy=rewrite_parameters(feature,replacements,remaining);copy["id"]=result.feature_map.at(original);
-    for(const auto* key:{"input","left","right"})if(copy.contains(key))copy[key]=result.feature_map.at(text_field(copy,key));
+    for(const auto* key:{"input","left","right","target"})if(copy.contains(key))copy[key]=result.feature_map.at(text_field(copy,key));
     if(copy.contains("sections"))for(auto& section:copy["sections"])section=result.feature_map.at(section.get<std::string>());
     if(copy.contains("edges")&&copy.at("edges").is_object())copy["edges"]["feature_id"]=result.feature_map.at(text_field(copy.at("edges"),"feature_id"));
     if(copy.at("type")=="assembly") {
