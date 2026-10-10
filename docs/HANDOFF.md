@@ -48,6 +48,8 @@ MCP content blocks expose the links; the viewer requests `ui/download-file`
 only for an advertised host capability and retains complete workspace paths.
 Late replies cannot replace a newer view's status. Read-only job polls retry
 the documented `workspace_busy` result without resubmitting the export.
+The current MCP Apps `isError` download result is handled as a host decline or
+cancellation, with a passing bridge regression; timeouts retain uncertain status.
 [EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md) records bounds and behavior.
 
 Validation: native build succeeded; **3/3 CTest suites** (`download`, `live_ui`,

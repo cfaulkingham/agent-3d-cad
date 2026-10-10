@@ -34,6 +34,8 @@ method only when the host advertises
 It submits the resource links and retains the workspace paths. Acknowledgement
 is described as a download request, not proof that the user saved a file. Host
 refusal, timeout, missing capability and partial capture retain the fallback.
+The protocol's [`isError` result](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiDownloadFileResult.html)
+also reports a declined/cancelled download; it is not treated as acknowledgement.
 Late responses cannot overwrite status for a new source/revision. The
 standalone app keeps its existing native Save dialog.
 

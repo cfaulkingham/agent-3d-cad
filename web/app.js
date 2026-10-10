@@ -658,7 +658,7 @@
             await bridge.download(downloads);
             if(current())status(`Download requested from your host.${missing ? ` ${missing} file(s) remain available by workspace path.` : ''} Workspace file paths are below.`);
           } catch(error) {
-            if(current())status(`Export saved in the CAD workspace. The host could not complete the download: ${error.message} File paths are below.`);
+            if(current())status(`Export saved in the CAD workspace. The host did not confirm the download: ${error.message} File paths are below.`);
           }
         } else status(`Export saved in the CAD workspace.${missing ? ' Some files could not be prepared for host download.' : ''} File paths are below.`);
       }

@@ -45,6 +45,8 @@ function host() {
   const downloading=bridge.download(contents),downloadRequest=h.sent.at(-1).message;
   check(downloadRequest.method==='ui/download-file'&&downloadRequest.params.contents===contents,'Host download request carries resource links');
   h.emit({id:downloadRequest.id,result:{}});await downloading;
+  const declined=bridge.download(contents);h.emit({id:h.sent.at(-1).message.id,result:{isError:true}});
+  await assert.rejects(declined,/declined or cancelled/);checks++;
   await assert.rejects(bridge.download([]),/No bounded/);checks++;
   let early; bridge.on('ui/notifications/tool-result', result => early = result);
   h.emit({ method: 'ui/notifications/tool-result', params: { structuredContent: { view_id: 'main' } } });
