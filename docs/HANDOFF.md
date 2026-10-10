@@ -7,6 +7,49 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Installed modeling plugin — 2026-10-10
+
+At the user's request, updated the enabled `agent-cad@agent-cad-local` plugin
+from the tested modeling package at source checkpoint `185e33f` (implementation
+`0bd689a`). The registered source is now
+`/Users/colinfaulkingham/Applications/Agent3DCAD/chatgpt-plugin-185e33f-modeling-gap-20261010`;
+the cache remains
+`/Users/colinfaulkingham/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1`.
+Both modern and legacy host manifests preserve the existing default workspace
+`/Users/colinfaulkingham/Documents/Agent3DCAD`. A unique native launcher alias
+lets fresh runtimes load this increment while preserving the previous installed
+source for existing connections. VERSION remains `0.1.0-preview.1`; no public
+release or standalone desktop installation was changed.
+
+Installation and validation on macOS arm64:
+
+- The native installer registered the new local marketplace source and installed
+  the plugin. Both source and cache pass their complete **362-file provenance
+  inventory plus the manifest (363 physical files)**. Native binary SHA-256 is
+  `290518c0b2ab29b0fff4b692becb79ca7cc4666befa604fbe173196493e95a39`;
+  installed manifest SHA-256 is
+  `b2f4f94de13072d12762d45b2480b4f3f59d672fe184f3eb8390de2e2cd1fcc7`.
+- Fresh ChatGPT runtime `codex-cli 0.144.0-alpha.4` and Codex runtime
+  `codex-cli 0.162.0-alpha.17.2` both report the plugin installed/enabled, both
+  bundled skills, and **31 MCP tools**. Every input/output schema equals the
+  native catalog and passes independent Draft 2020-12 validation. Both new
+  sheet-metal/freeform example requests validate against the host-discovered
+  create contract.
+- The actual cache launcher passes **984 modeling schema checks / 54 models /
+  all 43 feature kinds / 31 tools** and **115 captured authoring checks** with an
+  empty PATH and development loader overrides removed. These checks use isolated
+  temporary workspaces.
+- All **102 saved model files** under the existing workspace locations retain
+  their exact hashes before installation and after runtime/modeling checks.
+  Unrelated parsed configuration is unchanged. A mode-0600 configuration backup,
+  model hashes, installer results and verification logs are retained in
+  `.local/evidence/modeling-gap-install-20261010/`.
+
+Existing running app connections were not restarted. Restart ChatGPT or Codex
+to load the updated server in existing chats. Fresh runtime discovery establishes
+registration and contracts; installed GUI rendering/select–edit–refresh and
+cross-platform/release acceptance are still separate gates.
+
 ## Modeling gap phases — integrated, 2026-10-10
 
 The comparison target is the actual sibling `../build123d/`. The user authorized
@@ -86,7 +129,8 @@ Validation on macOS arm64 / OCCT 8.0.1:
   `build/packages/modeling-gap-20261010/agent-cad-plugin-0.1.0-preview.1-Darwin-arm64.zip`.
   Reproducible probe scripts, catalogs, client logs and package evidence are in
   `.local/evidence/modeling-gap-20261010/`. VERSION is unchanged; no release or
-  installed host registration was modified.
+  installed host registration was modified at this integration checkpoint.
+  The subsequent user-requested installation is recorded above.
 
 Limits: no full build123d API parity, general sketch constraint solver, complex
 text shaping, SVG strokes/CSS, chained sheet bends/hems/jogs/relief, arbitrary
@@ -100,8 +144,8 @@ GUI or 1.0 host/signing/notarization acceptance is claimed by this increment.
 The authorized modeling phases are complete within their documented bounds.
 Future modeling increments should target the remaining operations in
 MODELING_GAP.md. Separate cross-platform and two-host acceptance remains required
-before a release compatibility claim; installed hosts need an explicit update
-to use this build.
+before a release compatibility claim. The installed plugin update is recorded
+above; existing running hosts need a restart to use this build.
 
 ## Carousel workflow: STEP diagnosis, periodic meshes and native 3MF — 2026-10-10
 
