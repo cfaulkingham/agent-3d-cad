@@ -1,4 +1,5 @@
 #include "agentcad/component.hpp"
+#include "agentcad/authoring.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/hash.hpp"
 #include <algorithm>
@@ -37,7 +38,7 @@ Json rewrite_parameters(const Json& value,const Json& replacements,std::size_t& 
     charge(2);Json result=Json::object();
     for(const auto& item:value.items()) {
       charge(item.key().size()+4);
-      if(value.value("type",Json())=="import_step" && item.key()=="content" && item.value().is_string()) {
+      if(((value.value("type",Json())=="import_step" && item.key()=="content")||authoring_source_field(value,item.key())) && item.value().is_string()) {
         charge(2);result[item.key()]=item.value();
       } else result[item.key()]=rewrite_parameters(item.value(),replacements,remaining);
     }

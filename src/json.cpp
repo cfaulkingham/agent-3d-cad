@@ -1,4 +1,5 @@
 #include "agentcad/json.hpp"
+#include "agentcad/authoring.hpp"
 #include <cmath>
 #include <cstdlib>
 #include <locale.h>
@@ -23,7 +24,7 @@ namespace {
 void charge_payload(const Json& value, std::size_t& remaining, unsigned depth) {
   if (depth > 64) throw Error("limit_exceeded", "JSON nesting exceeds 64 levels");
   const auto charge = [&](std::size_t bytes) {
-    if (bytes > remaining) throw Error("limit_exceeded", "JSON metadata exceeds its byte limit (STEP source bytes excluded)");
+    if (bytes > remaining) throw Error("limit_exceeded", "JSON metadata exceeds its byte limit (captured source bytes excluded)");
     remaining -= bytes;
   };
   if (value.is_object()) {
@@ -32,7 +33,7 @@ void charge_payload(const Json& value, std::size_t& remaining, unsigned depth) {
     bool first = true;
     for (const auto& [key, item] : value.items()) {
       charge(Json(key).dump().size() + 1 + (first ? 0 : 1)); first = false;
-      if (step && key == "content" && item.is_string()) charge(2);
+      if (((step && key == "content") || authoring_source_field(value,key)) && item.is_string()) charge(2);
       else charge_payload(item, remaining, depth + 1);
     }
   } else if (value.is_array()) {

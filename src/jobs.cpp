@@ -1,4 +1,5 @@
 #include "agentcad/jobs.hpp"
+#include "agentcad/authoring.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/print_export.hpp"
@@ -100,7 +101,7 @@ bool terminal_name(const std::string& value) {
 }
 bool terminal(const Json& state) { return terminal_name(state.at("state").get<std::string>()); }
 bool mutation(const std::string& tool) {
-  return tool == "cad_create" || tool == "cad_apply" || tool == "cad_restore" || tool == "cad_import";
+  return tool == "cad_create" || tool == "cad_apply" || tool == "cad_restore" || tool == "cad_import" || tool == "cad_import_sketch";
 }
 Json budget(const Json& value) {
   fields(value, {}, {"timeout_ms", "memory_mb"});
@@ -445,8 +446,8 @@ std::unique_ptr<WorkspaceLock> wait_lock(const fs::path& path) {
 }
 std::optional<Json> committed_result(const fs::path& workspace, const Json& state) {
   if (!mutation(state.at("tool").get<std::string>()) || !state.contains("document_id")) return {};
-  return Store(workspace).request_replay(state.at("document_id").get<std::string>(),
-    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());
+  auto result=Store(workspace).request_replay(state.at("document_id").get<std::string>(),
+    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());if(result&&state.at("tool")=="cad_import_sketch")result->erase("model");return result;
 }
 // Recovery and reporting treat an unreadable receipt as no committed result.
 std::optional<Json> committed_result_or_none(const fs::path& workspace, const Json& state) {
@@ -878,6 +879,9 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
+    if(kind=="capture_sketch") {
+      const auto& model=payload.at("model");BuiltModel validated(model);const auto id=text_field(request,"feature_id");for(const auto& feature:model.at("features"))if(feature.at("id")==id){auto groups=authoring_contours(feature.at("profile"),model.at("parameters"));std::size_t contours=0,segments=0;for(const auto& group:groups)for(const auto& loop:group.at("loops")){++contours;segments+=loop.size();}write_result(output,{{"result",{{"contour_count",contours},{"segment_count",segments}}},{"cache",Json::object()}});return 0;}throw Error("invalid_argument","Capture feature is absent");
+    }
     if(kind=="inspect_step") {
       write_result(output,{{"result",inspect_step(text_field(payload.at("model").at("features")[0],"content"))},{"cache",Json::object()}});return 0;
     }
@@ -1067,7 +1071,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

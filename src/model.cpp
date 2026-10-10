@@ -1,4 +1,5 @@
 #include "agentcad/model.hpp"
+#include "agentcad/authoring.hpp"
 #include "agentcad/hash.hpp"
 #include <set>
 #include <map>
@@ -121,13 +122,14 @@ Json model_definitions() {
     {"distance",scalar_ref},{"join",offset_join}},{"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","thicken"}}},{"input",id},
     {"thickness",scalar_ref},{"faces",face_selection},{"join",offset_join}},{"id","type","input","thickness"}));
-  const Json profile_schema = {{"oneOf", Json::array({
+  Json profile_schema = {{"oneOf", Json::array({
     object({{"type",{{"const","rectangle"}}},{"width",scalar_ref},{"height",scalar_ref}}, {"type","width","height"}),
     object({{"type",{{"const","circle"}}},{"radius",scalar_ref}}, {"type","radius"}),
     object({{"type",{{"const","polygon"}}},{"points",{{"type","array"},{"minItems",3},{"maxItems",128},{"items",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}}}}}}, {"type","points"}),
     object({{"type",{{"const","wire"}}},{"segments",segments2},
       {"holes",{{"type","array"},{"items",segments2},{"maxItems",16}}}},{"type","segments"})
   })}};
+  for(const auto& variant:authoring_profile_schemas(scalar_ref))profile_schema["oneOf"].push_back(variant);
   const Json axis_schema = object({{"origin",vector_ref},{"direction",vector_ref}}, {"origin","direction"});
   const Json rotation_schema = object({{"origin",vector_ref},{"axis",vector_ref},{"angle_deg",scalar_ref}}, {"origin","axis","angle_deg"});
   const Json placement_schema = object({{"translation",vector_ref},{"rotation",rotation_schema}}, Json::array());
@@ -742,7 +744,8 @@ void validate_model(const Json& model) {
             catch (const Error& e) {auto details=e.details;details["hole_index"]=i;throw Error(e.code,e.what(),details);}
           }
         }
-      } else throw Error("invalid_model", "Unsupported sketch profile");
+      } else if(kind=="text"||kind=="svg"||kind=="dxf")validate_authoring_profile(profile,parameters);
+      else throw Error("invalid_model", "Unsupported sketch profile");
     } else if (type=="sketch_cut" || type=="sketch_fuse" || type=="sketch_intersection") {
       fields(feature,{"id","type","left","right"});
       sketch_dependency(text_field(feature,"left")); sketch_dependency(text_field(feature,"right"));

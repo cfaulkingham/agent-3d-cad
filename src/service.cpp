@@ -1,4 +1,5 @@
 #include "agentcad/service.hpp"
+#include "agentcad/authoring.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/print_export.hpp"
 #include "agentcad/model.hpp"
@@ -156,6 +157,12 @@ Json tool_definitions() {
           {"errors",array(object({{"code",text},{"message",text},{"details",{{"type","object"}}}},{"code","message","details"}),64)}},
           {"index","valid","meshable","bounds_mm","volume_mm3","errors"}),4096)}},
         {"source_sha256","kernel_version","index_lifetime","valid","meshable","solid_count","solids","errors"}),true),
+    tool("cad_import_sketch","Capture a local font, SVG or ASCII DXF and atomically append its exact editable sketch to an existing document. Requires expected_revision; validates every source contour in a bounded worker before publication. Returns compact revision/source identity; cad_read retrieves embedded bytes. Then extrude, cut or thicken by feature_id through ordinary cad_apply. Optional request_id deduplicates retries and source deletion does not affect rebuilds.",
+      {{"document_id",id},{"expected_revision",revision},{"request_id",id},{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"$ref","#/$defs/scalar"}}},{"spacing",{{"$ref","#/$defs/scalar"}}},{"scale",{{"$ref","#/$defs/scalar"}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}}}, {"document_id","expected_revision","format","path","feature_id","workplane"},
+      object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"summary",summary_schema()}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","summary"}),false),
+    tool("cad_capture_sketch","Capture a local font, SVG or ASCII DXF as a portable editable sketch feature. Embeds exact source bytes and SHA-256, validates closed exact planar geometry in a bounded native worker, and returns a feature for cad_create/add_feature. Text uses captured unhinted Unicode font outlines with editable text/height; SVG/DXF support documented filled planar curves and reject unsupported entities. No document is committed.",
+      {{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"type","number"},{"minimum",0.00001},{"maximum",100000}}},{"spacing",{{"type","number"},{"minimum",-1000000},{"maximum",1000000}}},{"scale",{{"type","number"},{"minimum",0.000001},{"maximum",1000000}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}}}, {"format","path","feature_id","workplane"},
+      object({{"feature",{{"$ref","#/$defs/feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
     tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
       {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
@@ -261,9 +268,10 @@ Json tool_definitions() {
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
   for(auto& tool:tools) {
     if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};}
+    if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"properties",{{"format",{{"const","text"}}}}}}},{"then",{{"required",{"text","height"}},{"not",{{"required",{"scale"}}}}}},{"else",{{"not",{{"anyOf",Json::array({Json{{"required",{"text"}}},Json{{"required",{"height"}}},Json{{"required",{"spacing"}}},Json{{"required",{"face_index"}}}})}}}}}}});
     if(tool.at("name")=="cad_export")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"required",{"layout"}}}},{"then",{{"properties",{{"format",{{"const","3mf"}}}}}}}}});
   }
-  const std::set<std::string> job_tools={"cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  const std::set<std::string> job_tools={"cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   std::set<std::string> result_contracts;
   for(const auto& definition:tools) {
@@ -473,6 +481,19 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
+  if(tool=="cad_import_sketch") {
+    fields(args,{"document_id","expected_revision","format","path","feature_id","workplane"},{"request_id","expected_sha256","text","height","spacing","scale","face_index"});identifier(text_field(args,"document_id"));revision_number(args.at("expected_revision"));identifier(text_field(args,"feature_id"));text_field(args,"path");if(args.contains("request_id"))identifier(text_field(args,"request_id"));const auto format=text_field(args,"format");if(format!="text"&&format!="svg"&&format!="dxf")throw Error("invalid_argument","Import format must be text, svg or dxf");
+    if(format=="text"){if(!args.contains("text")||!args.contains("height"))throw Error("invalid_argument","Text import requires text and height");text_field(args,"text");if(args.contains("scale"))throw Error("invalid_argument","Text import does not accept scale");if(args.contains("face_index")&&(!args.at("face_index").is_number_integer()||args.at("face_index")<0||args.at("face_index")>31))throw Error("invalid_argument","Font face_index requires 0..31");}else for(auto key:{"text","height","spacing","face_index"})if(args.contains(key))throw Error("invalid_argument","SVG/DXF import does not accept text/font options");
+    if(args.contains("expected_sha256")){const auto hash=text_field(args,"expected_sha256");if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected source SHA-256");}return;
+  }
+  if(tool=="cad_capture_sketch") {
+    fields(args,{"format","path","feature_id","workplane"},{"expected_sha256","text","height","spacing","scale","face_index"});const auto format=text_field(args,"format");text_field(args,"path");identifier(text_field(args,"feature_id"));
+    if(format!="text"&&format!="svg"&&format!="dxf")throw Error("invalid_argument","Capture format must be text, svg or dxf");
+    if(format=="text"){if(!args.contains("text")||!args.contains("height"))throw Error("invalid_argument","Text capture requires text and height");text_field(args,"text");const auto h=number(args.at("height"));if(h<1e-5||h>1e5)throw Error("invalid_argument","Text height is outside supported bounds");if(args.contains("scale"))throw Error("invalid_argument","Text capture does not accept scale");if(args.contains("spacing"))number(args.at("spacing"));if(args.contains("face_index")&&(!args.at("face_index").is_number_integer()||args.at("face_index")<0||args.at("face_index")>31))throw Error("invalid_argument","Font face_index requires 0..31");}
+    else {for(auto key:{"text","height","spacing","face_index"})if(args.contains(key))throw Error("invalid_argument","SVG/DXF capture does not accept text/font options");if(args.contains("scale")&&number(args.at("scale"))<1e-6)throw Error("invalid_argument","Authoring scale must be positive");}
+    if(args.contains("expected_sha256")){const auto hash=text_field(args,"expected_sha256");if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected source SHA-256");}
+    return;
+  }
   if(tool=="cad_inspect_step") {
     fields(args,{"path"},{"expected_sha256"});text_field(args,"path");
     if(args.contains("expected_sha256")){const auto hash=text_field(args,"expected_sha256");if(hash.size()!=64||hash.find_first_not_of("0123456789abcdef")!=std::string::npos)throw Error("invalid_argument","Invalid expected STEP SHA-256");}
@@ -565,6 +586,11 @@ Json Service::execute(const std::string& tool,const Json& args) {
     if(args.at("action")=="review")return review_external_artifact(store_.root(),args,AGENTCAD_CACHE_BUILD);
     return verify_external_artifact(path_from_utf8(text_field(args,"review_path")).parent_path(),text_field(args,"expected_sha256"));
   }
+  if(tool=="cad_capture_sketch") {
+    auto result=capture_sketch_source(args);const auto id=text_field(args,"feature_id");const auto base=id=="capture_base"?"capture_base_other":"capture_base";
+    const Json model={{"schema_version",1},{"units","mm"},{"parameters",Json::object()},{"features",Json::array({{{"id",base},{"type","box"},{"size",{1,1,1}}},result.at("feature")})},{"output",base}};
+    const auto evaluated=evaluate_model(store_.root(),model,{{"kind","capture_sketch"},{"feature_id",id}});result.update(evaluated);return result;
+  }
   if(tool=="cad_inspect_step") {
     const auto content=read_text(path_from_utf8(text_field(args,"path")),unlimited_bytes),digest=sha256(content);
     if(invalid_utf8_offset(content))throw Error("invalid_argument","STEP content must be UTF-8");
@@ -598,7 +624,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     }
     throw Error("selection_missing","Entity is absent from the named evaluation");
   }
-  if(tool=="cad_create"||tool=="cad_apply"||tool=="cad_restore"||tool=="cad_import") {
+  if(tool=="cad_create"||tool=="cad_apply"||tool=="cad_restore"||tool=="cad_import"||tool=="cad_import_sketch") {
     const bool create=tool=="cad_create"||tool=="cad_import";
     const auto request_id=args.contains("request_id")?text_field(args,"request_id"):std::string();
     if(args.contains("request_id")) identifier(request_id);
@@ -606,7 +632,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     const auto expected=create?0:revision_number(args.at("expected_revision"));
     Json model;
     auto precondition=[&]() -> std::optional<Json> {
-      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)) return replay;
+      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)){if(tool=="cad_import_sketch")replay->erase("model");return replay;}
       if(create) {
         try {store_.read(id);throw Error("already_exists","Document already exists: "+id);}
         catch(const Error& e) {if(e.code!="not_found")throw;}
@@ -623,6 +649,9 @@ Json Service::execute(const std::string& tool,const Json& args) {
       else if(tool=="cad_restore") model=store_.read(id,revision_number(args.at("source_revision"))).at("model");
       else if(tool=="cad_apply") model=apply_operations(store_.read(id).at("model"),args.at("operations"),
         [&](const std::string& source,std::uint64_t revision){return store_.read(source,revision);});
+      else if(tool=="cad_import_sketch") {
+        const auto current=store_.read(id);auto capture=args;for(auto key:{"document_id","expected_revision","request_id"})capture.erase(key);const auto captured=capture_sketch_source(capture,current.at("model").at("parameters"));model=apply_operations(current.at("model"),Json::array({{{"op","add_feature"},{"feature",captured.at("feature")}}}));
+      }
       else {
         const auto content=read_text(path_from_utf8(text_field(args,"path")),unlimited_bytes);
         // Documents embed STEP as a JSON (UTF-8) string; transcoding would change
@@ -650,8 +679,10 @@ Json Service::execute(const std::string& tool,const Json& args) {
     DocumentLock lock(store_.root(),id,LockWait::publication);if(auto replay=precondition())return *replay;
     check_job_cancelled();
     Json receipt=Json::object();
-    if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",{{"summary",evaluated.at("summary")}}}};
-    auto record=store_.commit(id,model,create,receipt);record["summary"]=evaluated.at("summary");return record;
+    Json result_fields={{"summary",evaluated.at("summary")}};
+    if(tool=="cad_import_sketch"){result_fields["feature_id"]=args.at("feature_id");for(const auto& feature:model.at("features"))if(feature.at("id")==args.at("feature_id")){const auto& profile=feature.at("profile");result_fields["source_sha256"]=profile.at("type")=="text"?profile.at("font").at("sha256"):profile.at("sha256");}}
+    if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",result_fields}};
+    auto record=store_.commit(id,model,create,receipt);record.update(result_fields);if(tool=="cad_import_sketch")record.erase("model");return record;
   }
   if(tool=="cad_compare") {
     const auto from=store_.read(id,revision_number(args.at("from_revision"))),to=store_.read(id,revision_number(args.at("to_revision")));

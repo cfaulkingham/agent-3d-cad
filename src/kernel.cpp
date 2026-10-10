@@ -2,6 +2,7 @@
 #include "agentcad/measurement.hpp"
 #include "agentcad/section.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/authoring.hpp"
 #include "agentcad/robot.hpp"
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
@@ -23,7 +24,6 @@
 #include <GeomProjLib.hxx>
 #include <Geom_Plane.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
-#include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
 #include <BRepOffset_MakeOffset.hxx>
@@ -37,7 +37,6 @@
 #include <GC_MakeSegment2d.hxx>
 #include <BRepLib.hxx>
 #include <BRepTools.hxx>
-#include <BRepTools_WireExplorer.hxx>
 #include <BRep_Builder.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Common.hxx>
@@ -802,6 +801,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   Json result={{"feature_id",feature.at("id")},{"feature_type",feature.at("type")},{"dependencies",dependencies},
     {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
   if (feature.at("type")=="import_step") result["content_sha256"]=feature.at("sha256");
+  if(feature.at("type")=="sketch"){const auto& p=feature.at("profile");if(p.contains("sha256"))result["content_sha256"]=p.at("sha256");if(p.contains("font"))result["font_sha256"]=p.at("font").at("sha256");}
   return result;
 }
 Json snapshot_feature(const FeatureGeometry& geometry,std::size_t limit=32*1024*1024) {
@@ -883,7 +883,11 @@ CurveWire curve_wire(const Json& segments,const Json& parameters,const gp_Ax2* p
           if (type=="bezier") {
             NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(points.size()));
             for (std::size_t j=0;j<points.size();++j) poles.SetValue(static_cast<int>(j+1),point(points[j]));
-            curve=new Geom_BezierCurve(poles);
+            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),segment.at("weights")[j].get<double>());curve=new Geom_BezierCurve(poles,weights);}else curve=new Geom_BezierCurve(poles);
+          } else if(type=="bspline") {
+            NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)poles.SetValue(static_cast<int>(j+1),point(points[j]));
+            const auto& values=segment.at("knots");NCollection_Array1<double> knots(1,static_cast<int>(values.size()));NCollection_Array1<int> multiplicities(1,static_cast<int>(values.size()));for(std::size_t j=0;j<values.size();++j){knots.SetValue(static_cast<int>(j+1),values[j].get<double>());multiplicities.SetValue(static_cast<int>(j+1),segment.at("multiplicities")[j].get<int>());}
+            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),segment.at("weights")[j].get<double>());curve=new Geom_BSplineCurve(poles,weights,knots,multiplicities,segment.at("degree").get<int>());}else curve=new Geom_BSplineCurve(poles,knots,multiplicities,segment.at("degree").get<int>());
           } else {
             occ::handle<NCollection_HArray1<gp_Pnt>> data=new NCollection_HArray1<gp_Pnt>(1,static_cast<int>(points.size()));
             for (std::size_t j=0;j<points.size();++j) {
@@ -1220,6 +1224,44 @@ TopoDS_Shape planar_regions(const std::vector<TopoDS_Wire>& wires,const gp_Ax2& 
   }
   const auto result=face_compound(regions);check_sketch_shape(result,plane);return result;
 }
+TopoDS_Shape authoring_face(const Json& profile,const Json& parameters,const gp_Ax2& plane) {
+  const auto groups=authoring_contours(profile,parameters);
+  const auto area=[](const TopoDS_Shape& shape){GProp_GProps props;BRepGProp::SurfaceProperties(shape,props);return props.Mass();};
+  const auto common_area=[&](const TopoDS_Shape& a,const TopoDS_Shape& b){BRepAlgoAPI_Common common;NCollection_List<TopoDS_Shape> inputs,tools;inputs.Append(a);tools.Append(b);common.SetArguments(inputs);common.SetTools(tools);common.SetNonDestructive(true);common.SetRunParallel(false);common.Build();if(!common.IsDone()||common.HasErrors())throw Error("kernel_failure","Authoring contour containment failed");return common.Shape().IsNull()?0.0:area(common.Shape());};
+  std::vector<TopoDS_Face> regions;
+  for(const auto& group:groups) {
+    struct Boundary{TopoDS_Face face;TopoDS_Wire wire;double area=0;int sign=0,parent=-1,winding=0;bool inside=false,outside=false;};
+    std::vector<Boundary> boundaries;
+    for(const auto& loop:group.at("loops")) {
+      const auto authored=curve_wire(loop,Json::object(),&plane,true).wire;
+      BRepBuilderAPI_MakeFace make(gp_Pln(plane),authored,true);
+      if(!make.IsDone()||!BRepCheck_Analyzer(make.Face()).IsValid())throw Error("invalid_shape","Authoring boundary must enclose a valid planar region");
+      BRepAlgoAPI_Check check(make.Face(),false,true);if(check.HasErrors()||!check.IsValid())throw Error("invalid_shape","Authoring boundary self-intersects");
+      const auto normalized=BRepTools::OuterWire(make.Face());const auto value=area(make.Face());if(!std::isfinite(value)||value<1e-10)throw Error("invalid_shape","Authoring boundary has zero area");
+      boundaries.push_back({make.Face(),normalized,value,authored.Orientation()==normalized.Orientation()?1:-1});
+    }
+    for(std::size_t i=0;i<boundaries.size();++i)for(std::size_t j=i+1;j<boundaries.size();++j) {
+      auto& a=boundaries[i];auto& b=boundaries[j];BRepExtrema_DistShapeShape distance(a.wire,b.wire);if(!distance.IsDone()||distance.Value()<=1e-7)throw Error("invalid_shape","Authoring contours within one filled element must not touch or cross",{{"contour_a",i},{"contour_b",j}});
+      const auto overlap=common_area(a.face,b.face),tolerance=std::max(1e-9,std::min(a.area,b.area)*1e-9);
+      const bool a_contains=std::abs(overlap-b.area)<=tolerance,b_contains=std::abs(overlap-a.area)<=tolerance;
+      if(overlap>tolerance&&!a_contains&&!b_contains)throw Error("invalid_shape","Authoring contours intersect without containment");
+      if(a_contains&&(b.parent<0||a.area<boundaries[b.parent].area))b.parent=static_cast<int>(i);
+      if(b_contains&&(a.parent<0||b.area<boundaries[a.parent].area))a.parent=static_cast<int>(j);
+    }
+    const bool evenodd=group.at("fill_rule")=="evenodd";
+    std::function<void(int,std::set<int>&)> classify=[&](int i,std::set<int>& stack){auto& b=boundaries[i];if(!stack.insert(i).second)throw Error("invalid_shape","Authoring contour containment is cyclic");int before=0;if(b.parent>=0){classify(b.parent,stack);before=boundaries[b.parent].winding;}b.winding=evenodd?before+1:before+b.sign;b.outside=evenodd?before%2!=0:before!=0;b.inside=evenodd?b.winding%2!=0:b.winding!=0;stack.erase(i);};
+    for(std::size_t i=0;i<boundaries.size();++i){std::set<int> stack;classify(static_cast<int>(i),stack);}
+    for(std::size_t i=0;i<boundaries.size();++i) {
+      const auto& outer=boundaries[i];if(outer.outside||!outer.inside)continue;BRepBuilderAPI_MakeFace make(gp_Pln(plane),outer.wire,true);
+      for(std::size_t j=0;j<boundaries.size();++j){const auto& hole=boundaries[j];if(!hole.outside||hole.inside)continue;int parent=hole.parent;while(parent>=0&&(boundaries[parent].outside||!boundaries[parent].inside))parent=boundaries[parent].parent;if(parent==static_cast<int>(i))make.Add(TopoDS::Wire(hole.wire.Reversed()));}
+      if(!make.IsDone()||!BRepCheck_Analyzer(make.Face()).IsValid()||area(make.Face())<=1e-10)throw Error("invalid_shape","Authoring filled region is invalid");regions.push_back(make.Face());
+    }
+  }
+  if(regions.empty())throw Error("invalid_shape","Authoring source has no filled regions");
+  // Separate SVG shapes and glyphs follow union semantics, including overlaps.
+  TopoDS_Shape result=regions.front();for(std::size_t i=1;i<regions.size();++i){BRepAlgoAPI_Fuse fuse;NCollection_List<TopoDS_Shape> inputs,tools;inputs.Append(result);tools.Append(regions[i]);fuse.SetArguments(inputs);fuse.SetTools(tools);fuse.SetNonDestructive(true);fuse.SetRunParallel(false);fuse.Build();if(!fuse.IsDone()||fuse.HasErrors())throw Error("kernel_failure","Authoring filled-region union failed");result=fuse.Shape();}
+  if(result.IsNull()||!BRepCheck_Analyzer(result).IsValid()||count(result,TopAbs_FACE)>128||area(result)<=1e-10)throw Error("invalid_shape","Authoring must yield 1..128 valid planar faces");return result;
+}
 TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp_Pnt& origin,bool left_handed) {
   const double radius=diameter/2,depth=17*std::sqrt(3.0)*pitch/48,root=radius-depth;
   // The visible flanks are 60 degrees, the crest is P/8 wide, and the
@@ -1343,7 +1385,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       } else if (type == "sketch") {
         const auto plane = parameter_plane(feature.at("workplane"),parameters);
         planes.emplace(id,plane);
-        shape = sketch_face(feature.at("profile"),parameters,plane);
+        const auto kind=text_field(feature.at("profile"),"type");shape=(kind=="text"||kind=="svg"||kind=="dxf")?authoring_face(feature.at("profile"),parameters,plane):sketch_face(feature.at("profile"),parameters,plane);
       } else if (type=="sketch_cut"||type=="sketch_fuse"||type=="sketch_intersection") {
         const auto left=text_field(feature,"left"),right=text_field(feature,"right");const auto plane=planes.at(left);
         if(std::abs(plane.Direction().Dot(planes.at(right).Direction()))<1-1e-9||gp_Pln(plane).Distance(planes.at(right).Location())>1e-7)
