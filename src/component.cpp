@@ -96,6 +96,7 @@ Materialized materialize(const Json& component) {
     if(copy.contains("sections"))for(auto& section:copy["sections"])section=result.feature_map.at(section.get<std::string>());
     if(copy.contains("inputs"))for(auto& input:copy["inputs"])input=result.feature_map.at(input.get<std::string>());
     for(const auto* key:{"edges","vertices"})if(copy.contains(key)&&copy.at(key).is_object())copy[key]["feature_id"]=result.feature_map.at(text_field(copy.at(key),"feature_id"));
+    if(copy.contains("reference_face"))copy["reference_face"]["feature_id"]=result.feature_map.at(text_field(copy.at("reference_face"),"feature_id"));
     if(copy.contains("faces")) {
       auto rewrite_face=[&](Json& selector){selector["feature_id"]=result.feature_map.at(text_field(selector,"feature_id"));};
       if(copy["faces"].is_array())for(auto& selector:copy["faces"])rewrite_face(selector);

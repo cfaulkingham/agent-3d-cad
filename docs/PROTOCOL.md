@@ -87,7 +87,9 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `external_thread` | `major_diameter`, `pitch`, `length` | +Z; optional `origin`, `handedness` (`right` default or `left`) |
 | `cut`, `fuse` | `left`, `right` | Earlier solid features |
 | `fillet` | `input`, `radius`, `edges` | `edges` is `"all"` or a geometric selector |
-| `chamfer` | `input`, `distance`, `edges` | Symmetric chamfer; same edge selector contract as fillet |
+| `chamfer` | `input`, `distance`, `edges` | Symmetric by default; optional `distance2` or `angle_deg` requires geometric `reference_face` selecting one adjacent side |
+| `scale` | `input`, `origin`, `factors` | Positive uniform scalar or world XYZ factors, including imported solids |
+| `draft` | `input`, `faces`, `angle_deg`, `direction`, `neutral_plane` | Signed draft of selected existing planar/cylindrical/conical faces about an explicit neutral plane |
 | `shell` | `input`, signed `thickness`, `faces` | One solid; explicit oriented geometric face selectors remove openings; `faces:[]` makes a sealed cavity; optional `join: arc|intersection` |
 | `offset` | `input`, signed `distance` | Independent parallel offset of each source solid; optional `join: arc|intersection` |
 | `thicken` | `input`, signed `thickness` | Sketch regions, an open surface patch/shell, or selected connected open solid faces; `faces` required for solids; optional join |
@@ -108,8 +110,9 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `sheet_metal` | `input`, `thickness`, `k_factor`, `flanges` | One planar sketch region with holes; exact signed cylindrical bends and direct base-edge flanges |
 | `sheet_unfold` | `input` | Developed solid blank from unchanged sheet-metal intent |
 | `extrude` | `input`, either `distance` or `until` + `target` | Signed travel; optional `direction`, `both`, `taper_deg`; first/last exact target termination excludes distance/both/taper |
+| `twist_extrude` | `input`, `distance`, `angle_deg` | Signed travel along sketch normal with rotation about that normal; optional world `center` in the sketch plane |
 | `revolve` | `input`, `axis`, `angle_deg` | Sketch; angle in (0,360] |
-| `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
+| `loft` | `sections` | 1–32 single-region sketches with matching holes; optional `ruled`, `start_vertex`, `end_vertex`; at least two sections including vertices; explicit `hole_order` landmarks for multiple holes |
 | `sweep` | Either `input` or `sections`, plus `path` | Exact path; optional orientation/binormal/guide and transition controls; 2–32 varying sketch stations with matching holes |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
 | `pattern` | `input`, `count`, `step` | Count is a dimensionless scalar evaluating to an integer 2–64; translated copies including original; replication budget below |
@@ -135,6 +138,8 @@ area expressions declare `mm2`. [RICHER_MODELING.md](RICHER_MODELING.md) defines
 extent, taper, path-station and sweep frame controls. Summary area/volume use
 adaptive integration of the exact native surfaces, including rational swept
 surfaces; triangulated volume is not substituted.
+[PARITY_SOLIDS.md](PARITY_SOLIDS.md) defines solid scaling, existing-face draft,
+chamfer side/angle, twist extrusion and loft hole/vertex semantics.
 [SKETCH_OPERATIONS.md](SKETCH_OPERATIONS.md),
 [AUTHORING_IMPORTS.md](AUTHORING_IMPORTS.md), [SHEET_METAL.md](SHEET_METAL.md)
 and [SURFACES.md](SURFACES.md) define the additional bounds and explicit limits.

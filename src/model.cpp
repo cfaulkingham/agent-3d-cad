@@ -120,6 +120,24 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"}),
     object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
+  // Non-symmetric chamfers bind their side to a geometric face rule.
+  auto& chamfer=features.back();
+  chamfer["properties"]["distance2"]=scalar_ref;
+  chamfer["properties"]["angle_deg"]=scalar_ref;
+  chamfer["properties"]["reference_face"]={{"$ref","#/$defs/face_selector"}};
+  Json symmetric=Json::object();
+  symmetric["not"]["anyOf"]=Json::array({Json{{"required",{"distance2"}}},Json{{"required",{"angle_deg"}}},Json{{"required",{"reference_face"}}}});
+  chamfer["oneOf"]=Json::array({symmetric,
+    Json{{"required",{"distance2","reference_face"}},{"not",{{"required",{"angle_deg"}}}}},
+    Json{{"required",{"angle_deg","reference_face"}},{"not",{{"required",{"distance2"}}}}}
+  });
+  features.push_back(object({{"id",id},{"type",{{"const","scale"}}},{"input",id},{"origin",vector_ref},
+    {"factors",{{"oneOf",Json::array({scalar_ref,vector_ref})}}}}, {"id","type","input","origin","factors"}));
+  features.push_back(object({{"id",id},{"type",{{"const","draft"}}},{"input",id},{"faces",face_selection},
+    {"angle_deg",scalar_ref},{"direction",vector_ref},{"neutral_plane",{{"$ref","#/$defs/workplane"}}}},
+    {"id","type","input","faces","angle_deg","direction","neutral_plane"}));
+  features.push_back(object({{"id",id},{"type",{{"const","twist_extrude"}}},{"input",id},
+    {"distance",scalar_ref},{"angle_deg",scalar_ref},{"center",vector_ref}}, {"id","type","input","distance","angle_deg"}));
   const Json pole_row={{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",26}};
   const Json poles={{"type","array"},{"items",pole_row},{"minItems",2},{"maxItems",26}};
   const Json weight_row={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",26}};
@@ -209,7 +227,12 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"const","sketch_face"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}}}, {"id","type","input","faces"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_projection"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}},{"workplane",workplane_schema}}, {"id","type","input","faces","workplane"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
-  features.push_back(object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"}));
+  auto loft=object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",32}}},
+    {"start_vertex",vector_ref},{"end_vertex",vector_ref},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"});
+  const Json hole_landmark=object({{"point",vector_ref},{"tolerance",scalar_ref}},{"point","tolerance"});
+  loft["properties"]["hole_order"]={{"type","array"},{"minItems",1},{"maxItems",32},{"items",{{"type","array"},{"minItems",1},{"maxItems",16},{"items",hole_landmark}}}};
+  loft["anyOf"]=Json::array({Json{{"properties",{{"sections",{{"minItems",2}}}}}},Json{{"required",{"start_vertex"}}},Json{{"required",{"end_vertex"}}}});
+  features.push_back(loft);
   const auto sweep_wire=object({{"type",{{"const","wire"}}},{"segments",segments3}},{"type","segments"});
   auto sweep_schema=object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},
     {"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"path",{{"oneOf",Json::array({
@@ -747,8 +770,17 @@ void validate_model(const Json& model) {
       dependency("left"); dependency("right");
     } else if (type == "fillet" || type == "chamfer") {
       const auto dimension=type=="fillet"?"radius":"distance";
-      fields(feature, {"id", "type", "input", dimension, "edges"});
+      if(type=="chamfer")fields(feature, {"id", "type", "input", dimension, "edges"},{"distance2","angle_deg","reference_face"});
+      else fields(feature, {"id", "type", "input", dimension, "edges"});
       dependency("input"); positive(feature.at(dimension));
+      if(type=="chamfer") {
+        const bool asymmetric=feature.contains("distance2")||feature.contains("angle_deg");
+        if(feature.contains("distance2")&&feature.contains("angle_deg"))throw Error("invalid_model","Chamfer distance2 and angle_deg are mutually exclusive");
+        if(asymmetric!=feature.contains("reference_face"))throw Error("invalid_model","Asymmetric or angle chamfer requires reference_face; symmetric chamfer omits it");
+        if(feature.contains("distance2"))positive(feature.at("distance2"));
+        if(feature.contains("angle_deg")) {const double angle=scalar(feature.at("angle_deg"),parameters,"deg");if(angle<=0||angle>=90)throw Error("invalid_model","Chamfer angle must be between 0 and 90 degrees");}
+        if(asymmetric) {validate_face_selector(feature.at("reference_face"),parameters,text_field(feature,"input"));if(feature.at("reference_face").at("expected_count")!=1)throw Error("invalid_model","Chamfer reference_face must select exactly one adjacent face");}
+      }
       const auto& edges = feature.at("edges");
       if (edges.is_string()) {
         if (edges != "all") throw Error("invalid_model", "Edges must be all or a geometric selector");
@@ -884,10 +916,16 @@ void validate_model(const Json& model) {
       const auto angle = scalar(feature.at("angle_deg"),parameters,"deg");
       if (angle <= 0 || angle > 360) throw Error("invalid_model", "Revolve angle must be greater than zero and at most 360 degrees");
     } else if (type == "loft") {
-      fields(feature, {"id", "type", "sections"}, {"ruled"});
+      fields(feature, {"id", "type", "sections"}, {"ruled","start_vertex","end_vertex","hole_order"});
       const auto& sections = feature.at("sections");
-      if (!sections.is_array() || sections.size() < 2 || sections.size() > 32)
-        throw Error("invalid_model", "A loft needs 2 to 32 sketch sections");
+      if (!sections.is_array() || sections.empty() || sections.size() > 32 || (sections.size()==1&&!feature.contains("start_vertex")&&!feature.contains("end_vertex")))
+        throw Error("invalid_model", "A loft needs 1 to 32 sketches and at least two sections including optional endpoint vertices");
+      for(const auto* key:{"start_vertex","end_vertex"})if(feature.contains(key))vector3(feature.at(key),parameters);
+      if(feature.contains("hole_order")) {
+        const auto& order=feature.at("hole_order");if(!order.is_array()||order.size()!=sections.size())throw Error("invalid_model","Loft hole_order requires one landmark list per sketch section");
+        for(const auto& row:order) {if(!row.is_array()||row.empty()||row.size()>16)throw Error("invalid_model","Loft hole_order requires 1–16 hole landmarks per section");
+          for(const auto& landmark:row) {fields(landmark,{"point","tolerance"});vector3(landmark.at("point"),parameters);if(scalar(landmark.at("tolerance"),parameters)<=0)throw Error("invalid_model","Hole landmark tolerance must be positive");}}
+      }
       for (const auto& section : sections) {
         if (!section.is_string()) throw Error("invalid_model", "Loft section references must be strings");
         sketch_dependency(section.get<std::string>());
@@ -917,6 +955,21 @@ void validate_model(const Json& model) {
       if(feature.contains("binormal"))unit_vector(feature.at("binormal"),parameters);
       if(feature.contains("guide")) {fields(feature.at("guide"),{"type","segments"});if(feature.at("guide").at("type")!="wire")throw Error("invalid_model","Sweep guide must be an exact wire");curve_segments(feature.at("guide").at("segments"),parameters,3);}
       if(feature.contains("transition")) {const auto v=text_field(feature,"transition");if(v!="transformed"&&v!="right_corner"&&v!="round_corner")throw Error("invalid_model","Unsupported sweep transition");}
+    } else if(type=="scale") {
+      fields(feature,{"id","type","input","origin","factors"});dependency("input");vector3(feature.at("origin"),parameters);
+      const auto& factors=feature.at("factors");
+      const auto check_factor=[&](const Json& value){const double n=scalar(value,parameters,"dimensionless");if(n<1e-6||n>1e6)throw Error("invalid_model","Scale factors must be positive from 0.000001 through 1000000; use mirror for reflection");};
+      if(factors.is_array()) {if(factors.size()!=3)throw Error("invalid_model","Nonuniform scale needs three factors");for(const auto& factor:factors)check_factor(factor);}
+      else check_factor(factors);
+    } else if(type=="draft") {
+      fields(feature,{"id","type","input","faces","angle_deg","direction","neutral_plane"});dependency("input");
+      validate_face_selection(feature.at("faces"),parameters,text_field(feature,"input"));unit_vector(feature.at("direction"),parameters);workplane(feature.at("neutral_plane"),parameters);
+      const double angle=scalar(feature.at("angle_deg"),parameters,"deg");if(std::abs(angle)<1e-5||std::abs(angle)>=89)throw Error("invalid_model","Draft angle magnitude must be at least 0.00001 and less than 89 degrees");
+    } else if(type=="twist_extrude") {
+      fields(feature,{"id","type","input","distance","angle_deg"},{"center"});sketch_dependency(text_field(feature,"input"));
+      if(std::abs(scalar(feature.at("distance"),parameters))<1e-5)throw Error("invalid_model","Twist extrusion distance magnitude must be at least 0.00001 mm");
+      if(std::abs(scalar(feature.at("angle_deg"),parameters,"deg"))>5760)throw Error("invalid_model","Twist extrusion is bounded to 16 turns");
+      if(feature.contains("center"))vector3(feature.at("center"),parameters);
     } else if (type == "transform" || type == "instance") {
       fields(feature, {"id", "type", "input"}, {"translation", "rotation"}); dependency("input");
       if (is_sketch_feature_type(types.at(text_field(feature,"input")))) throw Error("invalid_model", "Transform and instance currently require solid inputs");

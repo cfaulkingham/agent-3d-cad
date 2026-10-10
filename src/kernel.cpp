@@ -15,6 +15,10 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
+#include <BRepOffsetAPI_DraftAngle.hxx>
+#include <Geom2d_Line.hxx>
+#include <gp_GTrsf.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
@@ -1762,6 +1766,67 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         }
         shape=face_compound(faces);planes.emplace(id,planes.at(input));
         for(auto& operation:operations){CornerHistory evidence{*operation};record_history(evidence,source,input,shape,history,history_truncated);}
+      } else if(type=="scale") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        const auto origin=parameter_point(feature.at("origin"),parameters);const auto& factors=feature.at("factors");
+        std::array<double,3> values;
+        for(int i=0;i<3;++i)values[i]=scalar(factors.is_array()?factors[i]:factors,parameters,"dimensionless");
+        if(values[0]==values[1]&&values[1]==values[2]) {
+          gp_Trsf transform;transform.SetScale(origin,values[0]);BRepBuilderAPI_Transform operation(source.shape,transform,true);
+          if(!operation.IsDone())throw Error("kernel_failure","Uniform scaling failed");shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated);
+        } else {
+          gp_GTrsf transform;transform.SetVectorialPart(gp_Mat(values[0],0,0,0,values[1],0,0,0,values[2]));
+          transform.SetTranslationPart(gp_XYZ(origin.X()*(1-values[0]),origin.Y()*(1-values[1]),origin.Z()*(1-values[2])));
+          BRepBuilderAPI_GTransform operation(source.shape,transform,true);
+          if(!operation.IsDone())throw Error("kernel_failure","Nonuniform scaling failed");shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated);
+        }
+      } else if(type=="draft") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        BRepBuilderAPI_Copy copy(source.shape);BRepOffsetAPI_DraftAngle operation(copy.Shape());
+        const auto neutral=parameter_plane(feature.at("neutral_plane"),parameters);
+        const auto pull=parameter_direction(feature.at("direction"),parameters);
+        if(std::abs(pull.Dot(neutral.Direction()))<1e-9)throw Error("invalid_model","Draft pull direction must cross its neutral plane");
+        for(const auto index:select_faces(source,feature.at("faces"),parameters,input)) {
+          const auto face=TopoDS::Face(copy.ModifiedShape(source.faces(index)));const auto kind=BRepAdaptor_Surface(face).GetType();
+          if(kind!=GeomAbs_Plane&&kind!=GeomAbs_Cylinder&&kind!=GeomAbs_Cone)throw Error("invalid_model","Draft supports planar, cylindrical and conical faces",{{"source_feature_id",input}});
+          operation.Add(face,pull,scalar(feature.at("angle_deg"),parameters,"deg")*std::numbers::pi/180,gp_Pln(neutral));
+          if(!operation.AddDone())throw Error("kernel_failure","Draft face could not be added",{{"status",static_cast<int>(operation.Status())}});
+        }
+        operation.Build();if(!operation.IsDone())throw Error("kernel_failure","Draft failed; angle or geometry requires a topology change",{{"status",static_cast<int>(operation.Status())}});
+        shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
+      } else if(type=="twist_extrude") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);const auto plane=planes.at(input);
+        const double distance=scalar(feature.at("distance"),parameters),angle=scalar(feature.at("angle_deg"),parameters,"deg")*std::numbers::pi/180;
+        const auto center=feature.contains("center")?parameter_point(feature.at("center"),parameters):plane.Location();
+        if(std::abs(gp_Vec(plane.Location(),center).Dot(gp_Vec(plane.Direction())))>1e-7)throw Error("invalid_model","Twist center must lie in the sketch plane");
+        if(std::abs(angle)<1e-12) {
+          BRepPrimAPI_MakePrism operation(source.shape,gp_Vec(plane.Direction())*distance,true);
+          if(!operation.IsDone())throw Error("kernel_failure","Zero-angle twist extrusion failed");shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated);
+        } else {
+          const auto end=center.Translated(gp_Vec(plane.Direction())*distance);
+          const auto spine=BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(center,end).Edge()).Wire();
+          const gp_Ax3 frame(center,plane.Direction(),plane.XDirection());
+          const occ::handle<Geom_CylindricalSurface> cylinder=new Geom_CylindricalSurface(frame,1.0);
+          const double extent=std::hypot(angle,distance);
+          const occ::handle<Geom2d_Line> helix=new Geom2d_Line(gp_Pnt2d(0,0),gp_Dir2d(angle,distance));
+          const auto guide_edge=BRepBuilderAPI_MakeEdge(helix,cylinder,0,extent).Edge();
+          if(!BRepLib::BuildCurve3d(guide_edge,1e-8))throw Error("kernel_failure","Twist auxiliary helix construction failed");
+          const auto guide=BRepBuilderAPI_MakeWire(guide_edge).Wire();
+          std::vector<TopoDS_Shape> regions;
+          for(TopExp_Explorer it(source.shape,TopAbs_FACE);it.More();it.Next()) {
+            const auto wires=section_wires(TopoDS::Face(it.Current()),plane);std::vector<std::unique_ptr<BRepOffsetAPI_MakePipeShell>> operations;
+            for(const auto& wire:wires) {
+              auto operation=std::make_unique<BRepOffsetAPI_MakePipeShell>(spine);operation->SetMode(guide,false,BRepFill_NoContact);
+              operation->SetTolerance(1e-7,1e-7,1e-6);operation->SetMaxSegments(1024);operation->Add(wire,false,false);operation->Build();
+              if(!operation->IsDone()||!operation->MakeSolid())throw Error("kernel_failure","Twist extrusion failed to make a closed solid");
+              check_shape(operation->Shape());operations.push_back(std::move(operation));
+            }
+            auto region=operations.front()->Shape();for(std::size_t i=1;i<operations.size();++i)region=extrusion_boolean<BRepAlgoAPI_Cut>(region,operations[i]->Shape());
+            regions.push_back(region);
+            for(const auto& operation:operations)record_history(*operation,source,input,region,history,history_truncated);
+          }
+          shape=join_extrusion_regions(regions);
+        }
       } else if (type == "extrude") {
         const auto input = text_field(feature,"input");
         const auto plane=planes.at(input);const auto direction=feature.contains("direction")?parameter_direction(feature.at("direction"),parameters):plane.Direction();
@@ -1788,21 +1853,69 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto input=text_field(feature,"input");
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "loft") {
-        BRepOffsetAPI_ThruSections operation(true,feature.value("ruled",false));
-        operation.SetMutableInput(false);
-        for (const auto& section : feature.at("sections")) {
-          const auto& source=shapes.at(section.get<std::string>());
-          if (count(source,TopAbs_WIRE)!=1) throw Error("invalid_model","Loft sections must have one boundary; loft outer and inner profiles separately and subtract explicitly",{{"source_feature_id",section}});
-          operation.AddWire(BRepTools::OuterWire(TopoDS::Face(source)));
+        std::vector<std::vector<TopoDS_Wire>> profiles;
+        for(const auto& section:feature.at("sections")) {
+          const auto input=section.get<std::string>();const auto& source=shapes.at(input);
+          if(count(source,TopAbs_FACE)!=1)throw Error("invalid_model","Each loft section must contain exactly one planar region",{{"source_feature_id",input}});
+          profiles.push_back(section_wires(TopoDS::Face(source),planes.at(input)));
+          if(profiles.back().size()!=profiles.front().size())throw Error("invalid_model","Loft sections must retain the same number of holes",{{"source_feature_id",input}});
         }
-        operation.CheckCompatibility(true);
-        operation.Build();
-        if (!operation.IsDone()) throw Error("kernel_failure","Loft failed");
-        shape = operation.Shape();
-        const FeatureGeometry target(shape);
-        for (const auto& section : feature.at("sections")) {
-          const auto input=section.get<std::string>();
-          record_history(operation,impl_->features.at(input),input,target,history,history_truncated);
+        if(profiles.front().size()>2&&!feature.contains("hole_order"))throw Error("invalid_model","Lofts with multiple holes require explicit hole_order landmarks to identify corresponding boundaries");
+        if(feature.contains("hole_order"))for(std::size_t section=0;section<profiles.size();++section) {
+          const auto& landmarks=feature.at("hole_order")[section];const auto& wires=profiles[section];
+          if(landmarks.size()+1!=wires.size())throw Error("invalid_model","Hole landmark count must match every interior boundary");
+          const auto input=feature.at("sections")[section].get<std::string>();std::vector<TopoDS_Wire> ordered{wires.front()};std::set<std::size_t> used;
+          for(const auto& landmark:landmarks) {
+            std::vector<std::size_t> matches;const auto point=parameter_point(landmark.at("point"),parameters);
+            const double tolerance=scalar(landmark.at("tolerance"),parameters);
+            for(std::size_t i=1;i<wires.size();++i) {GProp_GProps props;BRepGProp::SurfaceProperties(BRepBuilderAPI_MakeFace(gp_Pln(planes.at(input)),wires[i]).Face(),props);
+              if(props.CentreOfMass().Distance(point)<=tolerance)matches.push_back(i);}
+            if(matches.size()!=1||!used.insert(matches.front()).second)throw Error("selection_ambiguous","Loft hole landmark must uniquely identify one unused boundary centroid",{{"source_feature_id",input},{"actual_count",matches.size()}});
+            ordered.push_back(wires[matches.front()]);
+          }
+          profiles[section]=std::move(ordered);
+        }
+        std::vector<std::unique_ptr<BRepOffsetAPI_ThruSections>> operations;
+        for(std::size_t boundary=0;boundary<profiles.front().size();++boundary) {
+          auto operation=std::make_unique<BRepOffsetAPI_ThruSections>(true,feature.value("ruled",false));
+          operation->SetMutableInput(false);
+          if(feature.contains("start_vertex"))operation->AddVertex(BRepBuilderAPI_MakeVertex(parameter_point(feature.at("start_vertex"),parameters)).Vertex());
+          for(const auto& profile:profiles)operation->AddWire(profile[boundary]);
+          if(feature.contains("end_vertex"))operation->AddVertex(BRepBuilderAPI_MakeVertex(parameter_point(feature.at("end_vertex"),parameters)).Vertex());
+          operation->CheckCompatibility(true);operation->Build();
+          if(!operation->IsDone())throw Error("kernel_failure","Loft failed",{{"boundary",boundary}});
+          check_shape(operation->Shape());
+          BRepAlgoAPI_Check self_interference(operation->Shape(),false,true);
+          if(!self_interference.IsValid())throw Error("invalid_shape","Loft boundary self-intersects between its sections",{{"boundary",boundary}});
+          operations.push_back(std::move(operation));
+        }
+        shape=operations.front()->Shape();
+        for(std::size_t i=1;i<operations.size();++i) {
+          const auto& hole=operations[i]->Shape();
+          // An inner loft that leaves or crosses the outer body changes material
+          // intent. Reject that case rather than clipping away its escaped region.
+          GProp_GProps all,inside;BRepGProp::VolumeProperties(hole,all);
+          const auto common=extrusion_boolean<BRepAlgoAPI_Common>(operations.front()->Shape(),hole);
+          BRepGProp::VolumeProperties(common,inside);
+          if(std::abs(all.Mass()-inside.Mass())>std::max(1e-7,all.Mass()*1e-7))throw Error("invalid_shape","Loft hole escapes its outer boundary",{{"boundary",i}});
+          for(std::size_t previous=1;previous<i;++previous) {
+            // An empty boolean Common alone is insufficient for ruled rational
+            // lofts: OCCT can miss their intersection until STEP reimport.
+            // Independent exact boundary distance also rejects contact/crossing.
+            BRepExtrema_DistShapeShape separation(operations[previous]->Shape(),hole);
+            if(!separation.IsDone())throw Error("kernel_failure","Loft hole separation could not be verified");
+            if(separation.Value()<=1e-7)throw Error("invalid_shape","Loft hole tracks touch or cross between sections",{{"boundary",i},{"other_boundary",previous}});
+            const auto intersection=extrusion_boolean<BRepAlgoAPI_Common>(operations[previous]->Shape(),hole);
+            GProp_GProps overlap;BRepGProp::VolumeProperties(intersection,overlap,1e-9);
+            if(overlap.Mass()>1e-8)throw Error("invalid_shape","Loft hole tracks overlap between sections",{{"boundary",i},{"other_boundary",previous}});
+          }
+          shape=extrusion_boolean<BRepAlgoAPI_Cut>(shape,hole);
+        }
+        check_shape(shape);
+        BRepAlgoAPI_Check final_interference(shape,false,true);
+        if(!final_interference.IsValid())throw Error("invalid_shape","Loft boundaries intersect between sections");
+        for(const auto& operation:operations)for(const auto& section:feature.at("sections")) {
+          const auto input=section.get<std::string>();record_history(*operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
       } else if (type == "sweep") {
         std::vector<std::string> inputs;if(feature.contains("input"))inputs.push_back(text_field(feature,"input"));else for(const auto& section:feature.at("sections"))inputs.push_back(section.get<std::string>());
@@ -2124,7 +2237,23 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
         };
         if (type=="fillet") {BRepFilletAPI_MakeFillet operation(copy.Shape());finish(operation,"radius");}
-        else {BRepFilletAPI_MakeChamfer operation(copy.Shape());finish(operation,"distance");}
+        else {
+          BRepFilletAPI_MakeChamfer operation(copy.Shape());
+          if(!feature.contains("reference_face"))finish(operation,"distance");
+          else {
+            const auto face_index=select_faces(source,feature.at("reference_face"),parameters,input).front();
+            const auto reference=TopoDS::Face(source.faces(face_index));const auto mapped=TopoDS::Face(copy.ModifiedShape(reference));
+            ShapeMap adjacent;TopExp::MapShapes(reference,TopAbs_EDGE,adjacent);
+            for(const auto i:selected) {
+              if(!adjacent.Contains(edges(i)))throw Error("invalid_model","Every asymmetric chamfer edge must touch its reference_face",{{"source_feature_id",input}});
+              const auto edge=TopoDS::Edge(copy.ModifiedShape(edges(i)));const double first=scalar(feature.at("distance"),parameters);
+              if(feature.contains("distance2"))operation.Add(first,scalar(feature.at("distance2"),parameters),edge,mapped);
+              else operation.AddDA(first,scalar(feature.at("angle_deg"),parameters,"deg")*std::numbers::pi/180,edge,mapped);
+            }
+            operation.Build();if(!operation.IsDone())throw Error("kernel_failure","Asymmetric chamfer failed; change dimensions or geometry");
+            shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
+          }
+        }
       }
       if(is_surface_feature_type(type))check_surface_intent(feature,shape);
       else if (!is_sketch_feature_type(type)) check_shape(shape);
@@ -2190,7 +2319,20 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     GProp_GProps volume, area;
     // Native pipe surfaces may be rational B-splines even for analytic input.
     // Fixed-order quadrature can misreport their mass; use adaptive integration.
-    if (solids) BRepGProp::VolumeProperties(shape, volume,1e-9);
+    if (solids) {
+      bool polynomial_surface=false;
+      for(TopExp_Explorer face(shape,TopAbs_FACE);face.More();face.Next()) {
+        const auto kind=BRepAdaptor_Surface(TopoDS::Face(face.Current())).GetType();
+        polynomial_surface|=kind==GeomAbs_BSplineSurface||kind==GeomAbs_BezierSurface;
+      }
+      // Gauss-only integration can report a tiny error estimate while missing
+      // the analytic volume of a rational affine-transformed cylinder by 1e-7
+      // relative. Gauss-Kronrod resolves the surface/trim quadrature separately.
+      if(polynomial_surface) {
+        const double error=BRepGProp::VolumePropertiesGK(shape,volume,1e-9,false,false,true,false);
+        if(error<0||!std::isfinite(volume.Mass()))throw Error("kernel_failure","Exact surface volume integration failed");
+      } else BRepGProp::VolumeProperties(shape,volume,1e-9);
+    }
     BRepGProp::SurfaceProperties(shape, area,1e-9);
     Bnd_Box box;
     BRepBndLib::AddOptimal(shape, box, false, false);
