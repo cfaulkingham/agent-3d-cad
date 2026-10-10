@@ -4,7 +4,8 @@ The viewer runs as an embedded MCP App or a standalone Tauri desktop window
 for the core create–view–select–edit loop. The WebGL canvas fills the whole viewer and
 the controls float over it: a project pill (models menu, revision, connection), a
 Scene card (features, parameters, parts), a dock of inspection tools, an Export
-menu, an orientation cube and a selection bar that carries Quick Edit. Committed
+menu, an orientation cube and a compact selection indicator. Requests are entered
+in the main host chat; agents retrieve the selected geometry through `cad_context`. Committed
 edits appear automatically, retaining the camera.
 Selections name an exact evaluated revision; updated geometry clears old picks.
 
@@ -12,8 +13,9 @@ This is an implementation preview. Native integration, real MCP SDK, revision
 races and renderer mathematics are tested. The actual Codex MCP App on macOS
 arm64 has rendered a plate, accepted a human edge pick, and followed an agent's
 selective fillet to revision 2 in the same viewer, retaining the camera and
-clearing the old pick. Quick Edit handed the reference-qualified request to
-the host's chat composer; this host requires the user to press Send there.
+clearing the old pick. An earlier UI also demonstrated handing a request to
+the host's composer. That embedded composer has since been removed; current
+shared-context interaction and host acceptance evidence are in HANDOFF.
 The Tauri window has separately demonstrated face/edge picking, CLI context
 read-back, a selective fillet refresh and a native STEP Save dialog on macOS
 arm64. Tauri Windows/Linux and remaining architecture runs remain unverified. The offline
@@ -69,10 +71,9 @@ Select a face or edge, then tell the connected agent, for example:
 
 Picks are saved automatically with the document, revision, evaluation, feature
 and entity identity. A separate agent connection can read and resolve them; it
-does not need to inspect a screenshot or guess an edge number. **Copy request**
-includes the prompt, workspace path and exact reference for pasting into any
-chat. This also works without entering a prompt, to copy just the reference.
-The native window cannot automatically address a particular chat composer.
+does not need to inspect a screenshot or guess an edge number. Select the
+geometry, return to your main chat and enter the request there. Agents read the
+current selection using this view ID; the viewer has no separate composer.
 Separate chats should use distinct view IDs and pass that ID to `cad_context`
 and `cad_show`; `main` is the default. Old picks explicitly become stale after
 geometry changes, and the refreshed view clears them.
@@ -91,19 +92,20 @@ Ask the agent to create or reopen a design. For a concrete first session:
 1. Create the simple plate from `examples/live-plate.create.json` using `cad_create`.
 2. Call `cad_open` with `{ "document_id": "live_plate", "view_id": "plate_review" }`.
    The host should render the app; saved models appear in the Models menu.
-3. Click a visible edge (there is no Faces/Edges switch), then type “Round this
-   edge to 1 mm” in the selection bar. **Send** carries the exact reference. If the host
-   places it in the chat composer, press Send there to submit it to the agent.
-   If the host does not support messages, **Copy request** provides the same context.
-4. The agent reads the document, resolves the pick with `cad_resolve_selection`,
+3. Click a visible edge (there is no Faces/Edges switch), return to your main
+   chat and type “Round this edge to 1 mm.” The viewer saves the qualified pick
+   immediately, without sending a chat message.
+4. The agent reads `cad_context` with the view ID returned by `cad_open`, checks
+   that the pick is current, reads the document and resolves the pick with `cad_resolve_selection`,
    then uses its selector in a fillet and commits with `expected_revision`.
 5. The same viewer follows the new revision automatically. It retains orbit,
    zoom and pan, and clears the obsolete selected edge.
 
-The model library switches documents in this view. Features expand to show
-editable source intent. Assembly features also list their part IDs, source
-features and parent mate relationships; selected geometry identifies its owning
-part. Placement and mate edits use the shared CAD tools. Assembly part controls
+The model library switches documents in this view. Design Details lists feature
+names, types and the model output without raw source JSON. Components and
+assemblies expand to show pinned source identity, part IDs, source features and
+parent mate relationships; selected geometry identifies its owning part.
+Placement and mate edits use the shared CAD tools. Assembly part controls
 hide or show individual instances, isolate one part, and show all parts again.
 Hidden parts are excluded from rendering and picking; hiding a selected part
 clears the pick. These controls change this view's presentation, while the saved
@@ -149,8 +151,8 @@ line. A visible edge within 6 px wins; if exactly one is nearest it is chosen,
 otherwise the face under the cursor is. Click selects what is highlighted; clicking
 empty space or pressing Esc clears it. Overlapping faces select nothing and say so.
 In a read-only artifact review the same rule picks a curve, else a mesh group.
-Selected faces/edges display their native measurements in the selection bar, with
-the rest under **Details**. Faces are inspectable; the current selective-filleting
+A compact indicator at the top shows the selection, a native measurement and
+**Ask in chat**, with a button to clear it. Faces are inspectable; the current selective-filleting
 operation uses edges. Selection references are unchanged: `cad_context` and
 `cad_resolve_selection` see the same face or edge identity as before.
 
@@ -198,7 +200,7 @@ model, rather than asserting that its anchor is the document origin.
 |---|---|
 | 900 px and up | Parts and available Parameters cards open |
 | 560–899 px | Cards reopen from **Parts** and **Parameters** buttons |
-| Under 560 px | One card opens at a time; the toolbar fits at 360 px and the selected edit bar wraps |
+| Under 560 px | One card opens at a time; the toolbar and compact selection indicator fit at 360 px |
 
 **Assembled** restores all assembly leaves; each part tab isolates its occurrence.
 Large assemblies use wrapped tabs with a bounded scroll area. **Design details**
@@ -206,25 +208,26 @@ retains the feature tree and detailed visibility controls. Card arrows collapse
 contents; the Parameters close button leaves a reopen button. Resizing or opening
 and closing Parameters recenters the usable viewport while preserving orbit and zoom.
 
-The Models menu contains the library, exports, optional orientation cube and
-**Ask agent…**. Clicking geometry reveals the selection bar. The bottom ellipsis
+The Models menu contains the library, exports and optional orientation cube.
+Clicking geometry reveals the compact selection indicator. The bottom ellipsis
 opens inspection tools (Visual inspection, Colors, Review notes, Saved views,
-Exact section, Measure, Sequences, Motion and Source). An icon appears only while
+Exact section, Face and part clearance, Sequences, Motion and Source). An icon appears only while
 its panel applies. Esc, an outside click or the close button dismisses the popover;
 the dock supports Up/Down arrows.
 
-Quick Edit hands a request to the host; it does not directly mutate geometry or
-guarantee that the host posts a message automatically. Complete any composer
-Send step before expecting an agent response.
-Optional “Include this view” adds a PNG only when the host supports image messages.
-If a send times out, check the chat before sending again: delivery may have occurred.
+Select geometry in the viewer and make requests in the main chat. Selection and
+clearing publish native context immediately; camera movement is debounced. Agents
+retrieve the current selection through `cad_context` with the retained view ID.
+Optional host model context is also published when supported; its acknowledgment
+does not block native persistence or revision polling. No chat message is posted
+by selecting geometry. Save a PNG from Export when a separate image is useful.
 Failed geometry preserves the last committed design. For a candidate that must
 not commit, the agent can use the separate offline `cad_preview` workflow.
 
 Read-only polling retries temporary lock contention, queue saturation and an
 evaluation superseded during transfer. While waiting, the last rendered solid
 remains visible and old picks are disabled. Persistent failures stay explicit.
-Polling recovery never automatically resends a Quick Edit request.
+Polling recovery does not retry context writes or modeling mutations.
 
 ## Clipping and exploded inspection
 
@@ -234,9 +237,19 @@ agent context. Picking follows the displayed parts while exact measurements,
 references and saved source retain their original coordinates. See
 [PRESENTATION.md](PRESENTATION.md) for the contract and limits.
 
-## Exact source measurements
+## Measurements and exact source checks
 
-Exact measurement chooses two leaf parts or uses current face/edge picks for A
+The bottom-toolbar ruler measures two picked points, A then B, directly on the
+model. It shows their 3D distance and a camera-tracked line without opening a
+panel. Nearby visible edges attract the pick, even with outlines hidden. Click
+an A/B marker to replace that endpoint or another location to start a new pair.
+Escape/the ruler button exits; re-enabling restores the current points. Picks
+use displayed tessellation and polylines, so their accuracy is approximate.
+Points remain while orbiting/zooming and retire when source or presentation
+changes. They are local viewer state and also work for read-only artifacts.
+
+The separate Face and part clearance inspection tool chooses two leaf parts
+or uses current face/edge picks for A
 and B. Pair or assembly checks run in native jobs and show saved-pose distances,
 closest points and material overlap. Clipping, explosion and hiding do not alter
 the source measurements. Reopening restores the qualified result; a revision
@@ -249,7 +262,7 @@ have explicit feature/all-leaf/subset coverage. Hiding changes the displayed
 caps while preserving the report's scope. Kept-side reversal reuses the same
 section; plane/placement/source changes retire it. Section picks return review
 feedback, never original topology references. Reopening restores its qualified
-job, and Copy request carries that identity. See [SECTIONS.md](SECTIONS.md).
+job, and shared agent context carries that identity. See [SECTIONS.md](SECTIONS.md).
 
 ## Mechanism motion
 

@@ -40,6 +40,13 @@ function mock(){
  return{state,calls,messages,external(hash){displayed=artifact(hash);},native(){displayed=native;},block(action){target=action;let release;gate=new Promise(resolve=>release=()=>{gate=null;resolve();});return release;},dispose(){state.dispose();timers.clear();}};
 }
 {
+ const m=mock();await m.state.pollOnce();m.state.setMeasurementPoint('a',[0,0,0]);m.state.setMeasurementPoint('b',[3,4,12]);m.external();await m.state.pollOnce();
+ check(!m.state.value.point_measurement.a&&!m.state.value.point_measurement.b,'Retargeting native points to an artifact clears their coordinates');
+ const count=m.calls.length;m.state.beginPointMeasurement();m.state.acceptMeasurementPoint([0,0,0]);m.state.setMeasurementPoint('b',[3,4,12]);
+ check(Renderer.math.pointDistance(m.state.value.point_measurement.a.point_mm,m.state.value.point_measurement.b.point_mm).distance_mm===13&&m.calls.length===count,'External review supports local point distance without native tool calls');
+ m.external('d'.repeat(64));await m.state.pollOnce();check(!m.state.value.point_measurement.a,'A changed artifact review hash retires defined points');m.dispose();
+}
+{
  const m=mock();await m.state.pollOnce();await m.state.deliveryQueue;await m.state.playSequence('Review');
  check(m.state.value.playing&&timers.size===1&&m.state.value.annotations.length===1,'Native clock and qualified inspection note exist before retarget');
  m.external();await m.state.pollOnce();

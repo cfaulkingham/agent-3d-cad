@@ -81,6 +81,14 @@ try {
   await state.publishContext();
   const context = await tool('cad_context', { view_id: 'test_view' });
   check(!context.stale && context.selection.entity_id === picked, 'agent reads actual selected edge');
+  check(context.selection.evaluation_id === evaluation.evaluation_id && context.selection.revision === 1 && !messages.some(m => m.method === 'ui/message'), 'main chat retrieves a qualified pick without a viewer message');
+  const capabilities = bridge.capabilities;
+  bridge.capabilities = {};
+  state.update({ selection: null }); await state.publishContext();
+  check((await tool('cad_context', { view_id: 'test_view' })).selection === null, 'clearing a pick persists without messaging or optional host context support');
+  state.update({ selection: { reference, geometry: evaluation.topology.edges.find(e => e.id === picked) } }); await state.publishContext();
+  check((await tool('cad_context', { view_id: 'test_view' })).selection.entity_id === picked && !messages.some(m => m.method === 'ui/message'), 'native selection handoff works with no host messaging capabilities');
+  bridge.capabilities = capabilities;
   await state.sendPrompt('Round this edge to 1 mm.');
   const message = messages.find(m => m.method === 'ui/message');
   check(message.params.content[0].text.includes(evaluation.evaluation_id), 'Quick Edit carries exact evaluation');

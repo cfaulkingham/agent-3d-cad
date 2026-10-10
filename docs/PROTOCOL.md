@@ -683,15 +683,17 @@ and retries a complete, revalidated transfer on the next poll while retaining
 the last rendered solid and camera. Other failures remain visible. This recovery
 does not retry context publication, modeling mutations or message delivery.
 
-Quick Edit is an explicit user action. It publishes validated context and sends
-`ui/message` only when the host advertises messaging. Optional PNG capture requires
-image-message support and is limited to 2 MiB. A successful `ui/message`
-acknowledgment may mean the host prepared a chat composer draft; the UI directs
-the user to press Send there. It does not claim automatic posting or editing.
-Uncertain delivery is never retried
-automatically. Hosts without messaging use Copy request. Selection changes use
+The viewer has no embedded chat composer. Face/edge selection and clearing
+immediately publish validated native context; camera movement remains debounced.
+Users enter their requests in the main chat. Agents read `cad_context` with the
+view ID returned by `cad_open` and resolve a current native selection before
+editing. Stale or draft references cannot become guessed targets. Selection
+changes use
 `ui/update-model-context` when supported; that optional acknowledgment does not
-block revision polling. The app never directly calls modeling mutations.
+block native persistence or revision polling. The viewer does not post
+`ui/message` requests. Legacy native `prompt` fields remain supported; no tool
+or document contract changed. Parameter controls still use the shared validated
+`cad_apply` path; selection alone does not mutate geometry.
 
 The bridge accepts messages only from its parent window, pins the responding
 origin, bounds pending requests with timeouts, and disposes them on teardown.

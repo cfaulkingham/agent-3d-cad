@@ -59,7 +59,7 @@
   // Connects the floating chrome to the existing section elements. Panels keep
   // their IDs and are only moved; app.js still owns their content and `hidden`
   // state, and the shell reads that state on every refresh().
-  function mount({ $, bridge, renderer }) {
+  function mount({ $, bridge, renderer, onToolChange=()=>{},onMeasureToggle=()=>{} }) {
     const doc = document, root = doc.documentElement, app = $('app');
     const cleanups = [];
     const on = (target, type, handler, options) => {
@@ -89,7 +89,7 @@
     };
     const dock = $('tool-dock'), dockToggle = $('dock-toggle');
     const dockButtons = () => [...dock.querySelectorAll('.dock-button')];
-    let openKey = null, activeTool = null, returnTo = null, dockOpen = false, promptOpen = false;
+    let openKey = null, activeTool = null, returnTo = null, dockOpen = false;
     const parkToolPanel = () => { const panel = activeTool && $(activeTool); if (panel) $('tool-panels').append(panel); };
     function close(restoreFocus = true) {
       if (!openKey) return;
@@ -98,6 +98,7 @@
       entry.trigger?.setAttribute('aria-expanded', 'false');
       if (openKey === 'tool') { parkToolPanel(); for (const button of dockButtons()) button.setAttribute('aria-expanded', 'false'); }
       openKey = null; activeTool = null; returnTo = null;
+      onToolChange(null);
       if (restoreFocus && target && doc.contains(target) && !target.hidden) target.focus();
     }
     function open(key, trigger) {
@@ -111,7 +112,6 @@
     const toggle = key => (openKey === key ? close() : open(key, popovers[key].trigger));
     on(popovers.models.trigger, 'click', () => toggle('models'));
     on(popovers.export.trigger, 'click', () => toggle('export'));
-    on($('ask-agent'), 'click', () => { close(false); promptOpen = true; refreshBar(); $('prompt').focus(); });
     on($('show-cube'), 'click', () => { const visible = $('cube-area').hidden; $('cube-area').hidden = !visible; $('show-cube').setAttribute('aria-pressed', String(visible)); });
     on($('tool-popover-close'), 'click', () => close());
     on($('documents'), 'click', event => { if (event.target.closest('button')) close(false); });
@@ -120,10 +120,11 @@
       if (dockOpen && !dock.contains(event.target) && !dockToggle.contains(event.target) && !$('tool-popover').contains(event.target)) { dockOpen = false; dockToggle.setAttribute('aria-expanded', 'false'); refreshDock(); }
       if (!openKey) return;
       const entry = popovers[openKey], target = event.target;
+      if(activeTool==='measurement-panel'&&target===$('viewport'))return;
       if (entry.el.contains(target) || (openKey === 'tool' ? dock.contains(target) : entry.trigger.contains(target))) return;
       close(false);
     }, true);
-    on(doc, 'keydown', event => { if (event.key === 'Escape') { if(openKey) close(); dockOpen = false; dockToggle.setAttribute('aria-expanded', 'false'); refreshDock(); } });
+    on(doc, 'keydown', event => { if (event.key === 'Escape') { if(openKey) close();else onToolChange(null);dockOpen = false; dockToggle.setAttribute('aria-expanded', 'false'); refreshDock(); } });
     function openTool(button) {
       const id = button.dataset.tool;
       if (activeTool === id) { close(); return; }
@@ -132,6 +133,7 @@
       button.setAttribute('aria-expanded', 'true');
       $('tool-popover-title').textContent = button.getAttribute('aria-label');
       $('tool-popover-body').replaceChildren($(id));
+      onToolChange(id);
     }
     for (const button of dockButtons()) on(button, 'click', () => openTool(button));
     on(dock, 'keydown', event => {
@@ -215,40 +217,21 @@
       if (!parts && $('tab-parts').getAttribute('aria-selected') === 'true') selectPane('features-pane');
     }
 
-    // Selection bar: idle prompt pill, expanded summary when something is selected.
-    const bar = $('selection-bar'), prompt = $('prompt');
-    const autosize = () => { prompt.style.height = 'auto'; prompt.style.height = Math.min(prompt.scrollHeight, 104) + 'px'; };
-    on(prompt, 'input', autosize);
-    on($('details-toggle'), 'click', () => {
-      const panel = $('details-panel'), expanded = panel.hidden;
-      panel.hidden = !expanded;
-      $('details-toggle').setAttribute('aria-expanded', String(expanded));
-      $('details-toggle').setAttribute('aria-label', expanded ? 'Hide details' : 'Show details');
-    });
+    // Selection feedback stays compact; requests belong in the host chat.
     function refreshBar() {
-      const selected = !$('clear-selection').hidden;
-      bar.dataset.state = selected ? 'selected' : 'idle';
-      let key = '';
-      if (selected) {
-        const labels = [...$('measurements').querySelectorAll('dt')], values = [...$('measurements').querySelectorAll('dd')];
-        const at = labels.findIndex(dt => /^(Length|Area|Radius)$/.test(dt.textContent));
-        if (at >= 0) key = `${labels[at].textContent} ${values[at].textContent}`;
-      }
-      $('selection-key').textContent = key;
-      bar.dataset.prompt = String(promptOpen);
-      $('pick-hint').hidden = selected || promptOpen || !$('empty-state').hidden || !$('all-hidden').hidden;
+      const selected = !$('clear-selection').hidden, measuring = app.dataset.pointPicking === 'true';
+      $('selection-bar').hidden = !selected || measuring;
+      $('pick-hint').hidden = !measuring && (selected || !$('empty-state').hidden || !$('all-hidden').hidden);
       $('menu-title').textContent = $('document-title').textContent;
       $('menu-revision').textContent = $('revision').textContent;
-      autosize();
     }
-    on(doc, 'keydown', event => { if (event.key === 'Escape') { promptOpen = false; refreshBar(); } });
 
     for (const button of $('standard-views').querySelectorAll('[data-view]')) on(button, 'click', () => renderer?.setView(button.dataset.view, { animate: true }));
     for (const [id, key] of [['toggle-grid','grid'], ['toggle-axes','axes'], ['toggle-edges','edges']]) on($(id), 'click', () => {
       const enabled = $(id).getAttribute('aria-pressed') !== 'true';
       $(id).setAttribute('aria-pressed', String(enabled)); renderer?.setDisplay({ [key]: enabled });
     });
-    on($('open-measure'), 'click', () => { const button = dockButtons().find(item => item.dataset.tool === 'measurement-panel'); if (button && !button.hidden) openTool(button); });
+    on($('open-measure'), 'click', () => {close(false);onMeasureToggle();});
 
     // Orientation cube: six real buttons in a world-aligned CSS 3D scene.
     const cube = $('cube'), cubeScene = doc.createElement('div');

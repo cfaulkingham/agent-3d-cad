@@ -12,9 +12,14 @@ in force; implementation alone does not establish platform certification.
 
 Experience extension (2026-10-06): the user requested the next step toward the
 neighboring text-to-cad experience. M4 adds a bundled MCP App with live revision
-updates, WebGL selection, model discovery and Quick Edit context. It uses the same
+updates, WebGL selection, model discovery and shared selection context. It uses the same
 native Service and worker isolation, without an HTTP listener or sibling runtime.
 See `LIVE_VIEWER.md` and the current protocol for implemented behavior and limits.
+
+Interaction revision (2026-10-09): users select a face or edge in the viewer and
+make requests in the main host chat. The embedded Quick Edit composer is removed;
+agents retrieve the current qualified selection through `cad_context` using the
+retained view ID. Native context contracts and stale-reference checks remain.
 
 Drawing extension (2026-10-06): the user authorized M5 native engineering
 drawings. `cad_drawing` derives revision-qualified views and geometry-checked

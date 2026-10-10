@@ -7,6 +7,7 @@
 <div id="app" data-scene="open" data-dock="icons">
   <canvas id="viewport" tabindex="0" aria-label="CAD model. Drag to orbit, shift-drag to pan, scroll to zoom. Hover and click to select a face or edge."></canvas>
   <div id="annotation-overlay" class="annotation-overlay" aria-label="Review pins"></div>
+  <svg id="point-measure-overlay" class="point-measure-overlay" aria-label="Distance between user-defined points" hidden></svg>
   <div id="empty-state" class="empty-state"><div class="empty-mark" aria-hidden="true">◇</div><h2>Your next idea starts here</h2><p>Ask your agent to create a model,<br>or open one from the Models menu.</p></div>
   <div id="all-hidden" class="all-hidden" hidden><p>All parts are hidden.</p><button id="restore-parts">Show all parts</button></div>
   <div id="artifact-semantic-empty" class="all-hidden" hidden><p id="artifact-empty-help">This file contains robot semantics without geometry.</p><p>Review its groups and references in Source metadata.</p></div>
@@ -55,7 +56,7 @@
 
   <section id="models-popover" class="popover popover-left" role="dialog" aria-label="Models" hidden>
     <div class="workspace-title"><strong id="menu-title">Your workspace</strong><span id="menu-revision"></span></div>
-    <div class="menu-actions"><button id="ask-agent">Ask agent…</button><button id="show-parameters">Parameters</button><button id="show-cube" aria-pressed="false">Orientation cube</button></div>
+    <div class="menu-actions"><button id="show-parameters">Parameters</button><button id="show-cube" aria-pressed="false">Orientation cube</button></div>
     <div class="section-heading"><h2>Models</h2><button id="refresh-library" class="icon-button" title="Refresh models" aria-label="Refresh models">↻</button></div>
     <p id="workspace-label" class="workspace-label">Saved projects</p>
     <button id="open-workspace" class="workspace-button" hidden>Open workspace…</button>
@@ -83,7 +84,7 @@
     <button class="dock-button" data-tool="annotations-panel" aria-label="Review notes" title="Review notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9.5L4 20z"/></svg></button>
     <button class="dock-button" data-tool="presets-panel" aria-label="Saved views" title="Saved views" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
     <button class="dock-button" data-tool="section-panel" aria-label="Exact section" title="Exact section" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16"/><path d="M8 16h8" stroke-dasharray="1.6 2"/></svg></button>
-    <button class="dock-button" data-tool="measurement-panel" aria-label="Measure" title="Measure" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 15.5L15.5 3.5l5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/></svg></button>
+    <button class="dock-button" data-tool="measurement-panel" aria-label="Face and part clearance" title="Face and part clearance" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 15.5L15.5 3.5l5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/></svg></button>
     <button class="dock-button" data-tool="sequence-panel" aria-label="Sequences" title="Sequences" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M10 8.2l5.6 3.8-5.6 3.8z"/></svg></button>
     <button class="dock-button" data-tool="motion-panel" aria-label="Motion" title="Motion" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.6-5.7"/><path d="M19.5 4.5v4.8h-4.8"/></svg></button>
     <button class="dock-button" data-tool="artifact-review-panel" aria-label="Source" title="Source" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8l4 4v13H6z"/><path d="M14 3.5v4h4"/></svg></button>
@@ -133,8 +134,8 @@
       <dl id="section-result" aria-label="Exact section dimensions"></dl>
       <p id="section-coverage" class="fine-print" hidden></p>
     </section>
-    <section id="measurement-panel" class="presentation-panel" aria-label="Exact measurements" hidden>
-      <div class="section-heading"><h2>Exact measurement</h2><button id="measurement-clear" class="quiet">Clear result</button></div>
+    <section id="measurement-panel" class="presentation-panel" aria-label="Face and part clearance" hidden>
+      <div class="section-heading"><h2>Face and part clearance</h2><button id="measurement-clear" class="quiet">Clear result</button></div>
       <label for="measurement-a">Target A</label><select id="measurement-a"><option value="">Choose a part or use a pick</option></select><button id="measurement-pick-a" class="quiet">Use selected face/edge as A</button>
       <label for="measurement-b">Target B</label><select id="measurement-b"><option value="">Choose a part or use a pick</option></select><button id="measurement-pick-b" class="quiet">Use selected face/edge as B</button>
       <label for="measurement-threshold">Minimum clearance (mm, optional)</label><input id="measurement-threshold" type="number" min="0" max="1000000" step="any" placeholder="Your required clearance">
@@ -183,31 +184,17 @@
     <div class="corner-readout"><span id="dimensions"></span></div>
   </footer>
 
-  <details id="copy-fallback" class="card floating-note" hidden><summary>Request text</summary><textarea id="copy-text" readonly rows="6" aria-label="Request text to copy"></textarea></details>
+  <details id="copy-fallback" class="card floating-note" hidden><summary>Export paths</summary><textarea id="copy-text" readonly rows="6" aria-label="Export paths to copy"></textarea></details>
 
-  <div id="selection-bar" class="selection-bar" data-state="idle">
-    <p id="edit-status" class="bar-status" role="status" aria-live="polite"></p>
-    <div id="details-panel" class="bar-details" hidden>
-      <h2 id="edit-heading" class="sr-only">Quick Edit</h2>
-      <p id="selection-help" class="muted">Select a face or edge, then ask your connected agent to edit it.</p>
-      <dl id="measurements"></dl>
-      <details id="reference-details" hidden><summary>Selection reference</summary><pre id="reference"></pre></details>
-      <label class="capture-option" id="capture-option" hidden><input id="include-capture" type="checkbox"> Include this view</label>
-      <p id="edit-help" class="fine-print">If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.</p>
+  <p id="edit-status" class="viewer-status" role="status" aria-live="polite"></p>
+  <div id="selection-bar" class="selection-indicator" role="status" aria-label="Selected geometry" hidden>
+    <div class="selection-summary">
+      <span id="selection-badge" class="sr-only"></span>
+      <span id="selection-name" class="selection-name"></span>
+      <span id="selection-key" class="selection-key"></span>
     </div>
-    <div class="bar-row">
-      <div id="selection-summary" class="selection-summary">
-        <span id="selection-badge" class="count">Whole model</span>
-        <span id="selection-name" class="selection-name">Model overview</span>
-        <span id="selection-key" class="selection-key"></span>
-      </div>
-      <button id="details-toggle" class="icon-button" aria-expanded="false" aria-controls="details-panel" aria-label="Show details" title="Details">⌃</button>
-      <label class="sr-only" for="prompt">Describe a change for your agent</label>
-      <textarea id="prompt" rows="1" maxlength="8000" placeholder="Ask the agent…&#10;e.g. Round this edge to 2 mm"></textarea>
-      <button id="send" class="primary" disabled>Send <span aria-hidden="true">↗</span></button>
-      <button id="copy-request" class="pill small" disabled>Copy request</button>
-      <button id="clear-selection" class="icon-button" hidden aria-label="Clear selection" title="Clear selection (Esc)">×</button>
-    </div>
+    <span class="selection-chat-hint">Ask in chat</span>
+    <button id="clear-selection" class="icon-button" hidden aria-label="Clear selection" title="Clear selection (Esc)">×</button>
   </div>
 
   <span id="update-status" class="sr-only" role="status" aria-live="polite">Connecting to native service</span>

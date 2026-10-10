@@ -30,4 +30,4 @@ const request = context.CadLiveState.promptText({ prompt: 'Round this edge', vie
 assert.match(request, /CAD workspace: "\/CAD projects"/);
 assert.match(request, /"kind": "edge"/);
 assert.match(request, /cad_resolve_selection/);
-console.log('Tauri bridge initializes the native view, routes tools, keeps Copy request and normalizes errors.');
+console.log('Tauri bridge initializes the native view, routes tools, formats legacy request context and normalizes errors.');

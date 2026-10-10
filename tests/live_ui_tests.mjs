@@ -509,6 +509,36 @@ function measurementMock(){
 }
 const measurePair=()=>({action:'pair',targets:[{kind:'part',part_id:'left'},{kind:'part',part_id:'right'}]});
 {
+  const m=measurementMock();await m.state.pollOnce();
+  let calls=0;const tool=m.bridge.tool;m.bridge.tool=async(...args)=>{calls++;return tool(...args);};
+  m.state.beginPointMeasurement();m.state.acceptMeasurementPoint([3,5,3]);
+  check(m.state.value.point_measurement.picking==='b','Picking A automatically requests the user-defined B location');
+  m.state.acceptMeasurementPoint(null);
+  check(m.state.value.point_measurement.a.point_mm[0]===3&&m.state.value.point_measurement.picking==='b'&&m.state.value.point_measurement.error,'A miss retains A and continues waiting for B');
+  m.state.acceptMeasurementPoint([6,9,3]);
+  check(m.state.value.point_measurement.picking===null&&CadRenderer.math.pointDistance(m.state.value.point_measurement.a.point_mm,m.state.value.point_measurement.b.point_mm).distance_mm===5,'The completed distance uses the actual two points');
+  check(calls===0&&!m.state.value.measurement,'Defining points does not start a closest-face job or mutate native geometry');
+  m.state.beginPointMeasurement('a');m.state.acceptMeasurementPoint([6,9,3]);
+  check(CadRenderer.math.pointDistance(m.state.value.point_measurement.a.point_mm,m.state.value.point_measurement.b.point_mm).distance_mm===0,'Replacing a point preserves B and allows coincident locations');
+  m.state.setMeasurementPoint('a',[0,0,0]);m.state.setMeasurementPoint('b',[3,4,12]);
+  check(CadRenderer.math.pointDistance(m.state.value.point_measurement.a.point_mm,m.state.value.point_measurement.b.point_mm).distance_mm===13,'Explicit coordinates define a full 3D distance');
+  for(const point of [[1,2],['1',2,3],[NaN,0,0],[Infinity,0,0],[1e10,0,0]])assert.throws(()=>m.state.setMeasurementPoint('a',point));checks+=5;
+  const before=JSON.stringify(m.state.value.point_measurement);m.state.setCamera({yaw:1,pitch:1,zoom:2,pan:[0,0]});m.state.update({});
+  check(JSON.stringify(m.state.value.point_measurement)===before,'Orbiting and zooming preserve defined points');
+  m.state.beginPointMeasurement('b');m.state.stopPointMeasurement();
+  check(m.state.value.point_measurement.b&&m.state.value.point_measurement.picking===null,'Closing or cancelling picking retains completed points');
+  m.state.update({presentation:{...m.state.value.presentation,clip:{normal:[0,0,1],offset_mm:1,keep:'positive'}}});
+  check(!m.state.value.point_measurement.a&&!m.state.value.point_measurement.b,'A changed displayed clipping plane retires point measurements');
+  m.state.setMeasurementPoint('a',[0,0,0]);m.state.update({hidden_part_ids:['left']});
+  check(!m.state.value.point_measurement.a,'A visibility change retires point locations');
+  m.state.beginPointMeasurement();m.advance();await m.state.pollOnce();
+  check(!m.state.value.point_measurement.a&&!m.state.value.point_measurement.picking,'A new evaluation retires points and cancels pending picking');
+  m.state.setMeasurementPoint('a',[0,0,0]);m.state.attach('other');
+  check(!m.state.value.point_measurement.a,'Retargeting a view clears point coordinates');
+  assert.throws(()=>m.state.beginPointMeasurement(),/saved geometry/);checks++;
+  m.state.dispose();
+}
+{
   const m=measurementMock();await m.state.pollOnce();await m.state.deliveryQueue;
   m.state.setMeasurementTarget('a',{kind:'face',entity_id:'face-1'});m.state.setMeasurementTarget('b',{kind:'part',part_id:'right'});
   check(m.state.value.measurement_targets.a.entity_id==='face-1','A current face can be retained as one measurement endpoint');

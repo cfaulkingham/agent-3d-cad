@@ -103,8 +103,8 @@ passes the same persistence and geometry contracts.
 - Model library and source feature tree over committed documents.
 - WebGL viewport, occlusion-aware face/edge picking, camera retention and capture.
 - Native live-view state and isolated mesh jobs follow HEAD automatically.
-- Validated selection/context and explicit Quick Edit requests through the host,
-  with Copy request fallback. Open once and reuse the view across edits.
+- Validated selection/context shared with the main chat through `cad_context`.
+  Open once and reuse the view across edits; retain its explicit view ID.
 - Bundle the native-cad agent skill and reproducible integration checks.
 
 Implemented as a preview. Native service + actual app bridge/controller tests
@@ -115,6 +115,11 @@ Edit handoff to the chat composer, selective fillet, same-view revision refresh,
 camera retention and stale-pick clearing. This host requires the user to submit
 the composer draft. Other hosts/platforms retain their own acceptance gates;
 no test stub substitutes for that evidence. Full sibling parity is not implied.
+
+The 2026-10-09 interaction revision removes the embedded Quick Edit composer;
+users make requests in the main chat after selecting geometry. Native/context
+and browser-harness evidence is recorded separately in HANDOFF; current-host
+reload acceptance remains pending.
 
 ## M5 — native drawings (authorized 2026-10-06)
 
@@ -173,8 +178,8 @@ evidence; no additional platform acceptance is implied by source implementation.
 - Runtime-free checksum-verifying installers and gated draft release creation.
 - Standalone Tauri window sharing renderer and native service contracts.
 - Workspace switching, recent workspaces and saved-project search.
-- Face/edge picks readable by connected agents through `cad_context`, copied
-  requests containing exact references, and automatic revision refresh.
+- Face/edge picks readable by connected agents through `cad_context` and
+  automatic revision refresh after requests in the main chat.
 - Native Save dialogs for STEP/STL and PDF/SVG/DXF drawing exports.
 
 Commit `2065a69` passed all five platform CI lanes, including native tests,
@@ -182,9 +187,9 @@ installer/configuration checks, relocated bundles, Tauri integration tests and
 packaging. Both Linux runtime-only container checks passed. Fresh-machine GUI
 checks, client installation trials, publisher signing and macOS notarization
 remain necessary before claiming a frictionless public release. Downloaded
-macOS arm64 package evidence and remaining limitations are in `HANDOFF.md`. Direct chat
-composer delivery is host-dependent; the standalone app uses Copy request and
-shared context. A historical-revision browser is not yet implemented; the
+macOS arm64 package evidence and remaining limitations are in `HANDOFF.md`. The
+standalone app shares selection context with agents using the same workspace
+and view ID. A historical-revision browser is not yet implemented; the
 library reopens saved projects at HEAD and existing tools can read/restore history.
 
 ## 1.0 gate — ChatGPT desktop and Claude Desktop plugins (2026-10-07)

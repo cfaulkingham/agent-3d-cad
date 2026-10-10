@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id), bridge = new CadBridge();
-  let renderer = null, rendered = null, drawnEvaluation = null, sending = false, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
+  let renderer = null, rendered = null, drawnEvaluation = null, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
   let sizeObserver = null, resizeTimer = null, partsKey = null, partsDocument = null, exporting = false, shell = null;
   const fmt = value => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—';
   const status = text => { $('edit-status').textContent = text; };
@@ -14,33 +14,12 @@
     }
   }
   function inspect(v) {
-    const s = v.selection, summary = v.payload?.summary;
-    if(v.payload?.read_only){
-      $('clear-selection').hidden=!s;$('reference-details').hidden=!s;$('selection-badge').textContent=s?s.reference.kind.replace('_',' '):'Whole artifact';
-      $('selection-name').textContent=s?(s.geometry.name||s.geometry.source_ref||s.reference.entity_id):'Artifact overview';
-      $('selection-help').textContent='Inspect mesh groups or curves and discuss them with your agent. These labels belong to this captured review.';
-      $('reference').textContent=s?JSON.stringify(s.reference,null,2):'';
-      facts($('measurements'),s?[['Review label',s.reference.entity_id],['Source location',s.geometry.source_ref]]:[['Vertices',summary.vertices],['Triangles',summary.triangles],['Mesh groups',summary.groups],['Curves',summary.curves]]);return;
-    }
-    $('clear-selection').hidden = !s; $('reference-details').hidden = !s;
-    $('selection-badge').textContent = s ? `Selected ${s.reference.kind}` : 'Whole model';
-    $('selection-name').textContent = s ? `${s.reference.kind === 'edge' ? 'Edge' : 'Face'} · ${s.geometry.curve_kind || s.geometry.surface_kind || s.reference.entity_id}` : 'Model overview';
-    $('selection-help').textContent = v.payload?.draft ? 'Save or reset this pose to select geometry. You can send the whole preview to your agent.' : s ? 'Ask your agent to use this selection. Copy request includes its precise face or edge reference.' : 'Select a face or edge, then ask your connected agent to edit it.';
-    $('reference').textContent = s ? JSON.stringify(s.reference, null, 2) : '';
-    let rows = [];
-    if (s) {
-      const e = s.geometry;
-      if (e.part_id) rows.push(['Part', e.part_id]);
-      if (Number.isFinite(e.length_mm)) rows.push(['Length', `${fmt(e.length_mm)} mm`]);
-      if (Number.isFinite(e.area_mm2)) rows.push(['Area', `${fmt(e.area_mm2)} mm²`]);
-      if (Number.isFinite(e.radius_mm)) rows.push(['Radius', `${fmt(e.radius_mm)} mm`]);
-      if (e.center_mm) rows.push(['Center', e.center_mm.map(fmt).join(', ')]);
-      rows.push(['Feature', s.reference.feature_id], ['Revision', s.reference.revision]);
-    } else if (summary) {
-      rows = [['Volume', `${fmt(summary.volume_mm3)} mm³`], ['Surface area', `${fmt(summary.area_mm2)} mm²`], ['Solids', summary.solid_count], ['Faces / edges', `${summary.face_count} / ${summary.edge_count}`]];
-      if (summary.assembly) rows.unshift(['Parts', summary.assembly.parts.length], ['Mates', summary.assembly.mates.length]);
-    }
-    facts($('measurements'), rows);
+    const s = v.selection, readonly = v.payload?.read_only === true;
+    $('clear-selection').hidden = !s;
+    $('selection-badge').textContent = s ? `Selected ${s.reference.kind.replace('_', ' ')}` : '';
+    $('selection-name').textContent = s ? readonly ? (s.geometry.name || s.geometry.source_ref || s.reference.entity_id) : `${s.reference.kind === 'edge' ? 'Edge' : 'Face'} · ${s.geometry.curve_kind || s.geometry.surface_kind || s.reference.entity_id}` : '';
+    const e = s?.geometry;
+    $('selection-key').textContent = !e ? '' : readonly ? e.source_ref || '' : Number.isFinite(e.length_mm) ? `${fmt(e.length_mm)} mm` : Number.isFinite(e.area_mm2) ? `${fmt(e.area_mm2)} mm²` : Number.isFinite(e.radius_mm) ? `Radius ${fmt(e.radius_mm)} mm` : '';
   }
   let artifactKey='';
   function artifactControls(v) {
@@ -50,9 +29,6 @@
     if(readonly)$('artifact-empty-help').textContent=p.summary.representation==='robot_semantics'?'This file contains robot semantics without geometry.':'This review contains no display geometry.';
     $('feature-heading-title').textContent=readonly?'Review data':'Features';
     $('library-foot').textContent=readonly?'Read-only artifact · Display in millimeters':'Exact geometry · OpenCascade 8.0.1 · Dimensions in millimeters';
-    $('edit-heading').textContent=readonly?'Discuss review':'Quick Edit';
-    $('prompt').placeholder=readonly?'Ask about this artifact…':'Describe a change…\ne.g. Round this edge to 2 mm';
-    $('edit-help').textContent=readonly?'Your agent can inspect this captured artifact and its source references. Open its editable native source to make CAD edits.':'If your host puts the request in the chat composer, press Send there. Your agent reviews the request and makes the edit. This view updates when the new revision is saved.';
     $('export-panel').hidden=readonly;$('parameters-panel').hidden=readonly;
     const key=readonly?a.review_sha256:'';if(key===artifactKey)return;artifactKey=key;
     if(!readonly)return;
@@ -69,12 +45,13 @@
   function modelTree(model, summary) {
     $('features').replaceChildren(); $('feature-count').textContent = model?.features?.length || 0;
     for (const feature of model?.features || []) {
-      const detail = document.createElement('details'), title = document.createElement('summary'), type = document.createElement('span'), code = document.createElement('pre');
+      const component = summary?.components?.find(item => item.id === feature.id);
+      const expandable = !!component || feature.type === 'assembly';
+      const detail = document.createElement(expandable ? 'details' : 'div'), title = document.createElement(expandable ? 'summary' : 'div'), type = document.createElement('span');
+      if (!expandable) { detail.className = 'feature-row'; title.className = 'feature-title'; }
       title.append(document.createTextNode(feature.id)); type.className = 'feature-type';
       type.textContent = `${feature.type}${feature.id === model.output ? ' · output' : ''}`; title.append(type);
-      const shown = { ...feature }; if (shown.content) shown.content = '(embedded STEP content)';
-      code.textContent = JSON.stringify(shown, null, 2); detail.append(title);
-      const component = summary?.components?.find(item => item.id === feature.id);
+      detail.append(title);
       if (component) {
         const source = document.createElement('p'); source.className = 'assembly-part';
         source.textContent = `Pinned from ${component.source.document_id} r${component.source.revision} · ${component.source.feature_id}${component.modified ? ' · local edits' : ''}`;
@@ -88,7 +65,7 @@
           detail.append(row);
         }
       }
-      detail.append(code); $('features').append(detail);
+      $('features').append(detail);
     }
   }
   let parameterKey = '', partTabsKey = '', comparisonToken = 0, comparisonKey = '';
@@ -118,7 +95,7 @@
         heading.append(label, number); row.append(heading, slider); $('parameters').append(row);
       }
     }
-    const ready = native && v.status === 'ready' && !p.draft && !v.parameter_busy && !v.preset_busy && !v.sequence_busy && !sending;
+    const ready = native && v.status === 'ready' && !p.draft && !v.parameter_busy && !v.preset_busy && !v.sequence_busy;
     for (const input of $('parameters').querySelectorAll('input')) input.disabled = !ready;
     $('parameter-status').textContent = (v.parameter_source === p?.document_id ? v.parameter_error || v.parameter_message : '') || (p?.draft ? 'Save or reset the pose to edit parameters.' : '');
     const source = native ? `${p.document_id}/${p.revision}` : '';
@@ -147,7 +124,7 @@
     } catch (error) { if (token === comparisonToken) $('compare-result').textContent = error.message; }
   };
   function partTabs(v) {
-    const p = v.payload, parts = p?.summary?.assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !v.preset_busy && !sending;
+    const p = v.payload, parts = p?.summary?.assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !v.preset_busy;
     const key = JSON.stringify([p?.document_id, p?.evaluation_id, hidden, ready]); if (key === partTabsKey) return; partTabsKey = key;
     $('part-tabs').replaceChildren();
     $('part-tabs').dataset.multiple = String(parts.length > 1);
@@ -161,7 +138,7 @@
     }
   }
   function partControls(v) {
-    const assembly = v.payload?.summary?.assembly, parts = assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !sending && !v.preset_busy;
+    const assembly = v.payload?.summary?.assembly, parts = assembly?.parts || [], hidden = v.hidden_part_ids || [], ready = v.status === 'ready' && !v.preset_busy;
     if (partsDocument !== v.payload?.document_id) { partsDocument = v.payload?.document_id; $('parts-search').value = ''; }
     const search = $('parts-search').value.trim().toLowerCase();
     const key = JSON.stringify([v.payload?.evaluation_id, hidden, ready, v.visibility_unsaved, search]);
@@ -204,7 +181,7 @@
   $('parts-search').oninput = () => partControls(state.value);
   let motionKey = '', motionDefinition = '', motionDocument = null;
   function motionControls(v) {
-    const assembly = v.payload?.summary?.assembly, ready = v.status === 'ready' && !sending && !v.preset_busy;
+    const assembly = v.payload?.summary?.assembly, ready = v.status === 'ready' && !v.preset_busy;
     const scopes = assembly?.mechanisms || (assembly?.motion?.dofs?.length ? [{ assembly_id: v.payload.feature_id, occurrences: [''], motion: assembly.motion }] : []);
     if (motionDocument !== v.payload?.document_id) { motionDocument = v.payload?.document_id; motionDefinition = ''; }
     if (!scopes.some(scope => scope.assembly_id === motionDefinition)) motionDefinition = scopes[0]?.assembly_id || '';
@@ -270,12 +247,7 @@
     $('empty-state').hidden = !!v.payload || !['empty', 'connecting'].includes(v.status);
     const graphicsReady = !!v.payload && drawnEvaluation === v.payload.evaluation_id;
     $('viewport').style.visibility = graphicsReady ? 'visible' : 'hidden';
-    $('send').disabled = !ready || sending || !bridge.capabilities.message || !$('prompt').value.trim();
-    $('copy-request').disabled = !ready || sending;
-    $('include-capture').disabled = !ready || sending || !graphicsReady;
-    $('save-image').disabled = !ready || !graphicsReady || sending || !!v.preset_busy;
-    if (!graphicsReady) $('include-capture').checked = false;
-    $('prompt').disabled = sending;
+    $('save-image').disabled = !ready || !graphicsReady || !!v.preset_busy;
     $('update-status').textContent = ready ? (v.payload.read_only ? 'Captured external artifact · Read-only review' : v.payload.draft ? 'Unsaved pose · Save or reset to select geometry and export' : 'Following saved revisions') : v.error || (v.status === 'empty' ? 'Choose a model or ask your agent to create one' : 'Preparing current revision');
     if (v.error || rendererError) fail(Error(v.error || rendererError));
     else if (v.status !== 'error') $('view-error').hidden = true;
@@ -323,7 +295,7 @@
   const state = new CadLiveState(bridge, update);
   let sequenceFrames=[],sequenceSourceKey=null;
   function sequenceControls(v){
-    const p=v.payload,ready=v.status==='ready'&&!!p&&!p.read_only&&!v.read_only&&!sending&&!v.sequence_busy,source=p&&!p.read_only?[p.document_id,p.revision,p.feature_id].join('/') : null;
+    const p=v.payload,ready=v.status==='ready'&&!!p&&!p.read_only&&!v.read_only&&!v.sequence_busy,source=p&&!p.read_only?[p.document_id,p.revision,p.feature_id].join('/') : null;
     if(sequenceSourceKey&&source&&source!==sequenceSourceKey)sequenceFrames=[];if(source)sequenceSourceKey=source;
     $('sequence-panel').hidden=!p||!!p.read_only||!!v.read_only;
     if(p?.read_only||v.read_only){sequenceFrames=[];sequenceSourceKey=null;return;}
@@ -350,7 +322,7 @@
   $('sequence-save').onclick=async()=>{try{await state.sequence('save',{sequence:{name:$('sequence-name').value,frames:sequenceFrames}});sequenceControls(state.value);}catch(error){status(error.message);}};
   const measurementText=n=>Number.isFinite(n)?n.toLocaleString(undefined,{maximumSignificantDigits:8}):'—';
   function sectionControls(v) {
-    const p = v.payload, current = v.status === 'ready' && !!p && !p.draft && !p.read_only, ready = current && !sending && !v.preset_busy;
+    const p = v.payload, current = v.status === 'ready' && !!p && !p.draft && !p.read_only, ready = current && !v.preset_busy;
     const result = v.section_status, restoring = !!v.section && !result, pending = restoring || ['queued', 'running', 'cancelling'].includes(result?.state);
     const report = current && result?.state === 'succeeded' ? result.result?.report : null;
     $('section-panel').hidden = !p||!!p.read_only;
@@ -392,9 +364,23 @@
   };
   $('section-clear').onclick = () => state.section(null).catch(error => status(error.message));
   const targetText=t=>t?.kind==='part'?t.part_id:t?`${t.kind==='face'?'Face':'Edge'} ${t.entity_id}`:'Choose a part or use a pick';
+  function renderPointMeasurement(layout) {
+    const svg=$('point-measure-overlay');svg.replaceChildren();svg.toggleAttribute('hidden',!layout);if(!layout)return;
+    const add=(tag,attributes,text)=>{const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [key,value]of Object.entries(attributes))node.setAttribute(key,String(value));if(text)node.textContent=text;svg.append(node);};
+    if(layout.a&&layout.b){add('line',{x1:layout.a[0],y1:layout.a[1],x2:layout.b[0],y2:layout.b[1]});add('text',{x:(layout.a[0]+layout.b[0])/2,y:(layout.a[1]+layout.b[1])/2-12,class:'point-distance-label'},`${measurementText(layout.distance_mm)} mm`);}
+    for(const slot of ['a','b'])if(layout[slot]){const [x,y]=layout[slot];add('circle',{cx:x,cy:y,r:5});add('text',{x:x+9,y:y-9},slot.toUpperCase());}
+  }
+  function pointMeasurementControls(v) {
+    const p=v.payload,m=v.point_measurement,ready=v.status==='ready'&&!!p&&!p.draft&&!v.preset_busy,active=ready&&m.active;
+    $('open-measure').disabled=!ready;$('open-measure').setAttribute('aria-pressed',String(active));
+    $('app').dataset.pointPicking=String(active);
+    $('pick-hint').textContent=active?(m.error|| (m.picking?`Click point ${m.picking.toUpperCase()} · Snaps to edges`:'Click A or B to move')):'Click a point on the model';
+    renderer?.setPointMeasurement(active?{a:m.a?.point_mm||null,b:m.b?.point_mm||null}:null,active&&!!m.picking,active);
+  }
   function measurementControls(v){
-    const p=v.payload,ready=v.status==='ready'&&!!p&&!p.read_only&&!p.draft&&!v.measuring&&!sending;
+    const p=v.payload,ready=v.status==='ready'&&!!p&&!p.read_only&&!p.draft&&!v.measuring;
     $('measurement-panel').hidden=!p||!!p.read_only;
+    pointMeasurementControls(v);
     for(const slot of ['a','b']){
       const select=$('measurement-'+slot),selected=v.measurement_targets[slot],value=selected?JSON.stringify(selected):'';
       const key=JSON.stringify([p?.evaluation_id,value]);if(select.dataset.options!==key){
@@ -452,7 +438,7 @@
     return [min,max];
   }
   function presentationControls(v) {
-    const ready=v.status==='ready'&&!!v.payload&&!sending&&!v.preset_busy,p=v.presentation;
+    const ready=v.status==='ready'&&!!v.payload&&!v.preset_busy,p=v.presentation;
     $('presentation-panel').hidden=!v.payload||!displayedBounds(v);
     for(const id of ['clip-enabled','clip-axis','clip-offset','clip-flip','explode-distance','presentation-reset'])$(id).disabled=!ready;
     if(!v.payload||!displayedBounds(v))return;
@@ -490,7 +476,7 @@
   let annotationKey='',annotationDocument=null;
   function selectNote(id){const note=state.value.annotations.find(note=>note.id===id);$('annotation-list').value=id;$('annotation-text').value=note?.text||'';annotationKey='';annotationControls(state.value);shell?.openToolById('annotations-panel');}
   function annotationControls(v){
-    const ready=v.status==='ready'&&!!v.payload&&v.read_only!==true&&v.payload.read_only!==true&&!sending&&!v.annotating,committed=ready&&!v.payload.draft,notes=v.annotations||[];
+    const ready=v.status==='ready'&&!!v.payload&&v.read_only!==true&&v.payload.read_only!==true&&!v.annotating,committed=ready&&!v.payload.draft,notes=v.annotations||[];
     if(annotationDocument!==v.payload?.document_id){annotationDocument=v.payload?.document_id;$('annotation-text').value='';$('annotation-list').value='';}
     $('annotations-panel').hidden=!v.payload||v.read_only===true||v.payload?.read_only===true;
     const chosen=$('annotation-list').value,anchor=$('annotation-anchor').value,key=JSON.stringify([v.payload?.evaluation_id,notes,ready,v.selection?.reference,chosen,anchor,$('annotation-text').value,v.annotation_error]);
@@ -517,7 +503,7 @@
   function renderPins(pins){$('annotation-overlay').replaceChildren();for(const pin of pins){const button=document.createElement('button');button.className='annotation-pin';button.textContent=pin.number;button.title=pin.text;button.style.left=`${pin.x}px`;button.style.top=`${pin.y}px`;button.setAttribute('aria-label',`Review note ${pin.number}: ${pin.text}`);button.onclick=()=>selectNote(pin.id);$('annotation-overlay').append(button);}}
   let appearanceKey='',presetKey='',presetDocument=null;
   function appearanceControls(v){
-    const ready=v.status==='ready'&&!!v.payload&&!sending&&!v.preset_busy,appearance=v.appearance,parts=v.payload?.summary?.assembly?.parts||[];
+    const ready=v.status==='ready'&&!!v.payload&&!v.preset_busy,appearance=v.appearance,parts=v.payload?.summary?.assembly?.parts||[];
     $('appearance-panel').hidden=!v.payload;
     const key=JSON.stringify([v.payload?.evaluation_id,appearance,ready,v.appearance_unsaved,$('appearance-part').value]);
     if(key===appearanceKey)return;appearanceKey=key;
@@ -541,7 +527,7 @@
   $('appearance-reset').onclick=()=>state.setAppearance(CadRenderer.math.defaultAppearance()).catch(error=>status(error.message));
   function presetControls(v){
     if(presetDocument!==v.payload?.document_id){presetDocument=v.payload?.document_id;$('preset-name').value='';$('preset-list').value='';}
-    const ready=v.status==='ready'&&!!v.payload&&!sending&&!v.preset_busy,committed=ready&&!v.payload.draft&&!v.payload.read_only,presets=v.presets||[],chosen=$('preset-list').value;
+    const ready=v.status==='ready'&&!!v.payload&&!v.preset_busy,committed=ready&&!v.payload.draft&&!v.payload.read_only,presets=v.presets||[],chosen=$('preset-list').value;
     $('presets-panel').hidden=!v.payload||!!v.payload.read_only;
     const key=JSON.stringify([v.payload?.document_id,presets,ready,v.payload?.draft,v.preset_busy,v.preset_error,v.preset_message,chosen,$('preset-name').value]);
     if(key===presetKey)return;presetKey=key;
@@ -570,6 +556,11 @@
       if (state.value.status === 'ready') state.publishContext().catch(error => status(error.message));
     }, 350);
   }
+  function publishSelection() {
+    clearTimeout(contextTimer);
+    const epoch = state.epoch;
+    state.publishContext().catch(error => { if (!disposed && state.epoch === epoch) status(error.message); });
+  }
   try {
     renderer = new CadRenderer($('viewport'), {
       onPick(selection, detail) {
@@ -578,19 +569,30 @@
         if (selection && !state.value.payload?.read_only && ['document_id', 'revision', 'evaluation_id', 'feature_id'].some(key => selection.reference[key] !== state.value.payload?.[key])) {
           renderer?.setSelection(null); status('That selection belongs to a previous model view. Wait for the current view.'); return;
         }
-        state.update({ selection }); saveSoon();
+        state.update({ selection }); publishSelection();
         if (detail?.section) status(detail.message || 'This is a section surface. Select an original face or edge to edit the model.');
         else if (detail?.ambiguous) status(detail.message || 'This geometry overlaps. Rotate the model and select again.');
         else status('');
       },
       onAnnotations(pins){renderPins(pins);},
+      onPointMeasurement:renderPointMeasurement,
+      onPointPick(point,detail={}){
+        if(state.value.status!=='ready'||state.value.payload?.draft||drawnEvaluation!==state.value.payload?.evaluation_id)return;
+        try{if(detail.endpoint){state.beginPointMeasurement(detail.endpoint);return;}if(!state.value.point_measurement.picking){if(!point)return;state.clearPointMeasurement();state.beginPointMeasurement('a');}state.acceptMeasurementPoint(point,detail.input||'surface');}catch(error){state.update({point_measurement:{...state.value.point_measurement,error:error.message}});}
+      },
       onView(camera) { shell?.syncView(camera); },
       onCamera(camera) { state.setCamera(camera); if (state.value.status === 'ready') saveSoon(); },
       onError(error) { rendererError = error.message; drawnEvaluation = null; $('viewport').style.visibility = 'hidden'; fail(error); },
       onReady(identity) { if (identity.evaluation_id === state.value.payload?.evaluation_id) { rendererError = null; drawnEvaluation = identity.evaluation_id; update(state.value); } }
     });
   } catch (error) { fail(error); }
-  shell = CadShell.mount({ $, bridge, renderer });
+  shell = CadShell.mount({ $, bridge, renderer, onToolChange(){state.stopPointMeasurement();},onMeasureToggle(){
+    const hadSelection = !!state.value.selection, m=state.value.point_measurement;
+    if(m.active){state.stopPointMeasurement();return;}
+    if(m.a&&m.b)state.update({selection:null,point_measurement:{...m,active:true,error:null}});
+    else state.beginPointMeasurement(m.a?'b':'a');
+    if (hadSelection) publishSelection();
+  } });
   async function refreshLibrary() {
     if (libraryBusy || disposed) return;
     libraryBusy = true;
@@ -662,27 +664,7 @@
       const link=document.createElement('a');link.href=image;link.download=state.value.payload.read_only?`artifact-${state.value.payload.artifact.review_sha256.slice(0,12)}.png`:`${state.value.payload.document_id}-r${state.value.payload.revision}.png`;document.body.append(link);link.click();link.remove();status('PNG download requested. Your host may ask where to save it.');
     }catch(error){status(error.message);}
   };
-  $('clear-selection').onclick = () => { state.update({ selection: null }); saveSoon(); };
-  $('prompt').addEventListener('input', () => update(state.value));
-  $('send').onclick = async () => {
-    if (sending) return;
-    sending = true; update(state.value); status('Sending request…');
-    try {
-      const image = $('include-capture').checked ? renderer?.capture() : null;
-      await state.sendPrompt($('prompt').value, image);
-      $('prompt').value = ''; status('Request handed to chat. If it appears in the composer, press Send there.');
-    } catch (error) { status(error.message); }
-    finally { sending = false; update(state.value); }
-  };
-  $('copy-request').onclick = async () => {
-    try {
-      const snapshot = state.snapshot($('prompt').value.trim());
-      const text = CadLiveState.promptText(snapshot, bridge.hostContext.workspace);
-      await state.saveContext(snapshot);
-      try { await navigator.clipboard.writeText(text); status('Request copied. Paste it into your chat.'); }
-      catch { $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = text; $('copy-text').focus(); $('copy-text').select(); status('Select and copy the request below.'); }
-    } catch (error) { status(error.message); }
-  };
+  $('clear-selection').onclick = () => { state.update({ selection: null }); publishSelection(); };
   $('fullscreen').onclick = async () => {
     try {
       const result = await bridge.request('ui/request-display-mode', { mode: 'fullscreen' });
@@ -708,7 +690,6 @@
     catch (error) { fail(error); }
   });
   bridge.initialize().then(async () => {
-    $('capture-option').hidden = !bridge.capabilities.message?.image;
     $('open-workspace').hidden = !bridge.desktop;
     $('workspace-label').textContent = bridge.hostContext.workspace || 'Saved projects';
     if (bridge.desktop) {
@@ -719,12 +700,9 @@
         $('recent-workspaces').append(option);
       }
       $('recent-workspaces').onchange = () => { if ($('recent-workspaces').value !== '') bridge.desktop.openRecent(Number($('recent-workspaces').value)).catch(error => status(error.message)); };
-      $('send').hidden = true;
-      $('edit-help').textContent = `Selections are shared with agents using this workspace and view “${state.value.view_id}”. Ask in chat to use the selected face or edge, or paste a copied request. Saved edits appear automatically.`;
     }
     hostLayout();
     if (typeof ResizeObserver !== 'undefined') { sizeObserver = new ResizeObserver(hostLayout); sizeObserver.observe(document.body); }
-    if (!bridge.capabilities.message) status('This host supports Copy request. Paste the request into your chat.');
     update(state.value); await refreshLibrary();
     libraryTimer = setInterval(refreshLibrary, 8000);
     state.start();

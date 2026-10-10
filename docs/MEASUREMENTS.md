@@ -1,4 +1,31 @@
-# Exact source measurements
+# Measurements
+
+The viewer's ruler measures two user-defined points directly on the model,
+without opening a panel. Enable Measure in the bottom toolbar, click point A,
+then click point B. Markers, their connecting line and the straight-line 3D
+distance in mm appear on the canvas. Click A or B to replace that endpoint;
+click another visible location to start a new pair. Escape or the ruler button
+exits the mode and hides its overlay. Re-enabling restores the current points.
+
+Picks within six CSS pixels of a visible displayed edge snap to the closest
+point on its polyline, including its endpoints. Edge outlines need not be
+turned on. Occluded and clipped edges cannot attract the pick; hidden parts
+are excluded and exploded edges follow their displayed placement. Other
+picks use the frontmost displayed surface, including displayed section caps.
+Accuracy is limited by the displayed edge polylines and surface tessellation;
+this is not an exact native B-rep measurement or a manufacturing tolerance.
+Coincident points measure zero. Point clicks do not also trigger double-click
+camera framing.
+
+Orbit and zoom preserve the positions and move the overlay with the camera.
+Model/evaluation, artifact hash, visibility or presentation changes retire the
+points. PNG capture includes the ruler while its mode is active. Measurements
+are local viewer state, available for native models and read-only artifacts.
+They are not saved in model history, exposed as native selection references,
+restored across reopening, or submitted as native jobs. Draft motion poses must
+be saved or reset first.
+
+## Exact source measurements
 
 `cad_measure` measures the current committed source pose using native OpenCascade
 B-reps. It does not use mesh distances, clipping planes or exploded offsets.
@@ -66,7 +93,7 @@ Failed work does not change source/history or publish a partial report. Refresh
 old evaluation tokens after a native build changes; older metadata lacks the new
 private source/build qualification.
 
-The live Exact measurement panel takes two parts or current face/edge picks,
+The inspection tools' Face and part clearance panel takes two parts or current face/edge picks,
 measures a pair or checks an assembly, and displays source distances, witnesses,
 angles and overlap. Jobs run asynchronously. Clear result cancels pending work
 and clears the view's measurement reference. App-only `cad_viewer` action

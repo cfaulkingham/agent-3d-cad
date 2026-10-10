@@ -22,6 +22,23 @@ function evaluation(positions,triangles,triangleFaces,edges=[]) {
 }
 const flat=[[-1,-1,0],[1,-1,0],[-1,1,0]];
 const base=evaluation(flat,[[0,1,2]],['face-1']);
+test('point picking returns the clicked surface coordinate, not its centre',()=>{
+  const model=prepare(base),c={yaw:.4,pitch:.9,zoom:1.4,pan:[.05,-.1]},world=[-.4,-.3,0],pixel=project(world.map((v,i)=>(v-model.center[i])/model.span),c,800,500);
+  const point=Renderer.math.pickPoint(model,c,800,500,...pixel.slice(0,2));
+  for(let i=0;i<3;i++)assert.ok(Math.abs(point[i]-world[i])<1e-10);
+  assert.equal(Renderer.math.pickPoint(model,c,800,500,0,0),null);
+  assert.equal(Renderer.math.pickPoint(model,c,800,500,NaN,0),null);
+});
+test('point distances use all three world axes and permit zero distance',()=>{
+  assert.equal(Renderer.math.pointDistance([0,0,0],[3,4,12]).distance_mm,13);
+  assert.equal(Renderer.math.pointDistance([1,2,3],[1,2,3]).distance_mm,0);
+  assert.throws(()=>Renderer.math.pointDistance([NaN,0,0],[0,0,0]));
+});
+test('measurement overlays follow the camera while retaining millimeter distance',()=>{
+  const model=prepare(base),points={a:[0,0,0],b:[3,4,12]},first=Renderer.math.pointMeasurementLayout(points,model,defaultCamera,400,400),other=Renderer.math.pointMeasurementLayout(points,model,{...defaultCamera,yaw:1,pan:[.1,.2]},400,400);
+  assert.equal(first.distance_mm,13);assert.equal(other.distance_mm,13);assert.notDeepEqual(first.a,other.a);
+  assert.equal(Renderer.math.pointMeasurementLayout({a:null,b:null},model,defaultCamera,400,400),null);
+});
 function assembly() {
   const data=evaluation([...flat,...flat.map(([x,y])=>[x,y,.5])],[[0,1,2],[3,4,5]],['face-1','face-2'],[
     {id:'edge-1',part_id:'base',points:[[-.8,-.4,0],[.2,-.4,0]]},
@@ -32,6 +49,17 @@ function assembly() {
   return data;
 }
 function at(model,point,mode='face',view=defaultCamera){const p=project(point,view,400,400);return pick(model,view,400,400,p[0],p[1],mode);}
+test('point picks use the frontmost visible surface after hiding, clipping and explosion',()=>{
+  const full=prepare(assembly()),pixel=project([-.1,-.1,0],defaultCamera,400,400);
+  const locate=model=>Renderer.math.pickPoint(model,defaultCamera,400,400,...pixel.slice(0,2));
+  const front=locate(full);assert.ok(Math.abs(front[2]-.5)<1e-10);
+  assert.ok(Math.abs(locate(visibleModel(full,['cover']))[2])<1e-10);
+  const value=defaultPresentation();value.clip={normal:[0,0,1],offset_mm:.25,keep:'negative'};
+  assert.ok(Math.abs(locate(presentedModel(full,value))[2])<1e-10);
+  value.clip=null;value.explode={distance_mm:20,directions:[{part_id:'base',direction:[0,0,-1]}]};
+  assert.ok(Math.abs(locate(presentedModel(visibleModel(full,['cover']),value))[2]+20)<1e-10);
+  assert.equal(locate(visibleModel(full,['base','cover'])),null);
+});
 test('payload validates exact mapping',()=>assert.equal(validate(base),base));
 for(const [name,modify] of [
   ['missing revision',d=>delete d.revision],['stale mesh feature',d=>d.mesh.feature_id='other'],
@@ -376,6 +404,19 @@ test('pointer picks emit complete evaluation identity and selected geometry',()=
   stats.listeners.get('pointerdown')(event);stats.listeners.get('pointerup')(event);
   assert.equal(picks[0][0].reference.entity_id,'face-1');assert.equal(picks[0][0].reference.evaluation_id,'evaluation-a');assert.equal(picks[0][0].geometry.id,'face-1');renderer.destroy();
 });
+test('point picking bypasses entity selection and resets with displayed geometry',()=>{
+  const {canvas,stats}=mockCanvas(),points=[],entities=[],layouts=[],renderer=new Renderer(canvas,{onPick:(...v)=>entities.push(v),onPointPick:p=>points.push(p),onPointMeasurement:v=>layouts.push(v)});
+  renderer.load(base);renderer.setCamera(defaultCamera);renderer.setPointMeasurement(null,true);
+  const pixel=project([-.1,-.1,0],defaultCamera,640,480),event={pointerId:1,clientX:pixel[0],clientY:pixel[1],button:0,preventDefault(){}};
+  stats.listeners.get('pointerdown')(event);stats.listeners.get('pointerup')(event);
+  assert.equal(entities.length,0);assert.equal(points.length,1);assert.ok(Math.abs(points[0][0]+.4)<1e-10);
+  renderer.setPointMeasurement({a:points[0],b:points[0]},false);const view=JSON.stringify(renderer.getCamera());stats.listeners.get('dblclick')(event);assert.equal(JSON.stringify(renderer.getCamera()),view);assert.equal(renderer.anim,null);flush();assert.equal(JSON.stringify(renderer.getCamera()),view,'Completing a same-location pair must not also frame the selected face');
+  renderer.setPointMeasurement({a:[0,0,0],b:[3,4,12]});flush();assert.equal(layouts.at(-1).distance_mm,13);
+  renderer.setCamera({...defaultCamera,yaw:1});flush();assert.equal(layouts.at(-1).distance_mm,13);
+  renderer.load({...base,evaluation_id:'next'});assert.equal(renderer.measurementPoints,null);assert.equal(renderer.pointPicking,false);assert.equal(layouts.at(-1),null);
+  renderer.setPointMeasurement({a:[0,0,0],b:[1,0,0]},true);const settings=defaultPresentation();settings.clip={normal:[0,0,1],offset_mm:0,keep:'negative'};renderer.setPresentation(settings);assert.equal(renderer.measurementPoints,null);
+  renderer.setPointMeasurement({a:[0,0,0]},true);renderer.destroy();assert.equal(layouts.at(-1),null);assert.equal(renderer.pointPicking,false);
+});
 test('destroy cancels animation and makes further mutations fail',()=>{
   const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.destroy();const before=scheduled.size;assert.throws(()=>renderer.load(base));flush();assert.equal(before,0);
 });
@@ -405,6 +446,13 @@ test('review pins do not replace source buffers or source picks and PNG capture 
 });
 test('review overlays survive graphics restoration and never capture retired anchors',()=>{
  const {canvas,stats}=mockCanvas(),layouts=[],renderer=new Renderer(canvas,{onAnnotations:layout=>layouts.push(layout)});renderer.load(base);renderer.setAnnotations([reviewNote(base)]);flush();stats.listeners.get('webglcontextlost')({preventDefault(){}});renderer.setAnnotations([reviewNote(base)]);assert.equal(layouts.at(-1).length,0);assert.throws(()=>renderer.capture());stats.listeners.get('webglcontextrestored')();flush();assert.equal(layouts.at(-1).length,1);renderer.setAnnotations([{...reviewNote(base),status:'retired',evaluation_id:'old'}]);assert.match(renderer.capture(),/^data:image\/png/);assert.equal(layouts.at(-1).length,0);renderer.destroy();
+});
+test('PNG capture includes both defined points and their measured distance without review pins',()=>{
+ const {canvas}=mockCanvas(),draw=[];canvas.ownerDocument={createElement:()=>({getContext:()=>new Proxy({},{get:(o,k)=>(...args)=>draw.push([k,...args])}),toDataURL:()=> 'data:image/png;base64,withruler'})};
+ const renderer=new Renderer(canvas);renderer.load(base);renderer.setPointMeasurement({a:[0,0,0],b:[3,4,12]});flush();
+ assert.equal(renderer.capture(),'data:image/png;base64,withruler');assert.equal(draw.filter(row=>row[0]==='arc').length,2);
+ for(const label of ['A','B','13 mm'])assert.ok(draw.some(row=>row[0]==='fillText'&&row[1]===label));
+ renderer.destroy();
 });
 test('captured labels stay in the viewport without covering their numbered pin at edges',()=>{
  for(const [width,height,pin,textWidth] of [[640,480,{x:550,y:240},300],[640,480,{x:12,y:12},300],[180,100,{x:90,y:50},500],[180,100,{x:90,y:85},500]]) {
@@ -470,6 +518,29 @@ test('setView accepts the new names and reset still frames the model',()=>{
 
 // ---- Unified face/edge picking and hover ----
 const withEdge=()=>evaluation([[-1,-1,0],[1,-1,0],[-1,1,0]],[[0,1,2]],['face-1'],[{id:'edge-1',points:[[-.8,-.4,0],[.2,-.4,0]]}]);
+test('measurement snaps to the nearest visible edge in world coordinates, including endpoints',()=>{
+  const model=prepare(withEdge()),world=[-.3,-.4,0],pixel=project(world.map((v,i)=>(v-model.center[i])/model.span),defaultCamera,640,480);
+  const hit=M.pickMeasurementPoint(model,defaultCamera,640,480,pixel[0],pixel[1]+4);
+  assert.equal(hit.input,'edge');hit.point_mm.forEach((v,i)=>near(v,world[i]));
+  const end=[.2,-.4,0],p=project(end.map((v,i)=>(v-model.center[i])/model.span),defaultCamera,640,480),endpoint=M.pickMeasurementPoint(model,defaultCamera,640,480,p[0]+3,p[1]);
+  endpoint.point_mm.forEach((v,i)=>near(v,end[i]));
+  const off=M.pickMeasurementPoint(model,defaultCamera,640,480,pixel[0],pixel[1]+12);assert.equal(off.input,'surface');assert.ok(Math.abs(off.point_mm[1]-world[1])>.01);
+});
+test('measurement snapping cannot select an occluded or clipped edge, and follows explosion',()=>{
+  const full=prepare(assembly()),world=[-.3,-.4,0],pixel=project(world.map((v,i)=>(v-full.center[i])/full.span),defaultCamera,640,480);
+  const shown=visibleModel(full,['cover']),locate=model=>M.pickMeasurementPoint(model,defaultCamera,640,480,pixel[0],pixel[1]+4);
+  near(locate(full).point_mm[2],.5);near(locate(shown).point_mm[2],0);
+  const hidden=assembly();hidden.mesh.edges=hidden.mesh.edges.slice(0,1);hidden.topology.edges=hidden.topology.edges.slice(0,1);
+  assert.equal(locate(prepare(hidden)).input,'surface','The nearer surface must occlude the only edge behind it');
+  const value=defaultPresentation();value.clip={normal:[1,0,0],offset_mm:0,keep:'positive'};assert.equal(locate(presentedModel(shown,value)),null);
+  value.clip=null;value.explode={distance_mm:20,directions:[{part_id:'base',direction:[0,0,-1]}]};near(locate(presentedModel(shown,value)).point_mm[2],-20);
+});
+test('completed ruler markers can select A or B for replacement without selecting an entity',()=>{
+  const {canvas}=mockCanvas(),picks=[],r=new Renderer(canvas,{onPointPick:(...v)=>picks.push(v)});r.load(withEdge());r.setCamera(defaultCamera);
+  r.setPointMeasurement({a:[-.8,-.4,0],b:[.2,-.4,0]},false,true);const layout=M.pointMeasurementLayout(r.measurementPoints,r.fullModel,defaultCamera,640,480);
+  r._pick(...layout.a);assert.equal(picks.at(-1)[0],null);assert.equal(picks.at(-1)[1].endpoint,'a');
+  r._pick(...layout.b);assert.equal(picks.at(-1)[1].endpoint,'b');r.destroy();
+});
 const edgeMid=(model,width=400,height=400)=>{const p=model.edges[0].points,a=project([p[0],p[1],p[2]],defaultCamera,width,height),b=project([p[3],p[4],p[5]],defaultCamera,width,height);return [(a[0]+b[0])/2,(a[1]+b[1])/2];};
 test('auto pick: an edge within 6px wins, a face wins beyond it, edge mode keeps 9px',()=>{
   const model=prepare(withEdge()),[x,y]=edgeMid(model);

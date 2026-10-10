@@ -35,12 +35,48 @@
       this.visibilityVersion = 0; this.visibilitySaved = 0; this.snapshotVersions = new WeakMap(); this.motionBusy = false;
       this.presentationVersion=0;this.presentationSaved=0;
       this.measurementVersion=0;this.measureBusy=false;
+      this.pointMeasurementSource=null;
       this.sectionVersion=0;this.sectionBusy=false;
       this.appearanceVersion=0;this.appearanceSaved=0;this.cameraVersion=0;this.cameraSaved=0;this.presetVersion=0;this.presetBusy=false;this.annotationVersion=0;this.annotationBusy=false;this.sequenceVersion=0;this.sequenceBusy=false;this.playbackTimer=null;this.playToken=0;
       this.value = { read_only:false,artifact:null,view_id: null, status: 'connecting', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], visibility_unsaved: false, presentation:defaultPresentation(),presentation_unsaved:false,saving: false, motion_error: null, preview_operations: null,measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false,section:null,section_status:null,section_error:null,sectioning:false,appearance:CadRenderer.math.defaultAppearance(),appearance_unsaved:false,presets:[],preset_error:null,preset_busy:false,preset_message:null,annotations:[],annotation_error:null,annotating:false,sequences:[],playback:null,playing:false,sequence_busy:false,sequence_error:null };
+      this.clearPointMeasurement();
     }
     requireNative() { if(this.value.payload?.read_only===true||this.value.read_only)throw Error('This is a read-only artifact review. Open the editable native source for this action.'); }
-    update(values) { Object.assign(this.value, values); this.changed(this.value); }
+    update(values) {
+      Object.assign(this.value, values);
+      if(this.pointMeasurementSource&&this.pointMeasurementSource!==this.pointMeasurementKey())this.clearPointMeasurement();
+      this.changed(this.value);
+    }
+    pointMeasurementKey() {
+      const p=this.value.payload;
+      return this.value.status==='ready'&&p&&!p.draft?JSON.stringify([this.value.view_id,p.read_only?p.artifact.review_sha256:[p.document_id,p.revision,p.evaluation_id,p.feature_id],this.value.presentation,this.value.hidden_part_ids]):null;
+    }
+    clearPointMeasurement() { this.pointMeasurementSource=null;this.value.point_measurement={a:null,b:null,picking:null,active:false,error:null}; }
+    requirePointMeasurement() {
+      if(this.closed||!this.pointMeasurementKey()||this.value.preset_busy)throw Error('Wait for the current saved geometry before defining measurement points.');
+    }
+    beginPointMeasurement(slot='a') {
+      this.requirePointMeasurement();
+      if(!['a','b'].includes(slot))throw Error('Choose point A or B.');
+      this.pointMeasurementSource=this.pointMeasurementKey();
+      this.update({selection:null,point_measurement:{...this.value.point_measurement,picking:slot,active:true,error:null}});
+    }
+    stopPointMeasurement() {
+      if(this.value.point_measurement?.active)this.update({point_measurement:{...this.value.point_measurement,picking:null,active:false,error:null}});
+    }
+    setMeasurementPoint(slot,point,input='coordinates') {
+      this.requirePointMeasurement();
+      if(!['a','b'].includes(slot)||!['coordinates','surface','edge'].includes(input)||!Array.isArray(point)||point.length!==3||!point.every(v=>Number.isFinite(v)&&Math.abs(v)<=1e9))throw Error('Define point A or B with three finite coordinates between −1,000,000,000 and 1,000,000,000 mm.');
+      this.pointMeasurementSource=this.pointMeasurementKey();
+      const m=this.value.point_measurement||{a:null,b:null};
+      this.update({point_measurement:{...m,[slot]:{point_mm:[...point],input},picking:slot==='a'&&!m.b?'b':null,error:null}});
+    }
+    acceptMeasurementPoint(point,input='surface') {
+      const slot=this.value.point_measurement?.picking;
+      if(!slot)return;
+      if(!point){this.update({point_measurement:{...this.value.point_measurement,error:'Click a visible model surface to define this point.'}});return;}
+      this.setMeasurementPoint(slot,point,input);
+    }
     attach(view_id) {
       if (typeof view_id !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(view_id)) throw Error('Invalid CAD view identity.');
       if (this.value.view_id === view_id) return;
@@ -48,7 +84,7 @@
     }
     clearVisibility() { this.visibilitySaved = ++this.visibilityVersion; this.value.visibility_unsaved = false; }
     clearPresentation(){this.presentationSaved=++this.presentationVersion;this.value.presentation=defaultPresentation();this.value.presentation_unsaved=false;}
-    clearMeasurement(){++this.measurementVersion;Object.assign(this.value,{measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false});}
+    clearMeasurement(){this.clearPointMeasurement();++this.measurementVersion;Object.assign(this.value,{measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false});}
     clearSection(){++this.sectionVersion;Object.assign(this.value,{section:null,section_status:null,section_error:null,sectioning:this.sectionBusy});}
     clearAppearance(){this.appearanceSaved=++this.appearanceVersion;this.value.appearance=CadRenderer.math.defaultAppearance();this.value.appearance_unsaved=false;}
     clearPresets(){++this.presetVersion;Object.assign(this.value,{presets:[],preset_error:null,preset_message:null,preset_busy:this.presetBusy});}
@@ -621,11 +657,11 @@
     matches(snapshot) { const versions=this.snapshotVersions.get(snapshot);return !this.closed && this.value.status === 'ready' && this.value.view_id === snapshot.view_id && this.value.payload?.evaluation_id === snapshot.evaluation_id && (!versions||(versions[0]===this.visibilityVersion&&versions[1]===this.presentationVersion&&versions[2]===this.measurementVersion&&versions[3]===this.sectionVersion&&versions[4]===this.appearanceVersion&&versions[5]===this.cameraVersion&&versions[6]===this.annotationVersion&&versions[7]===this.sequenceVersion)); }
     saveContext(snapshot) {
       const action = this.contextQueue.then(async () => {
-        if (!this.matches(snapshot)) throw Error('The model changed. Review the new revision before sending.');
+        if (!this.matches(snapshot)) throw Error('The model changed. Wait for the current revision before using this selection.');
         const { view_id, evaluation_id, selection, camera, prompt, hidden_part_ids,presentation,appearance } = snapshot;
         const result = await this.bridge.tool('cad_viewer', { action: 'context', view_id, evaluation_id, selection,
           hidden_part_ids,presentation,appearance,...(camera ? { camera } : {}), prompt });
-        if (!this.matches(snapshot)) throw Error('The model changed. Review the new revision before sending.');
+        if (!this.matches(snapshot)) throw Error('The model changed. Wait for the current revision before using this selection.');
         this.visibilitySaved = this.visibilityVersion;
         this.presentationSaved=this.presentationVersion;
         this.appearanceSaved=this.appearanceVersion;this.cameraSaved=this.cameraVersion;
@@ -664,7 +700,7 @@
     }
     async sendPrompt(prompt, image) {
       if (!prompt.trim() || new TextEncoder().encode(prompt).length > 8000) throw Error('Write a request of up to 8,000 UTF-8 bytes.');
-      if (!this.bridge.capabilities.message) throw Error('This host cannot send messages. Use Copy request.');
+      if (!this.bridge.capabilities.message) throw Error('This host cannot send viewer messages. Enter your request in the main chat.');
       const snapshot = this.snapshot(prompt.trim()); this.contextVersion++;
       await this.saveContext(snapshot);
       const content = [{ type: 'text', text: CadLiveState.promptText(snapshot) }];

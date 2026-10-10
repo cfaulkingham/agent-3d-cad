@@ -7,6 +7,208 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Select in the viewer, request edits in the main chat — 2026-10-09
+
+Removed the embedded Quick Edit composer, Send/Copy request controls, request
+details/reference drawer and Models-menu Ask agent entry. A compact top
+indicator shows the selected face/edge, its native measurement, **Ask in chat**
+and Clear selection. PNG export and exported-path copying remain available.
+Picks and clears publish native context immediately; camera movement remains
+debounced. Entering the point ruler clears a prior native geometry selection so
+the main chat cannot accidentally reuse it. No selection click posts a chat
+message or edits geometry. Optional host model-context delivery remains separate
+from native persistence and revision polling.
+
+The packaged native-cad skill now directs agents to read `cad_context` with the
+retained `cad_open` view ID when users refer to selected geometry in the main
+chat, check stale/draft/read-only state, resolve a native reference and use the
+current revision for edits. Specification, protocol, roadmap and viewer guide
+describe this interaction. Native tools/documents and legacy optional prompt
+fields are unchanged; legacy controller message helpers retain their existing
+coverage but have no viewer UI entry point.
+
+Validation (macOS arm64):
+
+- Native build succeeded. **13/13 relevant CTest suites passed in 23.82 s**:
+  embedded_assets, app_protocol, live, live_mcp_flow, webgl_renderer, viewer_shell,
+  live_ui, playback_ui, export_ui, artifact_retarget_ui, offline_renderer,
+  desktop_bridge and desktop_assets. Three added real MCP checks verify qualified
+  pick retrieval without posting a message, clearing a pick, and selection
+  handoff without messaging or optional host-context capabilities. Existing
+  native select/resolve/fillet/revision/stale-reference checks still pass.
+- After updating stale-context wording, rebuilt and repeated embedded_assets,
+  desktop_assets, desktop_bridge and live_ui: **4/4 passed in 0.68 s**. JavaScript
+  syntax and `git diff --check` passed.
+- Real browser/native harness verification selected face-10 and edge-16 on the
+  bracket, then read each exact qualified reference through `cad_context` with
+  `stale:false`. Entering ruler mode cleared the native selection. DOM inspection
+  found no composer or Send button. The compact indicator retained its pick and
+  stayed inside the 360 px viewport (187.21 px wide); final preview is 900 px.
+  This used an isolated temporary workspace and did not edit user models.
+- Standard packaged-plugin smoke checks passed complete provenance, empty-PATH
+  discovery, create/edit/reopen/history and STEP/STL/PDF/SVG/four DXF exports.
+  Evidence, screenshots, context captures and scripts are under
+  `.local/evidence/main-chat-selection-20261009/`.
+
+Installed the updated working-tree viewer and skill through the bundled desktop
+CLI. VERSION remains `0.1.0-preview.1`; no public release/tag was created. Current
+source is `~/Applications/Agent3DCAD/chatgpt-plugin-42a19c1-chat-context-20261009`,
+with contained command `./bin/agent-3d-cad-chat-context-20261009`. Previous
+versioned sources remain. All **308 installed files** match, all **42 saved model
+files** are byte-identical through installation, and the workspace override and
+unrelated settings are preserved. Native SHA-256 is
+`4925bef29a35fa7146a374fd3723b3cb8ed0cebc9709ca01b476d282dfe311ba`;
+embedded viewer SHA-256 is
+`54ad07ec11fda31ee0bcb5770c3cdc0b2b5d23ccb5a59a596cf24e83faae17a3`.
+A fresh bundled runtime discovers the enabled plugin, both skills and **28
+tools**. The installed native service serves the exact final resource with PATH
+empty; its HTML has no composer/Send control and the installed skill includes
+the main-chat workflow. Actual current-session embedded reload acceptance is
+still pending as described below; these checks do not establish it. Restart the
+host and reopen the viewer to verify that gate. Remaining 1.0 host/platform and
+signing gates still apply.
+
+## Design Details without raw native feature JSON — 2026-10-09
+
+Removed raw source JSON from the native Design Details feature list. Ordinary
+features show their names, types and output marker as compact rows, without empty
+expanders. Components and assemblies retain expandable pinned-source identity,
+part/source IDs and mate relationships. Editable source and native tool/document
+contracts are unchanged. Read-only artifact Review data and Quick Edit selection
+references are outside this change.
+
+Validation: native build succeeded; **5/5 relevant CTest suites passed in 0.73 s**
+(embedded_assets, desktop_assets, viewer_shell, live_ui, artifact_retarget_ui).
+Real in-app browser inspection found four compact bracket feature rows and zero
+raw JSON blocks; expanding the spacer assembly retained all four part/mate rows,
+also with zero raw JSON blocks. The packaged-plugin smoke checks passed complete
+provenance, empty-PATH discovery, create/edit/reopen/history and all supported
+export formats. `git diff --check` passed. Evidence, screenshot and scripts:
+`.local/evidence/design-details-20261009/`.
+
+Installed the updated working-tree build through the bundled desktop CLI, keeping
+VERSION `0.1.0-preview.1`. Current source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-42a19c1-design-details-20261009`, using
+contained stdio command `./bin/agent-3d-cad-design-details-20261009`. All **308
+installed files** match the prepared inventory, all **42 saved model files** are
+byte-identical through installation, and the existing workspace override and
+unrelated settings are preserved. Native binary SHA-256:
+`a1c7d272ed9e7d90ea961cebb524cc9f9d65364b7c2b65451ccff5086816cfda`.
+Embedded viewer SHA-256:
+`cb8915cc00d934a7907837429812ebc618922525b4f6ed2eac274ccb85c421d7`.
+A fresh bundled runtime finds the enabled plugin, both skills and **28 tools**;
+the installed native service serves that exact viewer hash with PATH empty and
+reads the existing library. Earlier versioned sources are retained; no public
+release/tag was created. Actual current-session embedded reload acceptance
+remains pending as recorded below; fresh-runtime and browser-harness checks do
+not establish it. Remaining 1.0 host/platform/signing gates still apply.
+
+## Panel-free A/B ruler and visible-edge snapping — 2026-10-09
+
+The bottom Measure button now enables direct point picking without opening a
+panel. Click A, then B; the canvas shows both markers, their connecting line and
+the straight-line 3D distance in mm. Clicking a marker replaces that endpoint;
+clicking another location after completing a pair starts a new pair. Escape or
+the ruler button exits the mode; re-enabling restores the points. Orbit/zoom
+preserve them and PNG capture includes the active ruler.
+
+Picks within six CSS pixels of visible displayed edge polylines snap to the
+nearest edge point or endpoint, even with edge outlines disabled. Occluded,
+hidden and clipped edges do not attract picks; exploded edges follow their
+displayed placement. Other clicks use the frontmost displayed surface, including
+section caps. Accuracy is limited by tessellation and edge polylines. This is
+local, ephemeral viewer state for native models and read-only artifacts; it does
+not submit native jobs or change saved geometry/history. Source/evaluation,
+artifact hash, visibility or presentation changes invalidate points. Draft poses
+must be saved or reset first. Existing exact native measurements remain in the
+inspection tools as **Face and part clearance**; tool/document contracts are
+unchanged.
+
+Executed macOS arm64 evidence:
+
+- Native build succeeded. **13/13 relevant CTest suites passed in 13.01 s**:
+  embedded_assets, app_protocol, live, live_mcp_flow, webgl_renderer, viewer_shell,
+  live_ui, playback_ui, export_ui, artifact_retarget_ui, offline_renderer,
+  desktop_bridge and desktop_assets. Counts include **362 live UI**, **118
+  renderer**, **37 artifact/retarget**, **72 real MCP**, **269 native live** and
+  **6,613 app-protocol** checks. After shortening the completed-pair hint, rebuilt
+  and repeated embedded_assets/desktop_assets: **2/2 passed in 0.59 s**.
+- Real in-app browser verification in an isolated native-service harness showed
+  no measurement dialog, sequential A/B picks and snapping from clicks about
+  three pixels inside a visible edge with outlines disabled. Replacing A
+  retained B, orbit retained distance, and Escape/re-enable restored the pair.
+  Final source screenshot `preview.png` shows the snapped **8.9366741 mm** pair.
+  State/renderer tests also cover zero distance, full 3D distance, miss retention,
+  visibility/clipping/explosion, lifecycle cleanup and PNG ruler capture.
+- Unmodified packaged-plugin smoke checks passed complete provenance,
+  empty-PATH MCP/viewer discovery, create/edit/reopen/history and
+  STEP/STL/PDF/SVG/four DXF exports in an isolated workspace.
+- Installed the working-tree viewer over source `42a19c1` through the bundled
+  desktop CLI. VERSION stays `0.1.0-preview.1`; no release/tag was created.
+  Current source is
+  `~/Applications/Agent3DCAD/chatgpt-plugin-42a19c1-points-runtime-v2-20261009`.
+  Cache remains `~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1`.
+  Its stdio command uses the contained executable
+  `./bin/agent-3d-cad-viewer-points-20261009`, a byte-identical copy of the packaged
+  binary, to distinguish this runtime configuration. Previous versioned sources
+  are retained. All **308 installed files** match; native SHA-256 is
+  `7838f2b6ecfacf377fab763d515f1c506c2121a8c260a4e4a2183b15ee10b768`;
+  embedded viewer SHA-256 is
+  `c77d01eb0a0cfac4188d335f8d186f15628f5dbf0b3fd37978cf24d84af3e296`.
+  Existing Documents/Agent3DCAD override and unrelated settings are preserved;
+  **42 saved model files** across both Documents folders stayed byte-identical
+  through installation. A fresh bundled runtime discovers the enabled plugin,
+  both skills and **28 MCP tools**, serves the final viewer hash with PATH empty
+  and reads the existing library.
+
+**Current-session refresh remains pending.** After installation, `cad_open`
+opened the active bracket in `chat_01a12354_points_runtime_verify`. The user
+expanded that actual MCP App; inspection still found the old Measure dialog and
+no `point-measure-overlay`. This is current-host evidence, not a successful
+reload. Available plugin tools provide no connection restart, and native host
+control was rejected by computer-use safety during the preceding reload task.
+Quit and reopen the host to load the installed runtime, then verify the actual
+embedded A/B interaction. Do not count fresh-runtime or developer-harness checks
+as that acceptance gate. Evidence/logs/scripts are in
+`.local/evidence/point-measurement-20261009/`; latest installation and cached-host
+DOM/screenshot are under `runtime-reload-contained/`. Remaining 1.0 host,
+platform and signing gates still apply.
+
+## Screenshot-reference plugin installed; running host refresh pending — 2026-10-09
+
+Packaged committed viewer source `42a19c1` using the existing native build and
+installed it through the bundled desktop CLI. VERSION stays
+`0.1.0-preview.1`; no public release/tag or standalone installation changed.
+Source is `~/Applications/Agent3DCAD/chatgpt-plugin-42a19c1-viewer-20261009`;
+cache remains `~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.1`.
+The previous versioned source is retained. The existing
+`~/Documents/Agent3DCAD` workspace override and all unrelated parsed settings
+are preserved; the configuration backup is mode 0600.
+
+Validation:
+
+- Unmodified `tests/plugin_smoke.py` passed complete provenance, empty-PATH
+  MCP/viewer discovery, create/edit/reopen/history and STEP/STL/PDF/SVG/four DXF
+  exports in an isolated temporary workspace.
+- All **307 installed files** match the prepared package. Installed binary
+  SHA-256 is `f1ed645ca99a54ec8308702ef93ee9751e24484f6ae9f4a5733e430de02b502d`;
+  embedded viewer SHA-256 is
+  `4da4b39e6399f4c5c23b1dae122aa37295f5396b9482077d6fba13d288784db5`.
+- A fresh bundled runtime discovers the enabled plugin, its two skills and
+  **28 MCP tools**. The installed service serves the exact new viewer hash
+  with PATH empty and reads the existing library. All **38 saved model files**
+  across both Documents project folders remain byte-identical after checks.
+
+The current ChatGPT session's existing MCP connection still serves the previous
+viewer, confirmed by the actual MCP App DOM after `cad_open` reopened the active
+bracket in `chat_01a12354_viewer_reload`. Native control of ChatGPT
+(`com.openai.codex`) was rejected by computer-use safety, so the agent could not
+press a host reload control. Quit and reopen ChatGPT to load the new package.
+The separate daemon proxy does not control this desktop app's stdio connection;
+its probe did not establish a live reload. Do not count fresh-runtime checks as
+current-session rendering acceptance. Evidence and installation/check scripts:
+`.local/evidence/plugin-reload-viewer-20261009/`.
+
 ## Screenshot-reference viewer and direct parameter controls — 2026-10-09
 
 Reworked the shared embedded/Tauri `web/` viewer around the user's screenshot:
