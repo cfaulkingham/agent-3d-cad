@@ -2329,7 +2329,7 @@ Json BuiltModel::summary(const std::string& feature_id) const {
       // the analytic volume of a rational affine-transformed cylinder by 1e-7
       // relative. Gauss-Kronrod resolves the surface/trim quadrature separately.
       if(polynomial_surface) {
-        const double error=BRepGProp::VolumePropertiesGK(shape,volume,1e-9,false,false,true,false);
+        const double error=BRepGProp::VolumePropertiesGK(shape,volume,1e-9,false,true,true,false);
         if(error<0||!std::isfinite(volume.Mass()))throw Error("kernel_failure","Exact surface volume integration failed");
       } else BRepGProp::VolumeProperties(shape,volume,1e-9);
     }

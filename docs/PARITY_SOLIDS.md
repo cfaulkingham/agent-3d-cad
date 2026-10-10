@@ -130,7 +130,14 @@ macOS arm64, pinned OCCT 8.0.1 / FreeType 2.14.3, Release build:
 - Full rational-surface centroid integration is measurably more expensive:
   `modeling_curves` took 29.21 s and `richer_modeling` 15.07 s. Accuracy is
   retained, including analytic translated elliptical-cylinder centroids.
-  Faster integration remains an optimization opportunity, with the same bounds.
+  Exact spline-span integration subsequently improved `parity_solids` from
+  18.74 s to 15.52 s with unchanged tolerances. The follow-up regression run
+  passed 7/7 suites in 81.66 s: geometry, modeling_curves, richer_modeling,
+  parity_solids, shell_offset, surface and performance_geometry. Curves and
+  richer modeling remained 29.26 s / 14.79 s; performance_geometry was 15.49 s.
+  In an independent translated elliptical-cylinder probe, span integration
+  reduced summary time from 226 ms to 20 ms and mass error from 3.1e-7 mm³
+  to approximately 5e-12 mm³, preserving the centroid to floating precision.
 
 No Windows/Linux, package installation, host GUI, signing or release gates are
 established by this local increment.
