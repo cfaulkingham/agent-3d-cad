@@ -80,11 +80,14 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `cut`, `fuse` | `left`, `right` | Earlier solid features |
 | `fillet` | `input`, `radius`, `edges` | `edges` is `"all"` or a geometric selector |
 | `chamfer` | `input`, `distance`, `edges` | Symmetric chamfer; same edge selector contract as fillet |
+| `shell` | `input`, signed `thickness`, `faces` | One solid; explicit oriented geometric face selectors remove openings; `faces:[]` makes a sealed cavity; optional `join: arc|intersection` |
+| `offset` | `input`, signed `distance` | Independent parallel offset of each source solid; optional `join: arc|intersection` |
+| `thicken` | `input`, signed `thickness` | Planar sketch regions or explicit selected connected open faces of a solid; `faces` required for solid inputs; optional join |
 | `sketch` | `workplane`, `profile` | Numeric profile; no constraint solver |
-| `extrude` | `input`, `distance` | Sketch along workplane normal; signed distance |
+| `extrude` | `input`, either `distance` or `until` + `target` | Signed travel; optional `direction`, `both`, `taper_deg`; first/last exact target termination excludes distance/both/taper |
 | `revolve` | `input`, `axis`, `angle_deg` | Sketch; angle in (0,360] |
 | `loft` | `sections` | 2–32 sketches; optional `ruled` boolean |
-| `sweep` | `input`, `path` | Sketch swept along 2–64 world-coordinate points or an exact curve wire |
+| `sweep` | Either `input` or `sections`, plus `path` | Exact path; optional orientation/binormal/guide and transition controls; 2–32 varying sketch stations with matching holes |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
 | `pattern` | `input`, `count`, `step` | 2–64 translated copies including original; replication budget below |
 | `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | 2–64 rotated copies; signed angular step, including original |
@@ -101,6 +104,14 @@ An axis object has `origin` and `direction`. A rotation has `origin`, `axis`,
 not assemblies or fused unions. Boolean fusion is explicit. Imported STEP is an
 opaque solid feature, not recovered source design intent. Saved content makes
 imports independent of their original file path.
+
+[SHELL_OFFSET_THICKEN.md](SHELL_OFFSET_THICKEN.md) defines signed material-side,
+containment and connected-patch requirements. Face selectors use oriented
+`normal`, optional center/area predicates and required expected cardinality;
+area expressions declare `mm2`. [RICHER_MODELING.md](RICHER_MODELING.md) defines
+extent, taper, path-station and sweep frame controls. Summary area/volume use
+adaptive integration of the exact native surfaces, including rational swept
+surfaces; triangulated volume is not substituted.
 
 Circular patterns rotate each copy by `index * angle_deg` around the supplied
 world axis. The signed step must have magnitude at least 0.00001 degrees, and

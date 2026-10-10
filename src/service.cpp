@@ -84,6 +84,9 @@ Json tool_definitions() {
   const Json revision={{"$ref","#/$defs/revision"}};
   const Json text={{"type","string"}};
   auto definitions=model_definitions();
+  definitions["authoring_feature"]=object({{"id",{{"$ref","#/$defs/model_id"}}},{"type",{{"const","sketch"}}},
+    {"workplane",{{"$ref","#/$defs/workplane"}}},
+    {"profile",{{"oneOf",authoring_profile_schemas({{"$ref","#/$defs/scalar"}})}}}}, {"id","type","workplane","profile"});
   definitions["revision"]={{"type","integer"},{"minimum",1},{"maximum",9007199254740991ULL}};
   definitions["drawing_spec"]=drawing_schema();
   definitions["manufacturing_options"]=manufacturing_options_schema();
@@ -162,7 +165,7 @@ Json tool_definitions() {
       object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"summary",summary_schema()}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","summary"}),false),
     tool("cad_capture_sketch","Capture a local font, SVG or ASCII DXF as a portable editable sketch feature. Embeds exact source bytes and SHA-256, validates closed exact planar geometry in a bounded native worker, and returns a feature for cad_create/add_feature. Text uses captured unhinted Unicode font outlines with editable text/height; SVG/DXF support documented filled planar curves and reject unsupported entities. No document is committed.",
       {{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"type","number"},{"minimum",0.00001},{"maximum",100000}}},{"spacing",{{"type","number"},{"minimum",-1000000},{"maximum",1000000}}},{"scale",{{"type","number"},{"minimum",0.000001},{"maximum",1000000}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}}}, {"format","path","feature_id","workplane"},
-      object({{"feature",{{"$ref","#/$defs/feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
+      object({{"feature",{{"$ref","#/$defs/authoring_feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
     tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history.",
       {{"document_id",id},{"path",text},{"request_id",id},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
@@ -303,6 +306,83 @@ Json tool_definitions() {
   // Each standalone schema keeps only the model definitions it references.
   for(auto& definition:tools)for(const auto* key:{"inputSchema","outputSchema"}) {
     auto& schema=definition[key];prune_definitions(schema);
+    // Common object constraints apply once around a union. A closed branch
+    // that does not declare a property already forbids it, so it need not
+    // repeat the constraint used by the other branches. Empty declarations
+    // retain each branch's exact allowed field set and evaluation annotations.
+    bool hoist_scoped=false;
+    const auto schema_children=[](auto& node,const auto& apply) {
+      for(auto& item:node.items()) {
+        const auto& name=item.key();
+        if((name=="$defs"||name=="properties"||name=="patternProperties"||name=="dependentSchemas")&&item.value().is_object())
+          for(auto& child:item.value().items())apply(child.value());
+        else if(name!="const"&&name!="enum"&&name!="default")apply(item.value());
+      }
+    };
+    std::function<void(const Json&)> hoist_scope=[&](const Json& node) {
+      if(node.is_array()){for(const auto& child:node)hoist_scope(child);return;}
+      if(!node.is_object())return;
+      for(const auto* key:{"$id","$anchor","$dynamicAnchor","$dynamicRef","$recursiveAnchor","$recursiveRef"})if(node.contains(key))hoist_scoped=true;
+      schema_children(node,hoist_scope);
+    };
+    hoist_scope(schema);
+    std::function<void(Json&)> hoist=[&](Json& node) {
+      if(node.is_array()){for(auto& child:node)hoist(child);return;}
+      if(!node.is_object())return;
+      schema_children(node,hoist);
+      if(node.contains("type")&&node.at("type")!="object")return;
+      if(node.contains("unevaluatedProperties"))return;
+      for(const auto* union_key:{"oneOf","anyOf"}) {
+        if(!node.contains(union_key)||!node.at(union_key).is_array()||node.at(union_key).size()<2)continue;
+        auto& branches=node[union_key];
+        bool objects=true;
+        for(const auto& branch:branches)if(!branch.is_object()||branch.value("type",Json())!="object"){objects=false;break;}
+        if(!objects)continue;
+        std::set<std::string> required;
+        if(branches.front().contains("required"))for(const auto& name:branches.front().at("required"))required.insert(name.get<std::string>());
+        for(const auto& branch:branches)for(auto it=required.begin();it!=required.end();) {
+          if(!branch.contains("required")||std::find(branch.at("required").begin(),branch.at("required").end(),Json(*it))==branch.at("required").end())it=required.erase(it);else ++it;
+        }
+        std::set<std::string> candidates;
+        for(const auto& branch:branches)if(branch.contains("properties"))for(const auto& property:branch.at("properties").items())candidates.insert(property.key());
+        Json common=Json::object();
+        for(const auto& name:candidates) {
+          Json constraint;std::size_t copies=0;bool identical=true;
+          for(const auto& branch:branches) {
+            if(branch.contains("properties")&&branch.at("properties").contains(name)) {
+              const auto& value=branch.at("properties").at(name);
+              if(copies&&value!=constraint){identical=false;break;}
+              constraint=value;++copies;
+            } else if(branch.value("additionalProperties",Json())!=false||branch.contains("patternProperties")) {
+              identical=false;break;
+            }
+          }
+          if(!identical||copies<2||constraint==Json::object())continue;
+          const bool declared=node.contains("properties")&&node.at("properties").contains(name);
+          if((declared&&node.at("properties").at(name)!=constraint)||
+             (!declared&&node.contains("additionalProperties")&&node.at("additionalProperties")!=true))continue;
+          // Hoist only when the actual serialized property declarations shrink.
+          const auto size=constraint.dump().size();
+          if(!declared&&copies*(size-2)<=size+name.size()+4)continue;
+          common[name]=std::move(constraint);
+        }
+        node["type"]="object";
+        for(const auto& property:common.items())node["properties"][property.key()]=property.value();
+        if(!required.empty()) {
+          if(!node.contains("required"))node["required"]=Json::array();
+          for(const auto& name:required)if(std::find(node.at("required").begin(),node.at("required").end(),Json(name))==node.at("required").end())node["required"].push_back(name);
+        }
+        for(auto& branch:branches) {
+          branch.erase("type");
+          for(const auto& property:common.items())if(branch.contains("properties")&&branch.at("properties").contains(property.key()))branch["properties"][property.key()]=Json::object();
+          if(branch.contains("required")) {
+            Json remaining=Json::array();for(const auto& name:branch.at("required"))if(!required.contains(name.get<std::string>()))remaining.push_back(name);
+            if(remaining.empty())branch.erase("required");else branch["required"]=std::move(remaining);
+          }
+        }
+      }
+    };
+    if(!hoist_scoped)hoist(schema);
     // Intern profitable repeated schema subtrees within each standalone schema.
     // Every constraint is retained; only structurally identical nodes share a
     // reference. This keeps discovery bounded as fabrication contracts grow.
@@ -310,6 +390,9 @@ Json tool_definitions() {
     const auto eligible=[](const Json& value) {
       if(!value.is_object()||value.contains("$defs")||value.dump().size()<24)return false;
       if(value.contains("type")&&(value.at("type").is_string()||value.at("type").is_array()))return true;
+      if(value.contains("properties")&&value.at("properties").is_object()&&
+        ((value.contains("required")&&value.at("required").is_array())||
+         (value.contains("additionalProperties")&&value.at("additionalProperties").is_boolean())))return true;
       for(const auto* keyword:{"oneOf","anyOf","allOf","enum"})if(value.contains(keyword)&&value.at(keyword).is_array())return true;
       return false;
     };

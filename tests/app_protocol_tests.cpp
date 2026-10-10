@@ -178,10 +178,10 @@ void discovery_contract(Service& service) {
   session.handle({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}});
   const auto listed = result(session, rpc("list", "tools/list"));
   const auto bytes = listed.dump().size();
-  // Preserve the prior 15 KiB-per-tool average (420 KiB for 28 tools) as
-  // STEP inspection adds its own typed input/output contracts.
-  require(listed.at("tools").size()==29,"Expected native discovery catalog");
-  require(bytes < 29 * 15 * 1024, "tools/list stays compact (" + std::to_string(bytes) + " bytes)");
+  // Preserve the 15 KiB-per-tool average as native source capture/import adds
+  // two independently typed contracts to the discovery catalog.
+  require(listed.at("tools").size()==31,"Expected native discovery catalog");
+  require(bytes < listed.at("tools").size() * 15 * 1024, "tools/list stays compact (" + std::to_string(bytes) + " bytes)");
   for (const auto& tool : listed.at("tools")) for (const auto* key : {"inputSchema", "outputSchema"}) {
     require(tool.at(key).value("type",std::string{})=="object","MCP discovery schemas explicitly declare object roots");
     const auto& schema = tool.at(key);
