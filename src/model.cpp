@@ -386,6 +386,7 @@ Json model_definitions() {
   }, {"source_feature_id","source_kind","source_id","relation"});
   const Json provenance = object({
     {"feature_id",id},{"feature_type",{{"type","string"}}},{"content_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},
+    {"font_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"font_sha256_by_style",{{"type","object"},{"maxProperties",16},{"additionalProperties",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}},
     {"dependencies",{{"type","array"},{"items",id},{"maxItems",64}}},
     {"reference_policy",{{"const","geometric_replay"}}},{"history_lifetime",{{"const","evaluation"}}},
     {"history",{{"type","array"},{"items",history_entry},{"maxItems",10000}}},{"history_truncated",{{"type","boolean"}}}

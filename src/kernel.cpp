@@ -1174,7 +1174,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   Json result={{"feature_id",feature.at("id")},{"feature_type",feature.at("type")},{"dependencies",dependencies},
     {"reference_policy","geometric_replay"},{"history_lifetime","evaluation"},{"history",history},{"history_truncated",history_truncated}};
   if (feature.at("type")=="import_step"||feature.at("type")=="import_step_surface") result["content_sha256"]=feature.at("sha256");
-  if(feature.at("type")=="sketch"){const auto& p=feature.at("profile");if(p.contains("sha256"))result["content_sha256"]=p.at("sha256");if(p.contains("font"))result["font_sha256"]=p.at("font").at("sha256");}
+  if(feature.at("type")=="sketch"){const auto& p=feature.at("profile");if(p.contains("sha256"))result["content_sha256"]=p.at("sha256");if(p.contains("font"))result["font_sha256"]=p.at("font").at("sha256");if(p.contains("fonts")){result["font_sha256_by_style"]=Json::object();for(auto it=p.at("fonts").begin();it!=p.at("fonts").end();++it)result["font_sha256_by_style"][it.key()]=it.value().at("sha256");}}
   return result;
 }
 Json snapshot_feature(const FeatureGeometry& geometry,std::size_t limit=32*1024*1024) {

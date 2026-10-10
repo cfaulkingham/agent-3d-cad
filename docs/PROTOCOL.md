@@ -150,7 +150,8 @@ surfaces; triangulated volume is not substituted.
 [PARITY_SOLIDS.md](PARITY_SOLIDS.md) defines solid scaling, existing-face draft,
 chamfer side/angle, twist extrusion and loft hole/vertex semantics.
 [SKETCH_OPERATIONS.md](SKETCH_OPERATIONS.md),
-[AUTHORING_IMPORTS.md](AUTHORING_IMPORTS.md), [SHEET_METAL.md](SHEET_METAL.md)
+[AUTHORING_IMPORTS.md](AUTHORING_IMPORTS.md), [PARITY_AUTHORING.md](PARITY_AUTHORING.md),
+[SHEET_METAL.md](SHEET_METAL.md)
 and [SURFACES.md](SURFACES.md) define the additional bounds and explicit limits.
 
 Circular patterns rotate each copy by `index * angle_deg` around the supplied
