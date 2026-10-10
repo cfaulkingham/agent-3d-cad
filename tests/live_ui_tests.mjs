@@ -38,6 +38,14 @@ function host() {
   await assert.rejects(failure, error => error.code === 'stale_selection'); checks++;
   await assert.rejects(bridge.request('ui/message', {}, 5), /Check the chat/); checks++;
   check(h.sent.filter(s => s.message.method === 'ui/message').length === 1, 'uncertain delivery never retries');
+  await assert.rejects(bridge.download([{type:'resource_link',uri:'native'}]), /does not support/); checks++;
+  check(!h.sent.some(s=>s.message.method==='ui/download-file'),'Absent download capability sends no host request');
+  bridge.capabilities.downloadFile={};
+  const contents=[{type:'resource_link',uri:'cad-export://hash/part.step',name:'part.step',mimeType:'model/step',size:10}];
+  const downloading=bridge.download(contents),downloadRequest=h.sent.at(-1).message;
+  check(downloadRequest.method==='ui/download-file'&&downloadRequest.params.contents===contents,'Host download request carries resource links');
+  h.emit({id:downloadRequest.id,result:{}});await downloading;
+  await assert.rejects(bridge.download([]),/No bounded/);checks++;
   let early; bridge.on('ui/notifications/tool-result', result => early = result);
   h.emit({ method: 'ui/notifications/tool-result', params: { structuredContent: { view_id: 'main' } } });
   check(early.structuredContent.view_id === 'main', 'tool result notification delivered');

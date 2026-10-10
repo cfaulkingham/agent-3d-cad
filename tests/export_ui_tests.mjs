@@ -66,4 +66,31 @@ for(const mode of ['desktop','job']){
  const f=fixture('job','3mf'),pending=f.control.click();f.response.resolve({state:'succeeded',result:{path:'plate-1.3mf'}});await pending;
  check(f.calls[0].args.tool==='cad_export'&&f.calls[0].args.arguments.format==='3mf'&&f.nodes.get('copy-text').value==='plate-1.3mf','3MF toolbar export uses the native exporter');
 }
+for(const refused of [false,true]){
+ const f=fixture('job','3mf'),download=deferred(),links=[{type:'resource_link',uri:'cad-export://one/plate-1.3mf'},{type:'resource_link',uri:'cad-export://two/plate-2.3mf'}];
+ f.bridge.capabilities={downloadFile:{}};f.bridge.download=contents=>{f.calls.push({kind:'download',contents});return download.promise;};
+ const pending=f.control.click();f.response.resolve({state:'succeeded',result:{path:'plate-1.3mf',plates:[{path:'plate-1.3mf'},{path:'plate-2.3mf'}],layout_path:'layout.json',downloads:links,download_errors:[{name:'layout.json',message:'File too large'}]}});await turn();
+ check(f.calls.length===2&&f.calls[1].contents===links,'Advertised host receives complete native resource-link set once');
+ check(f.nodes.get('copy-text').value==='plate-1.3mf\nplate-2.3mf\nlayout.json','Every plate and layout path remains available');
+ if(refused)download.reject(Error('Save cancelled'));else download.resolve({});await pending;
+ check(f.messages.at(-1).includes(refused?'Save cancelled':'1 file(s) remain available'),'Host refusal or partial delivery preserves truthful status and workspace fallback');
+}
+{
+ const f=fixture(),busy=Error('Publishing');busy.code='workspace_busy';let reads=0;
+ const call=f.bridge.tool;f.bridge.tool=async(name,args)=>args.action==='get'&&reads++===0?Promise.reject(busy):call(name,args);
+ const pending=f.control.click();f.setNextJob({state:'succeeded',result:{path:'current.step'}});f.response.resolve({state:'queued',job_id:'job'});await turn();f.timers.shift()();await turn();
+ check(f.timers.length===1,'Read-only job polling retries documented publication contention');f.timers.shift()();await pending;
+ check(f.messages.at(-1).startsWith('Export saved')&&f.calls.filter(c=>c.args.action==='submit').length===1,'Contention recovery does not resubmit the export');
+}
+for(const failed of [false,true]){
+ const f=fixture(),download=deferred();f.bridge.capabilities={downloadFile:{}};f.bridge.download=()=>download.promise;
+ const pending=f.control.click();f.response.resolve({state:'succeeded',result:{path:'part.step',downloads:[{type:'resource_link',uri:'native'}]}});await turn();f.retarget('revision');
+ if(failed)download.reject(Error('Old download failed'));else download.resolve({});await pending;
+ check(f.messages.at(-1)==='Current view status'&&f.nodes.get('copy-text').value==='Current view fallback','Late host download result cannot overwrite a new revision');
+}
+{
+ const f=fixture();f.bridge.capabilities={downloadFile:{}};f.bridge.download=()=>{throw Error('Must not download a failed capture');};
+ const pending=f.control.click();f.response.resolve({state:'succeeded',result:{path:'large.step',downloads:[],download_errors:[{name:'large.step',message:'Limit'}]}});await pending;
+ check(f.messages.at(-1).includes('Some files could not be prepared')&&f.nodes.get('copy-text').value==='large.step','Delivery errors retain the completed native export');
+}
 console.log('PASS '+checks+' export UI source-qualification checks');

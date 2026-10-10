@@ -645,13 +645,22 @@
         while (['queued', 'running', 'cancelling'].includes(job.state) && current() && Date.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 500));
           if(!current())return;
-          job = await bridge.tool('cad_job', { action: 'get', job_id: job.job_id });
+          try { job = await bridge.tool('cad_job', { action: 'get', job_id: job.job_id }); }
+          catch(error) { if(error.code!=='workspace_busy')throw error; }
         }
         if (!current()) return;
         if (job.state !== 'succeeded') throw Error(job.error?.message || `Export ${job.state}. Job: ${job.job_id}`);
-        const paths = drawing ? job.result.artifacts.map(item => item.path) : [job.result.path];
+        const paths = drawing ? job.result.artifacts.map(item => item.path) : job.result.plates ? [...job.result.plates.map(item => item.path), job.result.layout_path].filter(Boolean) : [job.result.path];
         $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = paths.join('\n');
-        status('Export saved in the CAD workspace. File paths are below.');
+        const downloads=job.result.downloads || [], missing=job.result.download_errors?.length || 0;
+        if (bridge.capabilities?.downloadFile && downloads.length) {
+          try {
+            await bridge.download(downloads);
+            if(current())status(`Download requested from your host.${missing ? ` ${missing} file(s) remain available by workspace path.` : ''} Workspace file paths are below.`);
+          } catch(error) {
+            if(current())status(`Export saved in the CAD workspace. The host could not complete the download: ${error.message} File paths are below.`);
+          }
+        } else status(`Export saved in the CAD workspace.${missing ? ' Some files could not be prepared for host download.' : ''} File paths are below.`);
       }
     } catch (error) { if(current())status(error.message); }
     finally { exporting = false; if (!disposed) update(state.value); }

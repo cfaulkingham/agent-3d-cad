@@ -1,3 +1,4 @@
+#include "agentcad/download.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/authoring.hpp"
 #include "agentcad/kernel.hpp"
@@ -273,6 +274,10 @@ Json tool_definitions() {
   for(auto& tool:tools) {
     if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};}
     if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"properties",{{"format",{{"const","text"}}}}}}},{"then",{{"required",{"text","height"}},{"not",{{"required",{"scale"}}}}}},{"else",{{"not",{{"anyOf",Json::array({Json{{"required",{"text"}}},Json{{"required",{"height"}}},Json{{"required",{"spacing"}}},Json{{"required",{"face_index"}}}})}}}}}}});
+    if(tool.at("name")=="cad_export"||tool.at("name")=="cad_drawing") {
+      tool["outputSchema"]["properties"]["downloads"]={{"type","array"},{"items",download_link_schema()},{"maxItems",128}};
+      tool["outputSchema"]["properties"]["download_errors"]={{"type","array"},{"maxItems",128},{"items",object({{"name",text},{"code",text},{"message",text}},{"name","code","message"})}};
+    }
     if(tool.at("name")=="cad_export")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"required",{"layout"}}}},{"then",{{"properties",{{"format",{{"const","3mf"}}}}}}}}});
   }
   const std::set<std::string> job_tools={"cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
@@ -776,9 +781,19 @@ Error service_error(std::exception_ptr error) {
 }
 
 Json Service::call(const std::string& tool,const Json& args) {
-  try { return execute(tool,args); }
+  try {
+    auto result=execute(tool,args);
+    if(tool=="cad_export"||tool=="cad_drawing")attach_export_downloads(store_,result);
+    return result;
+  }
   catch (const Error&) { throw; }
   catch (...) { throw service_error(std::current_exception()); }
+}
+
+Json Service::read_resource(const std::string& uri) {
+  try{return read_export_download(store_,uri);}
+  catch(const Error&){throw;}
+  catch(...){throw service_error(std::current_exception());}
 }
 
 Json Service::execute(const std::string& tool,const Json& args) {

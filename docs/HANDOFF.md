@@ -40,6 +40,28 @@ unchanged **476,160-byte** discovery budget. Lossless structural compaction is
 required after feature integration; the budget and validation must not be
 weakened. Full native/SDK/package/platform/host acceptance remains outstanding.
 
+Embedded export delivery is implemented on the integration branch. STEP/STL,
+all 3MF plates and their layout report, and requested PDF/SVG/DXF artifacts
+produce bounded source-qualified MCP resource links. Captured bytes and their
+historical source/manifest hashes are checked on every resource read. Native
+MCP content blocks expose the links; the viewer requests `ui/download-file`
+only for an advertised host capability and retains complete workspace paths.
+Late replies cannot replace a newer view's status. Read-only job polls retry
+the documented `workspace_busy` result without resubmitting the export.
+[EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md) records bounds and behavior.
+
+Validation: native build succeeded; **3/3 CTest suites** (`download`, `live_ui`,
+`export_ui`) passed in **2.54 s**, and the final UI checks after adding contention
+coverage passed **2/2 in 0.15 s**. The official **MCP SDK 2.3.0 passed 2,194
+checks** against the native stdio service, including typed resource links,
+source schemas and exact base64/file-byte comparison. Independent validation
+accepted all **62 discovery schemas**. The initial new test wrongly expected
+a 3MF export without a layout sidecar and polled jobs without handling the
+documented transient queue lock; both harness assumptions were corrected.
+This does not establish actual host download support or any release journey.
+The catalog is now **492,473 bytes**; its unchanged size gate still needs the
+planned lossless compaction after integration.
+
 ## Standalone UI synchronized and installed — 2026-10-10
 
 Rebuilt and installed the standalone app at the user's request. The prior

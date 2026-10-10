@@ -115,6 +115,11 @@
       return value;
     }
     async tool(name, args = {}) { return CadBridge.value(this.desktop ? await this.desktop.call(name, args) : await this.request('tools/call', { name, arguments: args })); }
+    async download(contents) {
+      if (!this.capabilities.downloadFile) throw Error('This host does not support file downloads.');
+      if (!Array.isArray(contents) || !contents.length || contents.length > 128) throw Error('No bounded export download set is available.');
+      return this.request('ui/download-file', { contents }, 120000);
+    }
     dispose() {
       if (this.closed) return;
       this.closed = true; this.self.removeEventListener('message', this.receive);

@@ -357,7 +357,7 @@ JSON-safe integers. See runtime schemas for exact closed field definitions.
 | `cad_artifact_show` | No `document_id`; `review_path`, review `expected_sha256`, optional `view_id` | Verify/reparse and display a frozen artifact in the MCP App; `{view_id,document_id:null,read_only:true,artifact,resource_uri}` |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
 | `cad_measure` | `revision`, `evaluation_id`, `feature_id`, `query` | Exact source-pose pair distances/angles, clearance/interference, or native planar section curves/material caps; see [measurement](MEASUREMENTS.md) and [section](SECTIONS.md) contracts |
-| `cad_export` | `revision`, `format` (`step`/`stl`/`3mf`), optional `feature_id`, 3MF-only `layout` | Artifact path, bytes, units and identity; 3MF also returns all plates and layout manifest |
+| `cad_export` | `revision`, `format` (`step`/`stl`/`3mf`), optional `feature_id`, 3MF-only `layout` | Artifact path, bytes, units, identity and bounded download resources; 3MF also returns all plates and layout manifest |
 | `cad_manufacture` | `revision`, optional `feature_id`, `options` | Complete native manufacturing package: editable source, unique leaf STEP/STL/drawings, saved assembly pose, BOM/purchasing data, explicit process assumptions and portable hash manifest; see [manufacturing contract](MANUFACTURING.md) |
 | `cad_fabrication_review` | `revision`, `options`, optional `feature_id` | Hashed native JSON review with explicit process inputs, exact or sampled measurements, unknown unsupported checks and saved-pose clearance/interference; see [review contract](FABRICATION_REVIEW.md) |
 | `cad_gcode_review` | `revision`, absolute plain `.gcode` `path`, `expected_sha256`, `options`, optional `feature_id` | Native stateful static review, unchanged G-code and portable hash ledger; explicit machine/material/initial assumptions and caller CAD association; see [G-code contract](GCODE_REVIEW.md) |
@@ -365,7 +365,7 @@ JSON-safe integers. See runtime schemas for exact closed field definitions.
 | `cad_slice` | `revision`, `action: plan` with explicit executable/profile hashes, `options`, optional `feature_id`; or `action: run` with `plan_path`, `expected_sha256` | Native bounded installed OrcaSlicer 2.4.2 workflow for one solid; reviewed plan, actual G-code/effective settings, static findings and portable manifest; no printer contact; see [slicing contract](SLICING.md) |
 | `cad_robot_export` | `revision`, `robot: {format, joint_properties, inertials?}`, optional `feature_id` | URDF+SRDF or SDF 1.12 directory with STL meshes, SI joint coordinates, frame ledger and hash manifest; explicit physical inputs required; see [robot contract](ROBOT_EXPORT.md) |
 | `cad_bom` | `revision`, optional assembly `feature_id` (defaults output) | Source-grouped BOM with instance quantities, JSON/CSV artifacts and manifest path |
-| `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned layouts, sections, measured dimensions, tolerances, optional BOM/balloons and saved recipe/manifest paths |
+| `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned layouts, sections, measured dimensions, tolerances, optional BOM/balloons, saved recipe/manifest paths and bounded download resources |
 | `cad_view` | `revision`, optional `feature_id` | Offline HTML path, .view.json path, summary and evaluation identity |
 | `cad_preview` | `expected_revision`, `operations`, optional `feature_id`, `kind` | Draft HTML/data artifacts (`kind: view`, default) or full draft mesh/topology (`kind: mesh`); no commit |
 | `cad_resolve_selection` | Remaining evaluated pick fields | Measurements and available persistent selector |
@@ -1048,8 +1048,15 @@ All stdout lines are protocol JSON; diagnostics use stderr.
 
 Tool replies contain JSON text and structuredContent; domain failures set isError.
 The server advertises the MCP Apps extension and resources with no subscriptions.
-`resources/list` exposes the single viewer resource; `resources/read` accepts
-only its exact URI. Tools include the same UI metadata in CLI discovery.
+`resources/list` exposes the single viewer resource. `resources/read` accepts its
+exact URI and source-qualified `cad-export://<manifest-sha256>/<filename>` links
+returned by `cad_export`, `cad_drawing` and their completed jobs. Export links
+also appear as native MCP resource-link content blocks. Each capture is limited
+to 128 files of at most 64 MiB each; reads verify source, manifest and file hashes
+and return base64 bytes. Arbitrary file URIs and local paths are rejected.
+`downloads` and `download_errors` preserve delivery success/failure separately
+from the completed native export. See [EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md).
+Tools include the same UI metadata in CLI discovery.
 `cad_viewer` has `_meta.ui.visibility: ["app"]`; the host filters model visibility
 and app calls. The service still accepts the tool through CLI/stdio for tests and
 other adapters. HTTP, sampling, streaming progress and MCP Tasks are not exposed.

@@ -73,14 +73,15 @@ is for host testing; no directory approval is implied.
 
 ## Required evidence before 1.0
 
-Planned file-delivery implementation: use the MCP Apps
+The integration branch implements the MCP Apps
 [`ui/download-file` request](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiDownloadFileRequest.html)
 when the host advertises
 [`downloadFile`](https://apps.extensions.modelcontextprotocol.io/api/interfaces/app.McpUiHostCapabilities.html).
-Provide exported files as bounded MCP resources with MIME types and filenames;
-do not expose arbitrary local file reads. Verify the host's actual save/download
+Exported files are bounded, source-qualified MCP resources with MIME types and
+filenames; arbitrary local file reads are not exposed. See
+[EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md). Verify the host's actual save/download
 action with STEP, STL and drawings. Capability support in either target host is
-not yet established. This API is planned, not implemented by the current viewer.
+not yet established. Implementation tests alone do not close this gate.
 
 Run the complete journey in a fresh host profile on each supported host/platform:
 

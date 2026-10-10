@@ -12,11 +12,11 @@ This is the completion ledger, not a declaration that planned APIs exist.
 | Surface robustness | Both signs/joins of the existing freeform-panel thickening case; explicit surface/shell STEP round trips | In progress: isolated `parity-surfaces` worktree |
 | Surface construction | Curve-network/Gordon surfaces, boundary fills with tangent/curvature continuity, arbitrary trim contours/holes, curved curve/sketch projection | In progress: isolated `parity-surfaces` worktree |
 | Sheet metal | Chained flanges, bends through blanks, hems, jogs, miters, generated bend/corner relief, cuts through bends and matching developed geometry; investigate Bezier verification abort | In progress: isolated `parity-sheet-metal` worktree |
-| Parametric authoring | Bounded trig/square-root/conditional expressions and parameter-driven pattern counts; explicit units, dependency tracking and failure rollback | In progress: integration branch |
+| Parametric authoring | Bounded trig/square-root/conditional expressions and parameter-driven pattern counts; explicit units, dependency tracking and failure rollback | Implemented `fcc4f1b`; 4 focused CTests plus independent schema checks passed; integrated acceptance pending |
 | Curves and queries | Dedicated helices; constrained tangent lines/arcs; hull, trace, full-round; curve sampling/tangents/trimming and richer geometric selection | Pending |
 | Captured authoring | DXF blocks/text/hatches; editable text-on-path with captured font/source provenance | Pending |
 | Mesh reconstruction | Native analytic plane/cylinder/sphere recognition with residuals and leftovers, usable as guided editable reconstruction rather than false recovered history | Pending |
-| Embedded file delivery | Bounded source-qualified export resources and supported host save/download action for STEP/STL/drawings; retain safe fallback when capability absent | Pending |
+| Embedded file delivery | Bounded source-qualified export resources and supported host save/download action for STEP/STL/drawings; retain safe fallback when capability absent | Implemented resource capture/read and viewer request; focused native/UI and SDK checks pass; actual target-host save actions pending |
 | Product acceptance | Current cross-platform validation; actual ChatGPT/Claude install/create/select/edit/restart/reopen/export/update/remove/reinstall journeys; signing and distribution/CPU-selection gates | Pending; external signing/directory access may be required; implementation tests cannot establish these gates |
 
 All geometry remains native C++20 / pinned OCCT 8.0.1 behind `BuiltModel`.

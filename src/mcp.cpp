@@ -8,8 +8,10 @@ Json rpc_error(const Json& id, int code, const std::string& message) {
   return {{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", message}}}};
 }
 Json tool_result(const Json& value, bool error = false) {
-  return {{"content", Json::array({{{"type", "text"}, {"text", value.dump()}}})},
-          {"structuredContent", value}, {"isError", error}};
+  Json content=Json::array({{{"type", "text"}, {"text", value.dump()}}});
+  const auto& exported=value.value("state","")=="succeeded"&&value.contains("result")?value.at("result"):value;
+  if(!error&&exported.contains("downloads"))for(const auto& link:exported.at("downloads"))content.push_back(link);
+  return {{"content",content},{"structuredContent", value}, {"isError", error}};
 }
 Json app_metadata() {
   return {{"ui", {{"csp", {{"connectDomains", Json::array()}, {"resourceDomains", Json::array()},
@@ -86,7 +88,10 @@ std::optional<Json> McpSession::handle(const Json& request) {
     if (method == "resources/read") {
       fields(params, {"uri"}, {"_meta"});
       const auto uri = text_field(params, "uri");
-      if (uri != viewer_app_uri) return rpc_error(id, -32002, "Resource not found: " + uri);
+      if (uri != viewer_app_uri) {
+        try{return response(service_.read_resource(uri));}
+        catch(const Error& error){return rpc_error(id,-32002,error.what());}
+      }
       return response({{"contents", Json::array({{{"uri", viewer_app_uri}, {"mimeType", viewer_app_mime},
                                                 {"text", viewer_app_html()}, {"_meta", app_metadata()}}})}});
     }

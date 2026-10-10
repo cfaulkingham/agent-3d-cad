@@ -17,6 +17,7 @@ public:
   // Throws only Error, translated by service_error, so MCP, CLI and job
   // adapters report identical codes for identical input.
   Json call(const std::string& tool, const Json& args);
+  Json read_resource(const std::string& uri);
 private:
   Json execute(const std::string& tool, const Json& args);
   Store store_;

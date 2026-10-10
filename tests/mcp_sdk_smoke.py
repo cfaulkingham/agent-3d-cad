@@ -16,6 +16,7 @@ https://py.sdk.modelcontextprotocol.io/protocol-versions/
 """
 
 import asyncio
+import base64
 import csv
 import io
 import importlib.metadata
@@ -120,9 +121,24 @@ async def call(client, definitions, name, arguments, *, expected_error=None, tim
     else:
         raise AssertionError("Workspace stayed busy during SDK smoke test")
     require(isinstance(value, dict), f"{name} did not return structured content")
-    require(len(result.content) == 1 and result.content[0].type == "text",
+    exported = value.get("result", {}) if value.get("state") == "succeeded" else value
+    links = exported.get("downloads", []) if not result.is_error else []
+    require(len(result.content) == 1 + len(links) and result.content[0].type == "text",
             f"{name} did not return the compatible JSON text content")
     require(json.loads(result.content[0].text) == value, f"{name} text and structured content disagree")
+    for item, link in zip(result.content[1:], links):
+        require(item.type == "resource_link" and item.model_dump(mode="json", by_alias=True, exclude_none=True) == link,
+                f"{name} native resource link differs from its structured descriptor")
+        paths = [entry["path"] for entry in exported.get("artifacts", exported.get("plates", []))]
+        paths += [exported[key] for key in ("path", "layout_path") if key in exported]
+        matching = {Path(path) for path in paths if Path(path).name == link["name"]}
+        require(len(matching) == 1, "Download names exactly one native exported file")
+        resource = (await client.read_resource(link["uri"])).model_dump(mode="json", by_alias=True)
+        require(len(resource["contents"]) == 1, "SDK reads one export resource")
+        content = resource["contents"][0]
+        require(content["uri"] == link["uri"] and content["mimeType"] == link["mimeType"], "SDK preserves export resource identity")
+        data = base64.b64decode(content["blob"], validate=True)
+        require(data == matching.pop().read_bytes() and len(data) == link["size"], "SDK base64 recovers exact exported bytes")
     if expected_error is not None:
         require(result.is_error and value["error"]["code"] == expected_error,
                 f"Expected structured {expected_error} error, received {value}")
