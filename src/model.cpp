@@ -9,6 +9,12 @@
 #include <vector>
 
 namespace agentcad {
+bool is_sketch_feature_type(const std::string& type) {
+  static const std::set<std::string> types={"sketch","sketch_cut","sketch_fuse","sketch_intersection",
+    "sketch_offset","sketch_fillet","sketch_chamfer","sketch_transform","sketch_instance","sketch_mirror",
+    "sketch_face","sketch_projection"};
+  return types.contains(type);
+}
 void validate_purchase(const Json& purchase,bool require_artifact) {
   fields(purchase,{"supplier","part_number","source_url"},{"artifact_sha256"});
   for(const auto* key:{"supplier","part_number","source_url"}) {
@@ -104,7 +110,7 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "box"}}}, {"size", vector_ref}, {"origin", vector_ref}}, {"id", "type", "size"}),
     object({{"id", id}, {"type", {{"const", "cylinder"}}}, {"radius", scalar_ref}, {"height", scalar_ref}, {"origin", vector_ref}}, {"id", "type", "radius", "height"}),
     object({{"id",id},{"type",{{"const","external_thread"}}},{"major_diameter",scalar_ref},{"pitch",scalar_ref},{"length",scalar_ref},{"origin",vector_ref},{"handedness",{{"enum",{"right","left"}}}}}, {"id","type","major_diameter","pitch","length"}),
-    object({{"id", id}, {"type", {{"enum", {"cut", "fuse"}}}}, {"left", id}, {"right", id}}, {"id", "type", "left", "right"}),
+    object({{"id", id}, {"type", {{"enum", {"cut", "fuse", "intersection"}}}}, {"left", id}, {"right", id}}, {"id", "type", "left", "right"}),
     object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"}),
     object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
@@ -159,6 +165,19 @@ Json model_definitions() {
   target_mode["not"]["anyOf"]=Json::array({Json{{"required",{"distance"}}},Json{{"required",{"both"}}},Json{{"required",{"taper_deg"}}}});
   extrude_schema["oneOf"]=Json::array({distance_mode,target_mode});
   features.push_back(extrude_schema);
+  const Json vertex_selector=object({{"type",{{"const","geometric"}}},{"feature_id",id},
+    {"point",vector_ref},{"tolerance",scalar_ref},{"expected_count",{{"type","integer"},{"minimum",1},{"maximum",10000}}}},
+    {"type","feature_id","point","tolerance","expected_count"});
+  const Json vertices={{"oneOf",Json::array({Json{{"const","all"}},vertex_selector})}};
+  features.push_back(object({{"id",id},{"type",{{"enum",{"sketch_cut","sketch_fuse","sketch_intersection"}}}},{"left",id},{"right",id}}, {"id","type","left","right"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_offset"}}},{"input",id},{"distance",scalar_ref},{"join",{{"enum",{"arc","intersection"}}}}}, {"id","type","input","distance"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_fillet"}}},{"input",id},{"radius",scalar_ref},{"vertices",vertices}}, {"id","type","input","radius","vertices"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_chamfer"}}},{"input",id},{"distance",scalar_ref},{"vertices",vertices}}, {"id","type","input","distance","vertices"}));
+  features.push_back(object({{"id",id},{"type",{{"enum",{"sketch_transform","sketch_instance"}}}},{"input",id},{"translation",vector_ref},{"rotation",rotation_schema}}, {"id","type","input"}));
+  features.push_back(object({{"id",id},{"type",{{"enum",{"mirror","sketch_mirror"}}}},{"input",id},{"plane",workplane_schema}}, {"id","type","input","plane"}));
+  features.push_back(object({{"id",id},{"type",{{"const","split"}}},{"input",id},{"plane",workplane_schema},{"keep",{{"enum",{"both","top","bottom"}}}}}, {"id","type","input","plane","keep"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_face"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}}}, {"id","type","input","faces"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_projection"}}},{"input",id},{"faces",{{"$ref","#/$defs/face_selection"}}},{"workplane",workplane_schema}}, {"id","type","input","faces","workplane"}));
   features.push_back(object({{"id",id},{"type",{{"const","revolve"}}},{"input",id},{"axis",axis_schema},{"angle_deg",scalar_ref}}, {"id","type","input","axis","angle_deg"}));
   features.push_back(object({{"id",id},{"type",{{"const","loft"}}},{"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"ruled",{{"type","boolean"}}}}, {"id","type","sections"}));
   const auto sweep_wire=object({{"type",{{"const","wire"}}},{"segments",segments3}},{"type","segments"});
@@ -505,7 +524,7 @@ void assembly(const Json& feature, const Json& parameters, const std::map<std::s
       model_identifier(part_id);
       if (!part_ids.insert(part_id).second) throw Error("invalid_model", "Duplicate assembly part: " + part_id);
       const auto input = text_field(part,"input");
-      if (!types.contains(input) || types.at(input) == "sketch")
+      if (!types.contains(input) || is_sketch_feature_type(types.at(input)))
         throw Error("invalid_model", "Assembly part input must name an earlier solid or assembly feature", {{"source_feature_id",input}});
       source_inputs.insert(input);
       if (part.contains("placement")) { placement(part.at("placement"),parameters); placed.insert(part_id); }
@@ -643,11 +662,11 @@ void validate_model(const Json& model) {
     auto dependency = [&](const char* key) {
       const auto target = text_field(feature, key);
       if (!prior.contains(target)) throw Error("invalid_model", "Feature must refer to an earlier feature: " + target, {{"feature_id", id}});
-      if (types.at(target) == "sketch") throw Error("invalid_model", "This operation requires a solid input, not an intermediate sketch", {{"feature_id", id}});
+      if (is_sketch_feature_type(types.at(target))) throw Error("invalid_model", "This operation requires a solid input, not an intermediate sketch", {{"feature_id", id}});
       if (types.at(target) == "assembly") throw Error("invalid_model", "Edit assembly source parts before assembling; solid operations cannot consume assemblies", {{"feature_id", id}});
     };
     auto sketch_dependency = [&](const std::string& target) {
-      if (!prior.contains(target) || types.at(target) != "sketch")
+      if (!prior.contains(target) || !is_sketch_feature_type(types.at(target)))
         throw Error("invalid_model", "Profile reference must name an earlier sketch", {{"feature_id", id}, {"source_feature_id", target}});
     };
     if (type == "box") {
@@ -667,7 +686,7 @@ void validate_model(const Json& model) {
         throw Error("invalid_model","External threads require pitch >= 0.1 mm, diameter <= 200 mm, diameter/pitch between 3 and 100, and 1–16 turns");
       if (feature.contains("handedness") && text_field(feature,"handedness")!="right" && text_field(feature,"handedness")!="left")
         throw Error("invalid_model","Thread handedness must be right or left");
-    } else if (type == "cut" || type == "fuse") {
+    } else if (type == "cut" || type == "fuse" || type == "intersection") {
       fields(feature, {"id", "type", "left", "right"});
       dependency("left"); dependency("right");
     } else if (type == "fillet" || type == "chamfer") {
@@ -686,7 +705,7 @@ void validate_model(const Json& model) {
       if(std::abs(scalar(feature.at(dimension),parameters))<1e-5)throw Error("invalid_model","Shell, offset and thicken dimensions must have magnitude at least 0.00001 mm");
       if(feature.contains("join")&&feature.at("join")!="arc"&&feature.at("join")!="intersection")throw Error("invalid_model","Offset join must be arc or intersection");
       const auto input=text_field(feature,"input");
-      if(type=="thicken"&&prior.contains(input)&&types.at(input)=="sketch") {
+      if(type=="thicken"&&prior.contains(input)&&is_sketch_feature_type(types.at(input))) {
         if(feature.contains("faces"))throw Error("invalid_model","Thickening a sketch uses its complete profile; omit faces");
       } else {
         dependency("input");
@@ -724,6 +743,42 @@ void validate_model(const Json& model) {
           }
         }
       } else throw Error("invalid_model", "Unsupported sketch profile");
+    } else if (type=="sketch_cut" || type=="sketch_fuse" || type=="sketch_intersection") {
+      fields(feature,{"id","type","left","right"});
+      sketch_dependency(text_field(feature,"left")); sketch_dependency(text_field(feature,"right"));
+    } else if (type=="sketch_offset") {
+      fields(feature,{"id","type","input","distance"},{"join"});sketch_dependency(text_field(feature,"input"));
+      if(std::abs(scalar(feature.at("distance"),parameters))<1e-5)throw Error("invalid_model","Sketch offset magnitude must be at least 0.00001 mm");
+      if(feature.contains("join")&&text_field(feature,"join")!="arc"&&text_field(feature,"join")!="intersection")throw Error("invalid_model","Sketch offset join must be arc or intersection");
+    } else if (type=="sketch_fillet" || type=="sketch_chamfer") {
+      const auto dimension=type=="sketch_fillet"?"radius":"distance";
+      fields(feature,{"id","type","input",dimension,"vertices"});sketch_dependency(text_field(feature,"input"));positive(feature.at(dimension));
+      const auto& vertices=feature.at("vertices");
+      if(vertices.is_string()) {if(vertices!="all")throw Error("invalid_model","Sketch vertices must be all or a geometric point selector");}
+      else {
+        fields(vertices,{"type","feature_id","point","tolerance","expected_count"});
+        if(text_field(vertices,"type")!="geometric"||text_field(vertices,"feature_id")!=text_field(feature,"input"))throw Error("invalid_model","Sketch vertex selector must qualify its input feature");
+        vector3(vertices.at("point"),parameters);if(scalar(vertices.at("tolerance"),parameters)<=0)throw Error("invalid_model","Sketch vertex tolerance must be positive");
+        if(!vertices.at("expected_count").is_number_integer()||vertices.at("expected_count")<1||vertices.at("expected_count")>10000)throw Error("invalid_model","Sketch vertex expected_count must be between 1 and 10000");
+      }
+    } else if (type=="sketch_transform" || type=="sketch_instance") {
+      fields(feature,{"id","type","input"},{"translation","rotation"});sketch_dependency(text_field(feature,"input"));
+      if(feature.contains("translation"))vector3(feature.at("translation"),parameters);
+      if(feature.contains("rotation")) {
+        const auto& rotation=feature.at("rotation");fields(rotation,{"origin","axis","angle_deg"});
+        vector3(rotation.at("origin"),parameters);unit_vector(rotation.at("axis"),parameters);scalar(rotation.at("angle_deg"),parameters,"deg");
+      }
+    } else if (type=="mirror" || type=="sketch_mirror") {
+      fields(feature,{"id","type","input","plane"});
+      if(type=="sketch_mirror")sketch_dependency(text_field(feature,"input"));else dependency("input");
+      workplane(feature.at("plane"),parameters);
+    } else if (type=="split") {
+      fields(feature,{"id","type","input","plane","keep"});dependency("input");workplane(feature.at("plane"),parameters);
+      const auto keep=text_field(feature,"keep");if(keep!="both"&&keep!="top"&&keep!="bottom")throw Error("invalid_model","Split keep must be both, top or bottom");
+    } else if (type=="sketch_face" || type=="sketch_projection") {
+      if(type=="sketch_projection")fields(feature,{"id","type","input","faces","workplane"});else fields(feature,{"id","type","input","faces"});
+      dependency("input");validate_face_selection(feature.at("faces"),parameters,text_field(feature,"input"));
+      if(type=="sketch_projection")workplane(feature.at("workplane"),parameters);
     } else if (type == "extrude") {
       fields(feature, {"id", "type", "input"}, {"distance","direction","both","taper_deg","until","target"});
       sketch_dependency(text_field(feature,"input"));
@@ -782,7 +837,7 @@ void validate_model(const Json& model) {
       if(feature.contains("transition")) {const auto v=text_field(feature,"transition");if(v!="transformed"&&v!="right_corner"&&v!="round_corner")throw Error("invalid_model","Unsupported sweep transition");}
     } else if (type == "transform" || type == "instance") {
       fields(feature, {"id", "type", "input"}, {"translation", "rotation"}); dependency("input");
-      if (types.at(text_field(feature,"input")) == "sketch") throw Error("invalid_model", "Transform and instance currently require solid inputs");
+      if (is_sketch_feature_type(types.at(text_field(feature,"input")))) throw Error("invalid_model", "Transform and instance currently require solid inputs");
       if (feature.contains("translation")) vector3(feature.at("translation"), parameters);
       if (feature.contains("rotation")) {
         const auto& rotation = feature.at("rotation");
@@ -794,7 +849,7 @@ void validate_model(const Json& model) {
       if (type=="pattern") fields(feature, {"id", "type", "input", "count", "step"});
       else fields(feature,{"id","type","input","count","axis","angle_deg"});
       dependency("input");
-      if (types.at(text_field(feature,"input")) == "sketch") throw Error("invalid_model", "Patterns currently require solid inputs");
+      if (is_sketch_feature_type(types.at(text_field(feature,"input")))) throw Error("invalid_model", "Patterns currently require solid inputs");
       if (!feature.at("count").is_number_integer() || feature.at("count") < 2 || feature.at("count") > 64)
         throw Error("invalid_model", "Pattern count must be an integer from 2 to 64");
       if (type=="pattern") {
@@ -848,7 +903,7 @@ void validate_model(const Json& model) {
     }
   }
   if (!prior.contains(text_field(model, "output"))) throw Error("invalid_model", "output must name a feature");
-  if (types.at(text_field(model,"output")) == "sketch") throw Error("invalid_model", "The model output must be solid geometry, not an intermediate sketch");
+  if (is_sketch_feature_type(types.at(text_field(model,"output")))) throw Error("invalid_model", "The model output must be solid geometry, not an intermediate sketch");
   for(const auto& feature:model.at("features"))if(feature.at("type")=="assembly"&&feature.contains("bom"))
     for(const auto& item:feature.at("bom"))if(item.contains("purchase")) {
       const auto* source=imported_step_source(model,text_field(item,"input"));

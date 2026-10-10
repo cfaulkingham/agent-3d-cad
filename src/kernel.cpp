@@ -16,6 +16,12 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepFilletAPI_MakeFillet2d.hxx>
+#include <BRepPrimAPI_MakeHalfSpace.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <GeomProjLib.hxx>
+#include <Geom_Plane.hxx>
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
@@ -280,6 +286,41 @@ void check_shape(const TopoDS_Shape& shape) {
   BRepGProp::VolumeProperties(shape,aggregate);
   if (!std::isfinite(aggregate.Mass()) || aggregate.Mass()<=0)
     throw Error("invalid_shape", "Feature has nonpositive or nonfinite aggregate volume");
+}
+// Exact planar region validation is shared by numeric, derived and imported sketches.
+// Containers may only contain faces. BRep validity alone accepts loose geometry.
+void check_sketch_shape(const TopoDS_Shape& shape,const gp_Ax2& plane) {
+  if(shape.IsNull()||!BRepCheck_Analyzer(shape).IsValid())throw Error("invalid_shape","Sketch result must be valid planar geometry");
+  std::vector<TopoDS_Shape> pending{shape};std::vector<TopoDS_Face> faces;
+  while(!pending.empty()) {
+    const auto current=pending.back();pending.pop_back();
+    if(current.ShapeType()==TopAbs_FACE) {
+      const auto face=TopoDS::Face(current);const BRepAdaptor_Surface surface(face);
+      if(surface.GetType()!=GeomAbs_Plane||std::abs(surface.Plane().Axis().Direction().Dot(plane.Direction()))<1-1e-9
+          ||surface.Plane().Distance(plane.Location())>1e-7)throw Error("invalid_shape","Sketch regions must be coplanar with their workplane");
+      GProp_GProps area;BRepGProp::SurfaceProperties(face,area);
+      if(!std::isfinite(area.Mass())||area.Mass()<=1e-10)throw Error("invalid_shape","Sketch regions need positive finite area");
+      if(faces.size()>=128)throw Error("limit_exceeded","A sketch permits at most 128 disjoint regions");
+      faces.push_back(face);
+    } else if(current.ShapeType()==TopAbs_COMPOUND) {
+      TopoDS_Iterator children(current);if(!children.More())throw Error("invalid_shape","Sketch operation produced no regions");
+      for(;children.More();children.Next())pending.push_back(children.Value());
+    } else throw Error("invalid_shape","Sketch result contains loose or nonplanar geometry");
+  }
+  if(faces.empty())throw Error("invalid_shape","Sketch operation produced no regions");
+  for(std::size_t a=0;a<faces.size();++a)for(std::size_t b=a+1;b<faces.size();++b) {
+    BRepAlgoAPI_Common overlap;NCollection_List<TopoDS_Shape> left,right;left.Append(faces[a]);right.Append(faces[b]);
+    overlap.SetArguments(left);overlap.SetTools(right);overlap.SetNonDestructive(true);overlap.SetRunParallel(false);overlap.Build();
+    if(!overlap.IsDone()||overlap.HasErrors())throw Error("kernel_failure","Sketch overlap validation failed");
+    GProp_GProps area;BRepGProp::SurfaceProperties(overlap.Shape(),area);
+    if(area.Mass()>1e-9)throw Error("invalid_shape","Sketch regions must not overlap; fuse overlapping profiles explicitly");
+  }
+}
+TopoDS_Shape face_compound(const std::vector<TopoDS_Face>& faces) {
+  if(faces.size()==1)return faces.front();
+  TopoDS_Compound result;BRep_Builder builder;builder.MakeCompound(result);
+  for(const auto& face:faces)builder.Add(result,face);
+  return result;
 }
 // Patterns and assemblies copy exact solids without Boolean cost, so nesting
 // multiplies them geometrically (three 64-copy patterns: 262,144 solids). Each
@@ -721,6 +762,35 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
   }
   return result;
 }
+// OCCT's 2D corner algorithm implements Modified for edges only; its
+// override casts a face to an edge instead of returning an empty history.
+struct CornerHistory {
+  BRepFilletAPI_MakeFillet2d& operation;
+  bool IsDeleted(const TopoDS_Shape& shape){return operation.IsDeleted(shape);}
+  NCollection_List<TopoDS_Shape> Modified(const TopoDS_Shape& shape){return shape.ShapeType()==TopAbs_EDGE&&operation.IsModified(TopoDS::Edge(shape))?operation.Modified(shape):NCollection_List<TopoDS_Shape>{};}
+  NCollection_List<TopoDS_Shape> Generated(const TopoDS_Shape& shape){return operation.Generated(shape);}
+};
+gp_Ax2 sketch_plane(const Json& feature,const Json& parameters,const std::map<std::string,gp_Ax2>& planes,const TopoDS_Shape& shape) {
+  const auto type=text_field(feature,"type");
+  if(type=="sketch"||type=="sketch_projection")return parameter_plane(feature.at("workplane"),parameters);
+  if(type=="sketch_face") {
+    ShapeMap faces;TopExp::MapShapes(shape,TopAbs_FACE,faces);
+    if(faces.IsEmpty())throw Error("invalid_shape","Derived sketch has no planar faces");
+    const auto face=TopoDS::Face(faces(1));const BRepAdaptor_Surface surface(face);
+    if(surface.GetType()!=GeomAbs_Plane)throw Error("invalid_model","Derived sketches require selected planar faces");
+    auto normal=surface.Plane().Axis().Direction();if(face.Orientation()==TopAbs_REVERSED)normal.Reverse();
+    return gp_Ax2(surface.Plane().Location(),normal,surface.Plane().XAxis().Direction());
+  }
+  const auto input=text_field(feature,feature.contains("left")?"left":"input");auto plane=planes.at(input);
+  if(type=="sketch_transform"||type=="sketch_instance")plane.Transform(placement_transform(feature,parameters));
+  else if(type=="sketch_mirror") {
+    gp_Trsf mirror;mirror.SetMirror(parameter_plane(feature.at("plane"),parameters));
+    // Transform the normal as a vector. Ax2::Transform reverses it under a
+    // reflection to restore handedness, which would reverse extrusion intent.
+    plane=gp_Ax2(plane.Location().Transformed(mirror),plane.Direction().Transformed(mirror),plane.XDirection().Transformed(mirror));
+  }
+  return plane;
+}
 Json feature_provenance(const Json& feature,const Json& history,bool history_truncated) {
   Json dependencies=Json::array();
   for (const auto* key:{"input","left","right","target"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
@@ -749,8 +819,8 @@ FeatureGeometry restore_feature(const Json& feature,const Json& parameters,
   std::istringstream stream(entry.at("brep").get<std::string>());
   TopoDS_Shape shape;BRepTools::Read(shape,stream,BRep_Builder{});
   if(stream.fail()||shape.IsNull())throw Error("cache_miss","Cannot read cached feature B-rep");
-  if(type!="sketch")check_shape(shape);
-  else if(shape.ShapeType()!=TopAbs_FACE||!BRepCheck_Analyzer(shape).IsValid())throw Error("cache_miss","Invalid cached sketch");
+  if(!is_sketch_feature_type(type))check_shape(shape);
+  else {ShapeMap faces;TopExp::MapShapes(shape,TopAbs_FACE,faces);if(faces.IsEmpty())throw Error("cache_miss","Invalid cached sketch");const auto surface=BRepAdaptor_Surface(TopoDS::Face(faces(1)));if(surface.GetType()!=GeomAbs_Plane)throw Error("cache_miss","Cached sketch is nonplanar");check_sketch_shape(shape,surface.Plane().Position().Ax2());}
   FeatureGeometry geometry(shape);
   if(type=="assembly") {
     if(!entry.value("assembly",false)||shape.ShapeType()!=TopAbs_COMPOUND)throw Error("cache_miss","Missing cached assembly compound");
@@ -1111,6 +1181,45 @@ TopoDS_Shape controlled_sweep(const Json& feature,const Json& parameters,const C
   check_shape(result);for(const auto& operation:operations)for(std::size_t i=0;i<sources.size();++i)record_history(*operation,*sources[i],ids[i],result,history,history_truncated);
   return result;
 }
+// Build material regions by nesting closed exact loops. No wire repair or
+// polygon approximation occurs; touching/crossing boundaries fail explicitly.
+TopoDS_Shape planar_regions(const std::vector<TopoDS_Wire>& wires,const gp_Ax2& plane) {
+  if(wires.empty()||wires.size()>256)throw Error("invalid_shape","A planar result needs 1–256 closed boundaries");
+  std::vector<TopoDS_Face> discs;std::vector<double> areas;
+  for(const auto& wire:wires) {
+    BRepBuilderAPI_MakeFace face(gp_Pln(plane),wire,true);
+    if(!face.IsDone()||!wire.Closed()||!BRepCheck_Analyzer(face.Face()).IsValid())throw Error("invalid_shape","Offset or projected boundary is not a valid closed planar loop");
+    BRepAlgoAPI_Check check(face.Face(),false,true);if(check.HasErrors()||!check.IsValid())throw Error("invalid_shape","Planar boundary self-intersects");
+    GProp_GProps area;BRepGProp::SurfaceProperties(face.Face(),area);
+    if(!(area.Mass()>1e-10))throw Error("invalid_shape","Planar boundary encloses no material");
+    discs.push_back(face.Face());areas.push_back(area.Mass());
+  }
+  std::vector<int> parent(discs.size(),-1),depth(discs.size(),0);
+  for(std::size_t a=0;a<discs.size();++a)for(std::size_t b=a+1;b<discs.size();++b) {
+    const auto outer=areas[a]>areas[b]?a:b,inner=outer==a?b:a;
+    BRepAlgoAPI_Common overlap(discs[outer],discs[inner]);overlap.SetRunParallel(false);overlap.Build();
+    if(!overlap.IsDone()||overlap.HasErrors())throw Error("kernel_failure","Planar boundary nesting failed");
+    GProp_GProps area;BRepGProp::SurfaceProperties(overlap.Shape(),area);
+    const auto tolerance=std::max(1e-8,areas[inner]*1e-9);
+    if(area.Mass()<=tolerance) {
+      BRepExtrema_DistShapeShape contact(wires[a],wires[b]);contact.Perform();
+      if(!contact.IsDone()||contact.Value()<=1e-7)throw Error("invalid_shape","Planar boundaries touch or cross");
+      continue;
+    }
+    if(std::abs(area.Mass()-areas[inner])>tolerance||std::abs(areas[outer]-areas[inner])<=tolerance)throw Error("invalid_shape","Planar boundaries overlap or coincide");
+    BRepExtrema_DistShapeShape contact(wires[a],wires[b]);contact.Perform();
+    if(!contact.IsDone()||contact.Value()<=1e-7)throw Error("invalid_shape","Nested planar boundaries touch");
+    if(parent[inner]<0||areas[outer]<areas[parent[inner]])parent[inner]=static_cast<int>(outer);
+  }
+  for(std::size_t a=0;a<discs.size();++a)for(auto p=parent[a];p>=0;p=parent[p])if(++depth[a]>256)throw Error("invalid_shape","Planar boundaries have cyclic nesting");
+  std::vector<TopoDS_Face> regions;
+  for(std::size_t a=0;a<discs.size();++a)if(depth[a]%2==0) {
+    BRepBuilderAPI_MakeFace face(discs[a]);
+    for(std::size_t b=0;b<discs.size();++b)if(parent[b]==static_cast<int>(a))face.Add(TopoDS::Wire(BRepTools::OuterWire(discs[b]).Reversed()));
+    regions.push_back(face.Face());
+  }
+  const auto result=face_compound(regions);check_sketch_shape(result,plane);return result;
+}
 TopoDS_Shape external_thread(double diameter,double pitch,double length,const gp_Pnt& origin,bool left_handed) {
   const double radius=diameter/2,depth=17*std::sqrt(3.0)*pitch/48,root=radius-depth;
   // The visible flanks are 60 degrees, the crest is P/8 wide, and the
@@ -1207,7 +1316,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           if(auto saved=cache.load(cache.keys.at(id).get<std::string>())) {
             if(saved->at("feature_id")!=id)throw Error("cache_miss","Cached feature identity differs");
             restored=std::make_unique<FeatureGeometry>(restore_feature(feature,parameters,impl_->features,saved->at("snapshot")));
-            if(type=="sketch")plane=parameter_plane(feature.at("workplane"),parameters);
+            if(is_sketch_feature_type(type)){plane=sketch_plane(feature,parameters,planes,restored->shape);check_sketch_shape(restored->shape,*plane);}
           }
         }catch(const std::exception&) {restored.reset();}
         // Publish to this process's feature map only after restoration succeeds.
@@ -1235,6 +1344,150 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto plane = parameter_plane(feature.at("workplane"),parameters);
         planes.emplace(id,plane);
         shape = sketch_face(feature.at("profile"),parameters,plane);
+      } else if (type=="sketch_cut"||type=="sketch_fuse"||type=="sketch_intersection") {
+        const auto left=text_field(feature,"left"),right=text_field(feature,"right");const auto plane=planes.at(left);
+        if(std::abs(plane.Direction().Dot(planes.at(right).Direction()))<1-1e-9||gp_Pln(plane).Distance(planes.at(right).Location())>1e-7)
+          throw Error("invalid_model","Sketch booleans require coplanar inputs");
+        const auto perform=[&](auto& operation) {
+          NCollection_List<TopoDS_Shape> a,b;a.Append(shapes.at(left));b.Append(shapes.at(right));operation.SetArguments(a);operation.SetTools(b);
+          operation.SetNonDestructive(true);operation.SetRunParallel(false);operation.Build();
+          if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Sketch boolean failed");
+          operation.SimplifyResult(true,true);shape=operation.Shape();
+          record_history(operation,impl_->features.at(left),left,shape,history,history_truncated);
+          record_history(operation,impl_->features.at(right),right,shape,history,history_truncated);
+        };
+        if(type=="sketch_cut"){BRepAlgoAPI_Cut operation;perform(operation);}
+        else if(type=="sketch_fuse"){BRepAlgoAPI_Fuse operation;perform(operation);}
+        else{BRepAlgoAPI_Common operation;perform(operation);}
+        planes.emplace(id,plane);
+      } else if (type=="sketch_offset") {
+        const auto input=text_field(feature,"input");const auto plane=planes.at(input);std::vector<TopoDS_Wire> wires;std::vector<std::unique_ptr<BRepOffsetAPI_MakeOffset>> operations;std::vector<std::pair<TopoDS_Edge,TopoDS_Edge>> circles;
+        for(TopExp_Explorer face_it(shapes.at(input),TopAbs_FACE);face_it.More();face_it.Next()) {
+          const auto face=TopoDS::Face(face_it.Current());const auto outer=BRepTools::OuterWire(face);
+          // Offset each exact boundary as a normalized disc. OCCT 8's combined
+          // annular-face offset fails valid inward circles; separate contours
+          // preserve the same authored material intent and explicit holes.
+          for(TopExp_Explorer boundary(face,TopAbs_WIRE);boundary.More();boundary.Next()) {
+            const auto wire=TopoDS::Wire(boundary.Current());BRepBuilderAPI_MakeFace disc(gp_Pln(plane),wire,true);
+            if(!disc.IsDone()||!BRepCheck_Analyzer(disc.Face()).IsValid())throw Error("invalid_shape","Sketch offset boundary is invalid");
+            const auto distance=scalar(feature.at("distance"),parameters)*(wire.IsSame(outer)?1:-1);
+            ShapeMap edges;TopExp::MapShapes(wire,TopAbs_EDGE,edges);
+            if(edges.Extent()==1) {
+              const auto edge=TopoDS::Edge(edges(1));const BRepAdaptor_Curve curve(edge);
+              if(curve.GetType()==GeomAbs_Circle&&std::abs(curve.LastParameter()-curve.FirstParameter()-2*std::numbers::pi)<1e-7) {
+                auto circle=curve.Circle();const auto radius=circle.Radius()+distance;
+                if(radius<=1e-7)throw Error("invalid_shape","Sketch offset collapsed a circular boundary",{{"source_radius_mm",circle.Radius()},{"offset_mm",distance}});
+                // MAT2d inside OCCT can fault on offsets larger than a closed
+                // circle. An analytic radius change is exact and bounds collapse
+                // before entering that algorithm.
+                circle.SetRadius(radius);const auto result=BRepBuilderAPI_MakeEdge(circle).Edge();
+                wires.push_back(BRepBuilderAPI_MakeWire(result).Wire());circles.push_back({edge,result});continue;
+              }
+            }
+            auto operation=std::make_unique<BRepOffsetAPI_MakeOffset>(disc.Face(),feature.value("join",std::string("arc"))=="arc"?GeomAbs_Arc:GeomAbs_Intersection,false);
+            operation->Perform(distance);
+            if(!operation->IsDone())throw Error("kernel_failure","Sketch offset failed; change its distance or input geometry");
+            const auto before=wires.size();
+            for(TopExp_Explorer result(operation->Shape(),TopAbs_WIRE);result.More();result.Next())wires.push_back(TopoDS::Wire(result.Current()));
+            if(wires.size()==before)throw Error("invalid_shape","Sketch offset collapsed a boundary");
+            operations.push_back(std::move(operation));
+          }
+        }
+        shape=planar_regions(wires,plane);planes.emplace(id,plane);
+        for(auto& operation:operations)record_history(*operation,impl_->features.at(input),input,shape,history,history_truncated);
+        const FeatureGeometry target(shape);const auto& source=impl_->features.at(input);
+        for(const auto& pair:circles) {
+          const auto source_index=source.edges.FindIndex(pair.first),result_index=target.edges.FindIndex(pair.second);
+          if(source_index&&result_index)history.push_back({{"source_feature_id",input},{"source_kind","edge"},{"source_id","edge-"+std::to_string(source_index)},
+            {"relation","generated"},{"result_kind","edge"},{"result_id","edge-"+std::to_string(result_index)}});
+        }
+      } else if (type=="sketch_transform"||type=="sketch_instance"||type=="sketch_mirror") {
+        const auto input=text_field(feature,"input");gp_Trsf transform;
+        if(type=="sketch_mirror")transform.SetMirror(parameter_plane(feature.at("plane"),parameters));else transform=placement_transform(feature,parameters);
+        BRepBuilderAPI_Transform operation(shapes.at(input),transform,true);
+        if(!operation.IsDone())throw Error("kernel_failure","Sketch transform failed");shape=operation.Shape();
+        planes.emplace(id,sketch_plane(feature,parameters,planes,shape));record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
+      } else if(type=="sketch_face"||type=="sketch_projection") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);
+        const auto selected=select_faces(source,feature.at("faces"),parameters,input);std::vector<TopoDS_Face> faces;
+        std::vector<std::pair<TopoDS_Edge,TopoDS_Edge>> projected_edges;std::vector<std::pair<int,TopoDS_Face>> projected_faces;
+        const auto target=type=="sketch_projection"?parameter_plane(feature.at("workplane"),parameters):gp_Ax2{};
+        for(const auto index:selected) {
+          const auto face=TopoDS::Face(source.faces(index));const BRepAdaptor_Surface surface(face);
+          if(surface.GetType()!=GeomAbs_Plane)throw Error("invalid_model","Derived sketches support planar faces only");
+          if(type=="sketch_face")faces.push_back(face);
+          else {
+            if(std::abs(surface.Plane().Axis().Direction().Dot(target.Direction()))<1e-9)throw Error("invalid_model","Edge-on face projection has no sketch area");
+            std::vector<TopoDS_Wire> projected;
+            for(TopExp_Explorer it(face,TopAbs_WIRE);it.More();it.Next()) {
+              BRepBuilderAPI_MakeWire wire;
+              for(BRepTools_WireExplorer edge(TopoDS::Wire(it.Current()),face);edge.More();edge.Next()) {
+                const auto original=edge.Current();double first,last;TopLoc_Location location;auto curve=BRep_Tool::Curve(original,location,first,last);
+                if(curve.IsNull()||BRep_Tool::Degenerated(original))throw Error("invalid_shape","Face projection requires nondegenerate exact boundary curves");
+                curve=occ::down_cast<Geom_Curve>(curve->Transformed(location.Transformation()));
+                // Trim first: projection changes line parameter scale and conic
+                // parameter origin. Native projection returns the correct trim
+                // range; reusing source edge parameters disconnects boundaries.
+                auto projection=GeomProjLib::ProjectOnPlane(new Geom_TrimmedCurve(curve,first,last),new Geom_Plane(gp_Pln(target)),target.Direction(),true);
+                if(projection.IsNull())throw Error("kernel_failure","Exact curve projection failed");
+                BRepBuilderAPI_MakeEdge make(projection);if(!make.IsDone())throw Error("invalid_shape","Projected curve became degenerate");
+                auto result=make.Edge();if(original.Orientation()==TopAbs_REVERSED)result.Reverse();wire.Add(result);projected_edges.push_back({original,result});
+              }
+              if(!wire.IsDone())throw Error("invalid_shape","Projected boundary is disconnected");projected.push_back(wire.Wire());
+            }
+            const auto regions=planar_regions(projected,target);
+            for(TopExp_Explorer it(regions,TopAbs_FACE);it.More();it.Next()){const auto result=TopoDS::Face(it.Current());faces.push_back(result);projected_faces.push_back({index,result});}
+          }
+        }
+        shape=face_compound(faces);planes.emplace(id,sketch_plane(feature,parameters,planes,shape));
+        if(type=="sketch_face") {
+          for(const auto index:selected)history.push_back({{"source_feature_id",input},{"source_kind","face"},{"source_id","face-"+std::to_string(index)},
+            {"relation","unchanged"},{"result_kind","face"},{"result_id","face-"+std::to_string(FeatureGeometry(shape).faces.FindIndex(source.faces(index)))}});
+        } else {
+          const FeatureGeometry target_geometry(shape);
+          const auto append=[&](const std::string& kind,int source_index,int result_index) {
+            if(!source_index||!result_index)return;
+            if(history.size()>=10000){history_truncated=true;return;}
+            history.push_back({{"source_feature_id",input},{"source_kind",kind},{"source_id",kind+"-"+std::to_string(source_index)},
+              {"relation","generated"},{"result_kind",kind},{"result_id",kind+"-"+std::to_string(result_index)}});
+          };
+          for(const auto& pair:projected_faces)append("face",pair.first,target_geometry.faces.FindIndex(pair.second));
+          for(const auto& pair:projected_edges)append("edge",source.edges.FindIndex(pair.first),target_geometry.edges.FindIndex(pair.second));
+        }
+      } else if(type=="sketch_fillet"||type=="sketch_chamfer") {
+        const auto input=text_field(feature,"input");const auto& source=impl_->features.at(input);const auto& selector=feature.at("vertices");
+        ShapeMap vertices;TopExp::MapShapes(source.shape,TopAbs_VERTEX,vertices);std::vector<TopoDS_Vertex> selected;
+        for(int v=1;v<=vertices.Extent();++v) {
+          const auto vertex=TopoDS::Vertex(vertices(v));ShapeMap adjacent;
+          for(int e=1;e<=source.edges.Extent();++e) {ShapeMap ends;TopExp::MapShapes(source.edges(e),TopAbs_VERTEX,ends);if(ends.Contains(vertex))adjacent.Add(source.edges(e));}
+          if(adjacent.Extent()!=2)continue;
+          if(selector.is_string()||BRep_Tool::Pnt(vertex).Distance(parameter_point(selector.at("point"),parameters))<=scalar(selector.at("tolerance"),parameters))selected.push_back(vertex);
+        }
+        if(selector.is_object()&&selected.size()!=selector.at("expected_count").get<std::size_t>()) {
+          const auto expected=selector.at("expected_count").get<std::size_t>();
+          throw Error(selected.empty()?"selection_missing":selected.size()>expected?"selection_ambiguous":"selection_count_mismatch","Sketch vertex selector did not match its expected count",
+            {{"source_feature_id",input},{"expected_count",expected},{"actual_count",selected.size()}});
+        }
+        if(selected.empty())throw Error("invalid_model","Sketch has no corners eligible for fillet or chamfer");
+        std::vector<TopoDS_Face> faces;std::vector<std::unique_ptr<BRepFilletAPI_MakeFillet2d>> operations;
+        for(int f=1;f<=source.faces.Extent();++f) {
+          const auto face=TopoDS::Face(source.faces(f));auto operation=std::make_unique<BRepFilletAPI_MakeFillet2d>(face);bool changed=false;
+          ShapeMap local;TopExp::MapShapes(face,TopAbs_VERTEX,local);
+          for(const auto& vertex:selected)if(local.Contains(vertex)) {
+            TopoDS_Edge result;
+            if(type=="sketch_fillet")result=operation->AddFillet(vertex,scalar(feature.at("radius"),parameters));
+            else {
+              std::vector<TopoDS_Edge> adjacent;ShapeMap edges;TopExp::MapShapes(face,TopAbs_EDGE,edges);
+              for(int e=1;e<=edges.Extent();++e){ShapeMap ends;TopExp::MapShapes(edges(e),TopAbs_VERTEX,ends);if(ends.Contains(vertex))adjacent.push_back(TopoDS::Edge(edges(e)));}
+              result=operation->AddChamfer(adjacent.at(0),adjacent.at(1),scalar(feature.at("distance"),parameters),scalar(feature.at("distance"),parameters));
+            }
+            if(result.IsNull())throw Error("kernel_failure","Sketch corner operation failed; change its dimension or selected corner");changed=true;
+          }
+          if(changed){operation->Build();if(!operation->IsDone())throw Error("kernel_failure","Sketch corner operation failed");faces.push_back(TopoDS::Face(operation->Shape()));operations.push_back(std::move(operation));}
+          else faces.push_back(face);
+        }
+        shape=face_compound(faces);planes.emplace(id,planes.at(input));
+        for(auto& operation:operations){CornerHistory evidence{*operation};record_history(evidence,source,input,shape,history,history_truncated);}
       } else if (type == "extrude") {
         const auto input = text_field(feature,"input");
         const auto plane=planes.at(input);const auto direction=feature.contains("direction")?parameter_direction(feature.at("direction"),parameters):plane.Direction();
@@ -1315,6 +1568,28 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         shape=operation.Shape();
         const auto input=text_field(feature,"input");
         record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
+      } else if(type=="mirror") {
+        const auto input=text_field(feature,"input");gp_Trsf transform;transform.SetMirror(parameter_plane(feature.at("plane"),parameters));
+        BRepBuilderAPI_Transform operation(shapes.at(input),transform,true);if(!operation.IsDone())throw Error("kernel_failure","Mirror failed");
+        shape=operation.Shape();record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
+      } else if(type=="split") {
+        const auto input=text_field(feature,"input");const auto plane=parameter_plane(feature.at("plane"),parameters);const auto source=shapes.at(input);
+        BRepBuilderAPI_MakeFace face{gp_Pln(plane)};
+        if(!face.IsDone())throw Error("kernel_failure","Split plane creation failed");
+        const auto half=[&](bool top) {return BRepPrimAPI_MakeHalfSpace(face.Face(),plane.Location().Translated(gp_Vec(plane.Direction())*(top?1:-1))).Solid();};
+        std::unique_ptr<BRepAlgoAPI_Common> top,bottom;
+        const auto clip=[&](bool side) {
+          auto operation=std::make_unique<BRepAlgoAPI_Common>();NCollection_List<TopoDS_Shape> a,b;a.Append(source);b.Append(half(side));
+          operation->SetArguments(a);operation->SetTools(b);operation->SetNonDestructive(true);operation->SetRunParallel(false);operation->Build();
+          if(!operation->IsDone()||operation->HasErrors())throw Error("kernel_failure","Split by plane failed");
+          check_shape(operation->Shape());return operation;
+        };
+        top=clip(true);bottom=clip(false); // Both sides must contain material: misses and tangencies fail intent.
+        const auto keep=text_field(feature,"keep");
+        if(keep=="top")shape=top->Shape();else if(keep=="bottom")shape=bottom->Shape();
+        else {TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);builder.Add(compound,top->Shape());builder.Add(compound,bottom->Shape());shape=compound;}
+        if(keep!="bottom")record_history(*top,impl_->features.at(input),input,shape,history,history_truncated);
+        if(keep!="top")record_history(*bottom,impl_->features.at(input),input,shape,history,history_truncated);
       } else if (type == "pattern" || type == "circular_pattern") {
         BRep_Builder builder;
         TopoDS_Compound compound; builder.MakeCompound(compound);
@@ -1390,6 +1665,12 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           const auto input=text_field(feature,key);
           record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);
         }
+      } else if (type == "intersection") {
+        BRepAlgoAPI_Common operation;NCollection_List<TopoDS_Shape> left,right;
+        left.Append(shapes.at(text_field(feature,"left")));right.Append(shapes.at(text_field(feature,"right")));
+        operation.SetArguments(left);operation.SetTools(right);operation.SetNonDestructive(true);operation.SetRunParallel(false);operation.Build();
+        if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Solid intersection failed");shape=operation.Shape();
+        for(const auto* key:{"left","right"}){const auto input=text_field(feature,key);record_history(operation,impl_->features.at(input),input,shape,history,history_truncated);}
       } else if (type == "fuse") {
         BRepAlgoAPI_Fuse operation;
         NCollection_List<TopoDS_Shape> left, right;
@@ -1527,7 +1808,13 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         if (type=="fillet") {BRepFilletAPI_MakeFillet operation(copy.Shape());finish(operation,"radius");}
         else {BRepFilletAPI_MakeChamfer operation(copy.Shape());finish(operation,"distance");}
       }
-      if (type != "sketch") check_shape(shape);
+      if (!is_sketch_feature_type(type)) check_shape(shape);
+      else {
+        check_sketch_shape(shape,planes.at(id));
+        // A one-region boolean compound is a face just like an authored sketch;
+        // this preserves existing loft consumers without a container cast.
+        if(count(shape,TopAbs_FACE)==1&&shape.ShapeType()!=TopAbs_FACE) {TopExp_Explorer face(shape,TopAbs_FACE);shape=face.Current();}
+      }
       shapes.emplace(id, shape);
       impl_->features.emplace(id,assembly ? std::move(*assembly) : FeatureGeometry(shape));
       impl_->features.at(id).provenance=feature_provenance(feature,history,history_truncated);
@@ -1550,9 +1837,14 @@ BuiltModel::BuiltModel(const Json& model,const Json& snapshot) : impl_(std::make
   try {
     if(snapshot.at("format")!=2||snapshot.at("features").size()!=model.at("features").size())
       throw Error("cache_miss","Cached feature format/count mismatch");
+    std::map<std::string,gp_Ax2> planes;
     for(const auto& feature:model.at("features")) {
       const auto id=text_field(feature,"id");
-      impl_->features.emplace(id,restore_feature(feature,model.at("parameters"),impl_->features,snapshot.at("features").at(id)));
+      auto restored=restore_feature(feature,model.at("parameters"),impl_->features,snapshot.at("features").at(id));
+      if(is_sketch_feature_type(text_field(feature,"type"))) {
+        const auto plane=sketch_plane(feature,model.at("parameters"),planes,restored.shape);check_sketch_shape(restored.shape,plane);planes.emplace(id,plane);
+      }
+      impl_->features.emplace(id,std::move(restored));
     }
     impl_->output=text_field(model,"output");impl_->shape=impl_->features.at(impl_->output).shape;
   }catch(const Standard_Failure& error){throw occt_error(error,Json::object(),"cache_miss");}

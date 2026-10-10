@@ -67,7 +67,7 @@ Materialized materialize(const Json& component) {
   if(!bindings.is_object() || bindings.size()>128)throw Error("invalid_model","Component bindings must be an object with at most 128 entries");
   std::map<std::string,const Json*> source;
   for(const auto& feature:snapshot.at("features"))source.emplace(text_field(feature,"id"),&feature);
-  if(!source.contains(output)||source.at(output)->at("type")=="sketch")
+  if(!source.contains(output)||is_sketch_feature_type(source.at(output)->at("type").get<std::string>()))
     throw Error("invalid_model","Component source feature must be solid geometry or an assembly",{{"component_id",id},{"source_feature_id",output}});
   std::set<std::string> selected,parameters;
   std::function<void(const std::string&)> visit=[&](const std::string& name) {
@@ -92,7 +92,7 @@ Materialized materialize(const Json& component) {
     auto copy=rewrite_parameters(feature,replacements,remaining);copy["id"]=result.feature_map.at(original);
     for(const auto* key:{"input","left","right","target"})if(copy.contains(key))copy[key]=result.feature_map.at(text_field(copy,key));
     if(copy.contains("sections"))for(auto& section:copy["sections"])section=result.feature_map.at(section.get<std::string>());
-    if(copy.contains("edges")&&copy.at("edges").is_object())copy["edges"]["feature_id"]=result.feature_map.at(text_field(copy.at("edges"),"feature_id"));
+    for(const auto* key:{"edges","vertices"})if(copy.contains(key)&&copy.at(key).is_object())copy[key]["feature_id"]=result.feature_map.at(text_field(copy.at(key),"feature_id"));
     if(copy.contains("faces")) {
       auto rewrite_face=[&](Json& selector){selector["feature_id"]=result.feature_map.at(text_field(selector,"feature_id"));};
       if(copy["faces"].is_array())for(auto& selector:copy["faces"])rewrite_face(selector);
