@@ -488,6 +488,28 @@ TopoDS_Shell open_connected_patch(const std::vector<TopoDS_Face>& faces,const st
   if(!BRepCheck_Analyzer(shell).IsValid())throw Error("invalid_model","Selected thickening patch is not a valid shell",{{"source_feature_id",input}});
   return shell;
 }
+void check_parallel_material(const TopoDS_Shape& source,const TopoDS_Shape& result,double distance,
+                             bool shell_or_thicken,const std::string& input) {
+  // Offset algorithms can invert a collapsed cavity into a valid body outside
+  // its source. Check exact material containment as well as B-rep validity.
+  const auto source_shape=distance>0?source:result;
+  const auto result_shape=distance>0?result:source;
+  const auto forbidden=[&](auto& operation,const TopoDS_Shape& left,const TopoDS_Shape& right) {
+    NCollection_List<TopoDS_Shape> arguments,tools;arguments.Append(left);tools.Append(right);
+    operation.SetArguments(arguments);operation.SetTools(tools);operation.SetNonDestructive(true);operation.SetRunParallel(false);operation.Build();
+    if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Could not verify parallel-boundary material intent",{{"source_feature_id",input}});
+    ShapeMap material;TopExp::MapShapes(operation.Shape(),TopAbs_SOLID,material);
+    for(int i=1;i<=material.Extent();++i) {
+      GProp_GProps properties;BRepGProp::VolumeProperties(material(i),properties);
+      if(properties.Mass()>0)throw Error("invalid_shape","Parallel boundary crossed or inverted beyond its requested side of the source",{{"source_feature_id",input},{"unexpected_volume_mm3",properties.Mass()}});
+    }
+  };
+  if(shell_or_thicken&&distance>0) {
+    BRepAlgoAPI_Common overlap;forbidden(overlap,source,result);
+  } else {
+    BRepAlgoAPI_Cut escaped;forbidden(escaped,source_shape,result_shape);
+  }
+}
 void topology_limit(const FeatureGeometry& feature, const QueryLimits& limits) {
   const auto requested = static_cast<std::size_t>(feature.faces.Extent()) + feature.edges.Extent();
   const auto maximum = std::min<std::size_t>(limits.topology_entities, 10000);
@@ -1393,11 +1415,35 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           if(selected.size()==static_cast<std::size_t>(source.faces.Extent()))throw Error("invalid_model","Shell must retain at least one source face",{{"source_feature_id",input}});
           NCollection_List<TopoDS_Shape> closing;
           for(const auto i:selected)closing.Append(copy.ModifiedShape(source.faces(i)));
-          BRepOffsetAPI_MakeThickSolid operation;
-          operation.MakeThickSolidByJoin(solids(1),closing,distance,offset_tolerance,BRepOffset_Skin,false,false,join,false);
-          if(!operation.IsDone())throw Error("kernel_failure","Shell failed; change thickness, joins or selected opening faces",{{"source_feature_id",input}});
-          shape=operation.Shape();check_shape(shape);
-          record_history(operation,source,input,shape,history,history_truncated,&copy);
+          if(selected.empty()) {
+            // A sealed hollow body keeps both exact boundaries. Difference
+            // establishes cavity orientation instead of a healing pass.
+            BRepOffsetAPI_MakeOffsetShape parallel;
+            parallel.PerformByJoin(solids(1),distance,offset_tolerance,BRepOffset_Skin,false,false,join,false);
+            if(!parallel.IsDone())throw Error("kernel_failure","Closed shell offset failed; change thickness or input geometry",{{"source_feature_id",input}});
+            const auto result=parallel.Shape();check_shape(result);
+            GProp_GProps before,after;BRepGProp::VolumeProperties(solids(1),before);BRepGProp::VolumeProperties(result,after);
+            if(count(result,TopAbs_SOLID)!=1||(after.Mass()-before.Mass())*distance<=0)throw Error("invalid_shape","Closed shell offset collapsed or reversed the requested thickness",{{"source_feature_id",input}});
+            BRepAlgoAPI_Cut difference;NCollection_List<TopoDS_Shape> outer,inner;
+            outer.Append(distance>0?result:solids(1));inner.Append(distance>0?solids(1):result);
+            difference.SetArguments(outer);difference.SetTools(inner);difference.SetNonDestructive(true);difference.SetRunParallel(false);difference.Build();
+            if(!difference.IsDone()||difference.HasErrors())throw Error("kernel_failure","Closed shell difference failed",{{"source_feature_id",input}});
+            shape=difference.Shape();check_shape(shape);
+            record_history(parallel,source,input,shape,history,history_truncated,&copy);
+            record_history(difference,source,input,shape,history,history_truncated,&copy);
+          } else {
+            BRepOffsetAPI_MakeThickSolid operation;
+            operation.MakeThickSolidByJoin(solids(1),closing,distance,offset_tolerance,BRepOffset_Skin,false,false,join,false);
+            if(!operation.IsDone())throw Error("kernel_failure","Shell failed; change thickness, joins or selected opening faces",{{"source_feature_id",input}});
+            shape=operation.Shape();check_shape(shape);
+            record_history(operation,source,input,shape,history,history_truncated,&copy);
+          }
+          if(count(shape,TopAbs_SOLID)!=1)throw Error("invalid_shape","Shell must preserve one connected solid body",{{"source_feature_id",input}});
+          if(distance<0) {
+            GProp_GProps before,after;BRepGProp::VolumeProperties(copy.Shape(),before);BRepGProp::VolumeProperties(shape,after);
+            if(after.Mass()>=before.Mass())throw Error("invalid_shape","Inward shell must remove material from its source",{{"source_feature_id",input}});
+          }
+          check_parallel_material(copy.Shape(),shape,distance,true,input);
         } else if(type=="offset") {
           ShapeMap solids;TopExp::MapShapes(copy.Shape(),TopAbs_SOLID,solids);
           TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);
@@ -1410,6 +1456,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
             if(count(result,TopAbs_SOLID)!=1)throw Error("invalid_shape","Offset must preserve each source solid; collapsed or split results are rejected",{{"source_feature_id",input},{"solid_index",i}});
             GProp_GProps before,after;BRepGProp::VolumeProperties(solids(i),before);BRepGProp::VolumeProperties(result,after);
             if((after.Mass()-before.Mass())*distance<=0)throw Error("invalid_shape","Solid offset must expand for positive distance and shrink for negative distance",{{"source_feature_id",input},{"solid_index",i},{"source_volume_mm3",before.Mass()},{"result_volume_mm3",after.Mass()}});
+            check_parallel_material(solids(i),result,distance,false,input);
             builder.Add(compound,result);operations.push_back(std::move(operation));
           }
           shape=solids.Extent()==1?operations.front()->Shape():TopoDS_Shape(compound);
@@ -1425,15 +1472,27 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           std::vector<TopoDS_Face> faces;
           if(feature.contains("faces"))for(const auto i:select_faces(source,feature.at("faces"),parameters,input))faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
           else for(int i=1;i<=source.faces.Extent();++i)faces.push_back(TopoDS::Face(copy.ModifiedShape(source.faces(i))));
-          const auto patch=open_connected_patch(faces,input);
-          BRepOffset_MakeOffset operation;
-          operation.Initialize(patch,distance,offset_tolerance,BRepOffset_Skin,false,false,join,true,false);
-          operation.MakeOffsetShape();
-          if(!operation.IsDone())throw Error("kernel_failure","Surface thickening failed; change thickness, joins or selected patch",{{"source_feature_id",input},{"offset_status",static_cast<int>(operation.Error())}});
-          shape=operation.Shape();check_shape(shape);
-          if(count(shape,TopAbs_SOLID)!=1)throw Error("invalid_shape","Thicken must produce one closed solid from its connected patch",{{"source_feature_id",input}});
-          record_history(operation,source,input,shape,history,history_truncated,&copy);
+          std::vector<TopoDS_Shape> patches;
+          if(feature.contains("faces"))patches.push_back(open_connected_patch(faces,input));
+          else for(const auto& face:faces)patches.push_back(open_connected_patch({face},input));
+          TopoDS_Compound compound;BRep_Builder builder;builder.MakeCompound(compound);
+          std::vector<std::unique_ptr<BRepOffset_MakeOffset>> operations;
+          for(const auto& patch:patches) {
+            auto operation=std::make_unique<BRepOffset_MakeOffset>();
+            operation->Initialize(patch,distance,offset_tolerance,BRepOffset_Skin,false,false,join,true,false);
+            operation->MakeOffsetShape();
+            if(!operation->IsDone())throw Error("kernel_failure","Surface thickening failed; change thickness, joins or selected patch",{{"source_feature_id",input},{"offset_status",static_cast<int>(operation->Error())}});
+            const auto result=operation->Shape();check_shape(result);
+            if(count(result,TopAbs_SOLID)!=1)throw Error("invalid_shape","Thicken must produce one closed solid per connected patch",{{"source_feature_id",input}});
+            if(feature.contains("faces"))check_parallel_material(copy.Shape(),result,distance,true,input);
+            builder.Add(compound,result);operations.push_back(std::move(operation));
+          }
+          shape=patches.size()==1?operations.front()->Shape():TopoDS_Shape(compound);
+          const FeatureGeometry target(shape);
+          for(std::size_t i=0;i<patches.size();++i)record_history(*operations[i],source,input,target,history,history_truncated,&copy,-1,&patches[i]);
         }
+        BRepAlgoAPI_Check interference(shape,false,true);
+        if(!interference.IsValid())throw Error("invalid_shape","Shell, offset or thicken produced self-interfering geometry",{{"source_feature_id",input}});
       } else if (type == "fillet" || type == "chamfer") {
         const auto input=text_field(feature,"input");
         const auto& source=impl_->features.at(input);

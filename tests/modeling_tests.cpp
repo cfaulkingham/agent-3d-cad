@@ -25,6 +25,7 @@
 #include <map>
 #include <numbers>
 #include <random>
+#include <set>
 #include <sstream>
 #include <tuple>
 using namespace agentcad;
@@ -384,7 +385,14 @@ void tests() {
   failure_message_tests();
   const auto defs=model_definitions();
   require(defs.at("scalar").at("oneOf").size()==3,"expression schema discoverable");
-  require(defs.at("feature").at("oneOf").size()==17,"modeling, chamfer, circular pattern and assembly schemas discoverable");
+  std::set<std::string> feature_types;
+  for(const auto& schema:defs.at("feature").at("oneOf")) {
+    const auto& type=schema.at("properties").at("type");
+    if(type.contains("const"))feature_types.insert(type.at("const").get<std::string>());
+    else for(const auto& kind:type.at("enum"))feature_types.insert(kind.get<std::string>());
+  }
+  for(const auto* kind:{"box","cylinder","external_thread","cut","fuse","fillet","chamfer","sketch","extrude","revolve","loft","sweep","transform","instance","pattern","circular_pattern","hole","import_step","assembly","shell","offset","thicken"})
+    require(feature_types.contains(kind),std::string("Feature schema discoverable: ")+kind);
   thread_tests();
 }
 }

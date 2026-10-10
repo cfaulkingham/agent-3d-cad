@@ -98,6 +98,7 @@ Json model_definitions() {
   },{"type","feature_id","surface_kind","expected_count"});
   const Json face_selection={{"oneOf",Json::array({Json{{"$ref","#/$defs/face_selector"}},
     Json{{"type","array"},{"items",{{"$ref","#/$defs/face_selector"}}},{"minItems",1},{"maxItems",64}}})}};
+  auto shell_faces=face_selection;shell_faces["oneOf"][1]["minItems"]=0;
   const Json offset_join={{"enum",{"arc","intersection"}}};
   Json features = Json::array({
     object({{"id", id}, {"type", {{"const", "box"}}}, {"size", vector_ref}, {"origin", vector_ref}}, {"id", "type", "size"}),
@@ -109,7 +110,7 @@ Json model_definitions() {
   });
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
   features.push_back(object({{"id",id},{"type",{{"const","shell"}}},{"input",id},
-    {"thickness",scalar_ref},{"faces",face_selection},{"join",offset_join}},{"id","type","input","thickness","faces"}));
+    {"thickness",scalar_ref},{"faces",shell_faces},{"join",offset_join}},{"id","type","input","thickness","faces"}));
   features.push_back(object({{"id",id},{"type",{{"const","offset"}}},{"input",id},
     {"distance",scalar_ref},{"join",offset_join}},{"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","thicken"}}},{"input",id},
@@ -691,7 +692,7 @@ void validate_model(const Json& model) {
         dependency("input");
         if(type=="thicken"&&!feature.contains("faces"))throw Error("invalid_model","Thickening solid surfaces requires explicit faces");
       }
-      if(feature.contains("faces"))validate_face_selection(feature.at("faces"),parameters,input);
+      if(feature.contains("faces")&&!(type=="shell"&&feature.at("faces").is_array()&&feature.at("faces").empty()))validate_face_selection(feature.at("faces"),parameters,input);
     } else if (type == "sketch") {
       fields(feature, {"id", "type", "workplane", "profile"});
       workplane(feature.at("workplane"), parameters);
