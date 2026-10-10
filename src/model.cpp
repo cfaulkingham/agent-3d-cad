@@ -13,7 +13,7 @@
 namespace agentcad {
 bool is_sketch_feature_type(const std::string& type) {
   static const std::set<std::string> types={"sketch","sketch_cut","sketch_fuse","sketch_intersection",
-    "sketch_offset","sketch_fillet","sketch_chamfer","sketch_transform","sketch_instance","sketch_mirror",
+    "sketch_offset","sketch_fillet","sketch_chamfer","sketch_hull","sketch_trace","sketch_full_round","sketch_transform","sketch_instance","sketch_mirror",
     "sketch_face","sketch_projection"};
   return types.contains(type);
 }
@@ -249,6 +249,9 @@ Json model_definitions() {
     {"type","feature_id","point","tolerance","expected_count"});
   const Json vertices={{"oneOf",Json::array({Json{{"const","all"}},vertex_selector})}};
   features.push_back(object({{"id",id},{"type",{{"enum",{"sketch_cut","sketch_fuse","sketch_intersection"}}}},{"left",id},{"right",id}}, {"id","type","left","right"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_hull"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",16},{"uniqueItems",true}}},{"workplane",workplane_schema}}, {"id","type","inputs","workplane"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_trace"}}},{"input",id},{"workplane",workplane_schema},{"width",scalar_ref}}, {"id","type","input","workplane","width"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_full_round"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}}}, {"id","type","input","edges"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_offset"}}},{"input",id},{"distance",scalar_ref},{"join",{{"enum",{"arc","intersection"}}}}}, {"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_fillet"}}},{"input",id},{"radius",scalar_ref},{"vertices",vertices}}, {"id","type","input","radius","vertices"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_chamfer"}}},{"input",id},{"distance",scalar_ref},{"vertices",vertices}}, {"id","type","input","distance","vertices"}));
@@ -925,6 +928,12 @@ void validate_model(const Json& model) {
         if(type=="thicken"&&!feature.contains("faces"))throw Error("invalid_model","Thickening solid surfaces requires explicit faces");
       }
       if(feature.contains("faces")&&!(type=="shell"&&feature.at("faces").is_array()&&feature.at("faces").empty()))validate_face_selection(feature.at("faces"),parameters,input);
+    } else if(type=="sketch_hull") {
+      fields(feature,{"id","type","inputs","workplane"});workplane(feature.at("workplane"),parameters);const auto& inputs=feature.at("inputs");if(!inputs.is_array()||inputs.empty()||inputs.size()>16)throw Error("invalid_model","Sketch hull requires 1–16 earlier sketches or curves");std::set<std::string> seen;for(const auto& value:inputs){if(!value.is_string())throw Error("invalid_model","Hull inputs must be feature names");const auto input=value.get<std::string>();if(!seen.insert(input).second||!prior.contains(input)||(!is_sketch_feature_type(types.at(input))&&!is_curve_feature_type(types.at(input))))throw Error("invalid_model","Hull inputs must name distinct earlier sketches or curves");}
+    } else if(type=="sketch_trace") {
+      fields(feature,{"id","type","input","workplane","width"});workplane(feature.at("workplane"),parameters);positive(feature.at("width"));const auto input=text_field(feature,"input");if(!prior.contains(input)||!is_curve_feature_type(types.at(input)))throw Error("invalid_model","Trace requires an earlier exact curve");
+    } else if(type=="sketch_full_round") {
+      fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");sketch_dependency(input);validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1||feature.at("edges").at("curve_kind")!="line")throw Error("invalid_model","Full round selects exactly one straight outer edge");
     } else if (type == "sketch") {
       fields(feature, {"id", "type", "workplane", "profile"});
       workplane(feature.at("workplane"), parameters);

@@ -283,6 +283,7 @@ Json tool_definitions() {
   for(auto& definition:tools)if(definition.at("name")=="cad_printer_handoff")
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
   for(auto& tool:tools) {
+    if(tool.at("name")=="cad_query")tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["curve"]},"then":{"required":["kind"],"properties":{"kind":{"const":"curve"}}}}])JSON");
     if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["geometry"],"properties":{"geometry":{"const":"surface"}}},"then":{"not":{"anyOf":[{"required":["solid_indices"]},{"required":["purchase"]}]}}}])JSON");}
     if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"properties",{{"format",{{"const","text"}}}}}}},{"then",{{"required",{"text","height"}},{"not",{{"required",{"scale"}}}}}},{"else",{{"not",{{"anyOf",Json::array({Json{{"required",{"text"}}},Json{{"required",{"height"}}},Json{{"required",{"spacing"}}},Json{{"required",{"face_index"}}}})}}}}}}});
     if(tool.at("name")=="cad_export"||tool.at("name")=="cad_drawing") {

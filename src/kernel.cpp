@@ -1145,7 +1145,7 @@ struct CornerHistory {
 };
 gp_Ax2 sketch_plane(const Json& feature,const Json& parameters,const std::map<std::string,gp_Ax2>& planes,const TopoDS_Shape& shape) {
   const auto type=text_field(feature,"type");
-  if(type=="sketch"||type=="sketch_projection")return parameter_plane(feature.at("workplane"),parameters);
+  if(type=="sketch"||type=="sketch_projection"||type=="sketch_hull"||type=="sketch_trace")return parameter_plane(feature.at("workplane"),parameters);
   if(type=="sketch_face") {
     ShapeMap faces;TopExp::MapShapes(shape,TopAbs_FACE,faces);
     if(faces.IsEmpty())throw Error("invalid_shape","Derived sketch has no planar faces");
@@ -1349,7 +1349,11 @@ public:
     BRepBuilderAPI_MakeWire result;const auto from=start*length,to=end*length;
     for(const auto& span:spans){const auto a=std::max(from,span.offset)-span.offset,b=std::min(to,span.offset+span.length)-span.offset;if(b-a<=1e-7)continue;
       const auto u=parameter(span,a),v=parameter(span,b);double original_first,original_last;const auto curve=BRep_Tool::Curve(span.edge,original_first,original_last);
-      BRepBuilderAPI_MakeEdge edge(curve,std::min(u,v),std::max(u,v));if(!edge.IsDone())throw Error("kernel_failure","Exact curve trimming failed");auto trimmed=edge.Edge();if(u>v)trimmed.Reverse();result.Add(trimmed);
+      occ::handle<Geom2d_Curve> uv;occ::handle<Geom_Surface> surface;TopLoc_Location location;double pfirst,plast;BRep_Tool::CurveOnSurface(span.edge,uv,surface,location,pfirst,plast);
+      TopoDS_Edge trimmed;
+      if(!uv.IsNull()&&!surface.IsNull()) {if(!BRep_Tool::SameParameter(span.edge)||!BRep_Tool::SameRange(span.edge))throw Error("invalid_model","Surface-curve trimming requires synchronized native parameter ranges");if(!location.IsIdentity())surface=occ::down_cast<Geom_Surface>(surface->Transformed(location.Transformation()));BRepBuilderAPI_MakeEdge edge(uv,surface,std::min(u,v),std::max(u,v));if(!edge.IsDone())throw Error("kernel_failure","Exact surface-curve trimming failed");trimmed=edge.Edge();if(!BRepLib::BuildCurves3d(trimmed,1e-7))throw Error("kernel_failure","Trimmed surface-curve 3D representation failed");}
+      else {BRepBuilderAPI_MakeEdge edge(curve,std::min(u,v),std::max(u,v));if(!edge.IsDone())throw Error("kernel_failure","Exact curve trimming failed");trimmed=edge.Edge();}
+      if(u>v)trimmed.Reverse();result.Add(trimmed);
     }
     if(!result.IsDone())throw Error("invalid_shape","Curve trim produced no connected positive-length wire");check_curve_shape(result.Wire());return result.Wire();
   }
@@ -1609,6 +1613,80 @@ TopoDS_Shape project_geometry(const Json& feature,const Json& parameters,const F
 
   if(!region)return curves;
   if(!projected.IsDone())throw Error("kernel_failure","Projected surface boundary construction failed");auto result=projected.Face();if(face.Orientation()==TopAbs_REVERSED)result.Reverse();check_surface_shape(result);require_surface_containment(face,result);return result;
+}
+
+struct SketchCoordinates {
+  gp_Ax2 plane;
+  gp_Pnt2d local(const gp_Pnt& point)const {const gp_Vec v(plane.Location(),point);if(std::abs(v.Dot(gp_Vec(plane.Direction())))>1e-7)throw Error("invalid_model","Sketch path geometry must lie in its authored workplane");return {v.Dot(gp_Vec(plane.XDirection())),v.Dot(gp_Vec(plane.YDirection()))};}
+  gp_Pnt world(const gp_Pnt2d& point)const {return plane.Location().Translated(gp_Vec(plane.XDirection())*point.X()+gp_Vec(plane.YDirection())*point.Y());}
+};
+TopoDS_Face sketch_hull(const std::vector<TopoDS_Shape>& inputs,const gp_Ax2& plane) {
+  // Exact support-function envelope of line endpoints and circular arcs. Pairwise
+  // support equalities and arc limits partition normal angle; no sampled polygon
+  // substitutes for a curved boundary.
+  struct Support {gp_Pnt2d center;double radius,start,span;};std::vector<Support> supports;SketchCoordinates coordinates{plane};
+  const auto tau=2*std::numbers::pi;const auto wrap=[&](double angle){angle=std::fmod(angle,tau);return angle<0?angle+tau:angle;};
+  const auto vertex=[&](const gp_Pnt2d& p){for(const auto& s:supports)if(s.radius==0&&s.center.Distance(p)<1e-9)return;supports.push_back({p,0,0,tau});};
+  for(const auto& input:inputs)for(TopExp_Explorer it(input,TopAbs_EDGE);it.More();it.Next()) {
+    BRepAdaptor_Curve curve(TopoDS::Edge(it.Current()));const auto first=curve.FirstParameter(),last=curve.LastParameter();
+    const auto a=coordinates.local(curve.Value(first)),b=coordinates.local(curve.Value(last));vertex(a);vertex(b);
+    if(curve.GetType()==GeomAbs_Line)continue;
+    if(curve.GetType()!=GeomAbs_Circle)throw Error("invalid_model","Exact sketch hull supports line and circular-arc edges; spline hulls require another representation");
+    const auto circle=curve.Circle();if(std::abs(circle.Axis().Direction().Dot(plane.Direction()))<1-1e-10)throw Error("invalid_model","Hull circles must lie in the authored workplane");
+    const auto center=coordinates.local(circle.Location());const auto start=circle.Axis().Direction().Dot(plane.Direction())>0?a:b;
+    supports.push_back({center,circle.Radius(),wrap(std::atan2(start.Y()-center.Y(),start.X()-center.X())),std::min(tau,last-first)});
+  }
+  if(supports.empty()||supports.size()>256)throw Error("limit_exceeded","Hull permits 1–256 analytic support primitives");
+  std::vector<double> angles{0,tau};for(const auto& s:supports)if(s.radius>0&&s.span<tau-1e-10){angles.push_back(s.start);angles.push_back(wrap(s.start+s.span));}
+  for(std::size_t i=0;i<supports.size();++i)for(std::size_t j=i+1;j<supports.size();++j){const auto dx=supports[i].center.X()-supports[j].center.X(),dy=supports[i].center.Y()-supports[j].center.Y(),distance=std::hypot(dx,dy);if(distance<1e-12)continue;const auto cosine=(supports[j].radius-supports[i].radius)/distance;if(std::abs(cosine)>1)continue;const auto base=std::atan2(dy,dx),delta=std::acos(std::clamp(cosine,-1.0,1.0));angles.push_back(wrap(base+delta));angles.push_back(wrap(base-delta));}
+  std::sort(angles.begin(),angles.end());angles.erase(std::unique(angles.begin(),angles.end(),[](double a,double b){return std::abs(a-b)<1e-12;}),angles.end());
+  struct Interval {std::size_t support;double start,end;};std::vector<Interval> intervals;
+  for(std::size_t i=1;i<angles.size();++i){const auto middle=(angles[i-1]+angles[i])/2;double maximum=-std::numeric_limits<double>::infinity();std::size_t winner=0;
+    for(std::size_t j=0;j<supports.size();++j){const auto& s=supports[j];if(s.radius>0&&s.span<tau-1e-10&&wrap(middle-s.start)>s.span+1e-12)continue;const auto value=s.center.X()*std::cos(middle)+s.center.Y()*std::sin(middle)+s.radius;if(value>maximum){maximum=value;winner=j;}}
+    if(!intervals.empty()&&intervals.back().support==winner)intervals.back().end=angles[i];else intervals.push_back({winner,angles[i-1],angles[i]});
+  }
+  const auto on_support=[&](std::size_t index,double angle){const auto& s=supports[index];return coordinates.world(gp_Pnt2d(s.center.X()+s.radius*std::cos(angle),s.center.Y()+s.radius*std::sin(angle)));};
+  BRepBuilderAPI_MakeWire wire;std::size_t edges=0;
+  for(std::size_t i=0;i<intervals.size();++i){const auto& segment=intervals[i];const auto previous=intervals[(i+intervals.size()-1)%intervals.size()].support;const auto a=on_support(previous,segment.start),b=on_support(segment.support,segment.start);
+    if(a.Distance(b)>1e-7){wire.Add(BRepBuilderAPI_MakeEdge(a,b).Edge());++edges;}
+    const auto& support=supports[segment.support];if(support.radius>0&&support.radius*(segment.end-segment.start)>1e-7){const gp_Circ circle(gp_Ax2(coordinates.world(support.center),plane.Direction(),plane.XDirection()),support.radius);wire.Add(BRepBuilderAPI_MakeEdge(circle,segment.start,segment.end).Edge());++edges;}
+  }
+  if(edges==0||edges>1024||!wire.IsDone())throw Error("invalid_shape","Hull has no finite closed boundary");BRepBuilderAPI_MakeFace face(gp_Pln(plane),wire.Wire(),true);if(!face.IsDone())throw Error("invalid_shape","Hull does not enclose positive area");check_sketch_shape(face.Face(),plane);
+  for(const auto& input:inputs)if(count(input,TopAbs_FACE)>0&&shape_area(extrusion_boolean<BRepAlgoAPI_Cut>(input,face.Face()))>1e-6)throw Error("invalid_shape","Hull failed exact input-region containment");return face.Face();
+}
+TopoDS_Shape sketch_trace(const TopoDS_Shape& input,const gp_Ax2& plane,double width) {
+  const auto source=single_curve_wire(input);const CurvePath path(source);
+  // Bound the complete native edge against the plane, including curved interiors.
+  for(const auto& span:path.spans){BRepAdaptor_Curve curve(span.edge);if(curve.GetType()==GeomAbs_Circle&&width/2>=curve.Circle().Radius()-1e-7)throw Error("invalid_model","Trace width reaches the circular path curvature center");Bnd_Box bounds;gp_Trsf transform;transform.SetTransformation(gp_Ax3(plane));BRepBuilderAPI_Transform local(span.edge,transform,true);BRepBndLib::AddOptimal(local.Shape(),bounds,false,false);const auto box=bounds.Get();if(std::abs(box.Zmin)>1e-7||std::abs(box.Zmax)>1e-7)throw Error("invalid_model","Trace needs a planar path in its authored workplane");}
+  const auto start=path.on_span(path.spans.front(),0);const auto across=gp_Vec(plane.Direction()).Crossed(gp_Vec(start.tangent));
+  if(across.Magnitude()<1-1e-9)throw Error("invalid_model","Trace start tangent must lie in its plane");
+  const auto profile=BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(start.point.Translated(across*(-width/2)),start.point.Translated(across*(width/2))).Edge()).Wire();
+  BRepBuilderAPI_Copy copy(source);BRepOffsetAPI_MakePipeShell operation(TopoDS::Wire(copy.Shape()));operation.SetMode(plane.Direction());operation.SetTolerance(1e-8,1e-8,1e-8);operation.SetMaxSegments(128);operation.SetTransitionMode(BRepBuilderAPI_RightCorner);operation.Add(profile,false,false);operation.Build();
+  // Check the swept representation before planarizing: a folded support must
+  // not become an apparently valid region by merely rebuilding its boundary.
+  if(!operation.IsDone())throw Error("kernel_failure","Planar trace sweep failed");check_surface_shape(operation.Shape());std::vector<TopoDS_Face> faces;
+  for(TopExp_Explorer it(operation.Shape(),TopAbs_FACE);it.More();it.Next()){const auto face=TopoDS::Face(it.Current());const auto outer=BRepTools::OuterWire(face);BRepBuilderAPI_MakeFace flat(gp_Pln(plane),outer,true);for(TopExp_Explorer holes(face,TopAbs_WIRE);holes.More();holes.Next())if(!holes.Current().IsSame(outer))flat.Add(TopoDS::Wire(holes.Current()));if(!flat.IsDone())throw Error("invalid_shape","Trace face cannot be represented on its exact plane");faces.push_back(flat.Face());}
+  if(faces.empty()||faces.size()>1024)throw Error("invalid_shape","Trace did not produce bounded planar faces");TopoDS_Shape result=faces.front();for(std::size_t i=1;i<faces.size();++i){BRepAlgoAPI_Fuse fuse;NCollection_List<TopoDS_Shape> a,b;a.Append(result);b.Append(faces[i]);fuse.SetArguments(a);fuse.SetTools(b);fuse.SetNonDestructive(true);fuse.SetRunParallel(false);fuse.Build();if(!fuse.IsDone()||fuse.HasErrors())throw Error("kernel_failure","Trace region union failed");fuse.SimplifyResult(true,true);result=fuse.Shape();}
+  check_sketch_shape(result,plane);const auto expected=width*path.length;if(std::abs(shape_area(result)-expected)>std::max(1e-6,expected*1e-7))throw Error("invalid_shape","Trace width folds or overlaps; swept material differs from width times path length",{{"expected_area_mm2",expected},{"actual_area_mm2",shape_area(result)}});return result;
+}
+TopoDS_Face sketch_full_round(const FeatureGeometry& source,const Json& selector,const Json& parameters,const gp_Ax2& plane) {
+  if(source.faces.Extent()!=1)throw Error("invalid_model","Full round requires one planar region");BRepBuilderAPI_Copy copy(source.shape);const auto original=unique_surface_edge(source,selector,parameters,text_field(selector,"feature_id"));const auto selected=copy.ModifiedShape(original);
+  const auto face=TopoDS::Face(TopExp_Explorer(copy.Shape(),TopAbs_FACE).Current());const auto outer=BRepTools::OuterWire(face);std::vector<TopoDS_Edge> edges;int middle=-1;
+  for(BRepTools_WireExplorer it(outer,face);it.More();it.Next()){if(it.Current().IsSame(selected))middle=static_cast<int>(edges.size());edges.push_back(it.Current());}
+  if(middle<0||edges.size()<3)throw Error("invalid_model","Full round needs a unique outer edge with two neighbors");const auto n=edges.size(),previous=(middle+n-1)%n,next=(middle+1)%n;SketchCoordinates coordinates{plane};
+  struct Line {gp_Pnt2d a,b;double nx,ny,bias;};std::array<Line,3> lines;const std::array<std::size_t,3> indices={previous,static_cast<std::size_t>(middle),next};
+  for(int i=0;i<3;++i){const auto edge=edges[indices[i]];BRepAdaptor_Curve curve(edge);if(curve.GetType()!=GeomAbs_Line)throw Error("invalid_model","Full round currently requires three adjacent straight edges");const auto a=coordinates.local(BRep_Tool::Pnt(TopExp::FirstVertex(edge,true))),b=coordinates.local(BRep_Tool::Pnt(TopExp::LastVertex(edge,true)));const auto length=a.Distance(b);double nx=-(b.Y()-a.Y())/length,ny=(b.X()-a.X())/length;const gp_Pnt2d midpoint((a.X()+b.X())/2,(a.Y()+b.Y())/2);const auto epsilon=std::min(1e-5,length*1e-4);BRepClass_FaceClassifier inside(face,coordinates.world(gp_Pnt2d(midpoint.X()+nx*epsilon,midpoint.Y()+ny*epsilon)),1e-9);if(inside.State()!=TopAbs_IN){nx=-nx;ny=-ny;BRepClass_FaceClassifier other(face,coordinates.world(gp_Pnt2d(midpoint.X()+nx*epsilon,midpoint.Y()+ny*epsilon)),1e-9);if(other.State()!=TopAbs_IN)throw Error("selection_ambiguous","Cannot uniquely determine full-round interior side");}lines[i]={a,b,nx,ny,nx*a.X()+ny*a.Y()};}
+  // Inscribed circle tangent to the three authored supporting lines. Interior
+  // normals select the one material-removing solution without a guessed radius.
+  std::array<std::array<double,4>,3> matrix;for(int i=0;i<3;++i)matrix[i]={lines[i].nx,lines[i].ny,-1,lines[i].bias};
+  for(int c=0;c<3;++c){int pivot=c;for(int r=c+1;r<3;++r)if(std::abs(matrix[r][c])>std::abs(matrix[pivot][c]))pivot=r;if(std::abs(matrix[pivot][c])<1e-12)throw Error("selection_ambiguous","Full-round supporting lines have no unique inscribed circle");std::swap(matrix[c],matrix[pivot]);const auto scale=matrix[c][c];for(int k=c;k<4;++k)matrix[c][k]/=scale;for(int r=0;r<3;++r)if(r!=c){const auto factor=matrix[r][c];for(int k=c;k<4;++k)matrix[r][k]-=factor*matrix[c][k];}}
+  const double cx=matrix[0][3],cy=matrix[1][3],radius=matrix[2][3];if(radius<=1e-7||!std::isfinite(radius))throw Error("invalid_model","Full round has no positive inscribed radius");std::array<gp_Pnt,3> contact;
+  for(int i=0;i<3;++i){const auto& line=lines[i];const gp_Pnt2d p(cx-radius*line.nx,cy-radius*line.ny);const auto dx=line.b.X()-line.a.X(),dy=line.b.Y()-line.a.Y(),t=((p.X()-line.a.X())*dx+(p.Y()-line.a.Y())*dy)/(dx*dx+dy*dy);if(t<1e-8||t>1-1e-8)throw Error("invalid_model","Full round must meet the interiors of all three finite edges");contact[i]=coordinates.world(p);}
+  GC_MakeArcOfCircle arc(contact[0],contact[1],contact[2]);if(!arc.IsDone())throw Error("kernel_failure","Full-round tangent arc failed");gp_Pnt a,b;gp_Vec ta,tb;arc.Value()->D1(arc.Value()->FirstParameter(),a,ta);arc.Value()->D1(arc.Value()->LastParameter(),b,tb);
+  const auto before=BRep_Tool::Pnt(TopExp::FirstVertex(edges[previous],true)),after=BRep_Tool::Pnt(TopExp::LastVertex(edges[next],true));if(gp_Dir(ta).Dot(gp_Dir(gp_Vec(before,contact[0])))<1-1e-9||gp_Dir(tb).Dot(gp_Dir(gp_Vec(contact[2],after)))<1-1e-9)throw Error("invalid_model","Selected end does not admit a convex tangent full round");
+  BRepBuilderAPI_MakeWire wire;for(std::size_t i=0;i<n;++i){if(i==previous)wire.Add(BRepBuilderAPI_MakeEdge(before,contact[0]).Edge());else if(i==static_cast<std::size_t>(middle))wire.Add(BRepBuilderAPI_MakeEdge(arc.Value()).Edge());else if(i==next)wire.Add(BRepBuilderAPI_MakeEdge(contact[2],after).Edge());else wire.Add(edges[i]);}
+  if(!wire.IsDone())throw Error("invalid_shape","Full-round boundary is disconnected");BRepBuilderAPI_MakeFace result(gp_Pln(plane),wire.Wire(),true);for(TopExp_Explorer it(face,TopAbs_WIRE);it.More();it.Next())if(!it.Current().IsSame(outer))result.Add(TopoDS::Wire(it.Current()));if(!result.IsDone())throw Error("invalid_shape","Full-round face construction failed");check_sketch_shape(result.Face(),plane);
+  if(shape_area(result.Face())>=shape_area(face)-1e-8||shape_area(extrusion_boolean<BRepAlgoAPI_Cut>(result.Face(),face))>1e-6)throw Error("invalid_shape","Full round must remove material without extending its source region");return result.Face();
 }
 
 TopoDS_Shape join_extrusion_regions(const std::vector<TopoDS_Shape>& regions) {
@@ -2043,6 +2121,9 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto plane = parameter_plane(feature.at("workplane"),parameters);
         planes.emplace(id,plane);
         const auto kind=text_field(feature.at("profile"),"type");shape=(kind=="text"||kind=="svg"||kind=="dxf")?authoring_face(feature.at("profile"),parameters,plane):sketch_face(feature.at("profile"),parameters,plane);
+      } else if(type=="sketch_hull") {const auto plane=parameter_plane(feature.at("workplane"),parameters);std::vector<TopoDS_Shape> inputs;for(const auto& input:feature.at("inputs"))inputs.push_back(shapes.at(input.get<std::string>()));shape=sketch_hull(inputs,plane);planes.emplace(id,plane);
+      } else if(type=="sketch_trace") {const auto plane=parameter_plane(feature.at("workplane"),parameters);shape=sketch_trace(shapes.at(text_field(feature,"input")),plane,scalar(feature.at("width"),parameters));planes.emplace(id,plane);
+      } else if(type=="sketch_full_round") {const auto input=text_field(feature,"input");const auto plane=planes.at(input);shape=sketch_full_round(impl_->features.at(input),feature.at("edges"),parameters,plane);planes.emplace(id,plane);
       } else if (type=="sketch_cut"||type=="sketch_fuse"||type=="sketch_intersection") {
         const auto left=text_field(feature,"left"),right=text_field(feature,"right");const auto plane=planes.at(left);
         if(std::abs(plane.Direction().Dot(planes.at(right).Direction()))<1-1e-9||gp_Pln(plane).Distance(planes.at(right).Location())>1e-7)

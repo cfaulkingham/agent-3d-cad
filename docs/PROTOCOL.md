@@ -98,6 +98,9 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `sketch_offset` | `input`, signed `distance` | Optional `join: arc|intersection` |
 | `sketch_fillet`, `sketch_chamfer` | `input`, `radius` or `distance`, `vertices` | All eligible corners or an expected-count geometric point selector |
 | `sketch_transform`, `sketch_instance` | `input` | Optional `translation`, `rotation` |
+| `sketch_hull` | `inputs`, `workplane` | Exact convex hull of planar line/circular-arc inputs |
+| `sketch_trace` | `input`, `workplane`, `width` | Constant-width planar curve stroke with flat ends |
+| `sketch_full_round` | `input`, `edges` | Convex tangent end cap across three adjacent straight edges |
 | `sketch_mirror`, `mirror` | `input`, `plane` | Exact sketch or solid reflection in an explicit workplane |
 | `sketch_face` | `input`, `faces` | Selected coplanar solid faces as a sketch |
 | `sketch_projection` | `input`, `faces`, `workplane` | Exact orthogonal projection of planar solid-face boundaries |
