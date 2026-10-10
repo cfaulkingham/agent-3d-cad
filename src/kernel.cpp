@@ -503,7 +503,9 @@ Json edge_descriptor(const TopoDS_Edge& edge, int index) {
   if (BRep_Tool::Degenerated(edge)) { result["curve_kind"] = "other"; return result; }
   BRepAdaptor_Curve curve(edge);
   result["curve_kind"] = curve_kind(curve.GetType());
+  const auto a=curve.Value(curve.FirstParameter()),b=curve.Value(curve.LastParameter());result["endpoints_mm"]={point(a),point(b)};result["closed"]=a.Distance(b)<=1e-7;
   if (curve.GetType() == GeomAbs_Line) result["direction"] = direction(curve.Line().Direction());
+  if(curve.GetType()==GeomAbs_Ellipse)result["axis"]=direction(curve.Ellipse().Axis().Direction());
   if (curve.GetType() == GeomAbs_Circle) {
     result["radius_mm"] = curve.Circle().Radius();
     result["axis"] = direction(curve.Circle().Axis().Direction());
@@ -562,8 +564,13 @@ TopoDS_Shape read_step(const std::string& content) {
     {{"total_roots",roots},{"transferred_roots",transferred}});
   return reader.OneShape();
 }
+gp_Pnt parameter_point(const Json& value,const Json& parameters);
 bool matches(const Json& descriptor, const Json& selector, const Json& parameters) {
   if (descriptor.at("degenerate") == true || descriptor.at("curve_kind") != selector.at("curve_kind")) return false;
+  if(selector.contains("closed")&&descriptor.value("closed",false)!=selector.at("closed").get<bool>())return false;
+  if(selector.contains("radius")){if(!descriptor.contains("radius_mm")||std::abs(descriptor.at("radius_mm").get<double>()-scalar(selector.at("radius").at("value"),parameters))>scalar(selector.at("radius").at("tolerance"),parameters))return false;}
+  if(selector.contains("axis")){if(!descriptor.contains("axis"))return false;const auto v=vector3(selector.at("axis").at("vector"),parameters,"dimensionless"),a=descriptor.at("axis").get<std::array<double,3>>();const auto dot=std::abs((v[0]*a[0]+v[1]*a[1]+v[2]*a[2])/std::hypot(v[0],v[1],v[2]));if(std::acos(std::clamp(dot,0.0,1.0))>scalar(selector.at("axis").at("tolerance"),parameters,"rad"))return false;}
+  if(selector.contains("endpoints")){if(!descriptor.contains("endpoints_mm"))return false;const auto& rule=selector.at("endpoints");const auto tolerance=scalar(rule.at("tolerance"),parameters);const auto a=parameter_point(rule.at("points")[0],parameters),b=parameter_point(rule.at("points")[1],parameters),x=parameter_point(descriptor.at("endpoints_mm")[0],Json::object()),y=parameter_point(descriptor.at("endpoints_mm")[1],Json::object());if(!((a.Distance(x)<=tolerance&&b.Distance(y)<=tolerance)||(a.Distance(y)<=tolerance&&b.Distance(x)<=tolerance)))return false;}
   if (selector.contains("direction")) {
     if (!descriptor.contains("direction")) return false;
     const auto wanted = vector3(selector.at("direction").at("vector"), parameters, "dimensionless");
@@ -1236,7 +1243,10 @@ CurveWire curve_wire(const Json& segments,const Json& parameters,const gp_Ax2* p
         edge=BRepBuilderAPI_MakeEdge(first,last);
       } else {
         occ::handle<Geom_Curve> curve;
-        if (type=="arc") {
+        if(type=="tangent_arc") {
+          GC_MakeArcOfCircle arc(point(segment.at("start")),tangent(segment.at("tangent")),point(segment.at("end")));
+          if(!arc.IsDone())throw Error("invalid_shape","Tangent arc has degenerate or incompatible constraints");curve=arc.Value();
+        } else if (type=="arc") {
           GC_MakeArcOfCircle arc(point(segment.at("start")),point(segment.at("mid")),point(segment.at("end")));
           if (!arc.IsDone()) throw Error("invalid_shape","Arc needs three distinct non-collinear points");
           curve=arc.Value();
@@ -1245,11 +1255,11 @@ CurveWire curve_wire(const Json& segments,const Json& parameters,const gp_Ax2* p
           if (type=="bezier") {
             NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(points.size()));
             for (std::size_t j=0;j<points.size();++j) poles.SetValue(static_cast<int>(j+1),point(points[j]));
-            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),segment.at("weights")[j].get<double>());curve=new Geom_BezierCurve(poles,weights);}else curve=new Geom_BezierCurve(poles);
+            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),scalar(segment.at("weights")[j],parameters,"dimensionless"));curve=new Geom_BezierCurve(poles,weights);}else curve=new Geom_BezierCurve(poles);
           } else if(type=="bspline") {
             NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)poles.SetValue(static_cast<int>(j+1),point(points[j]));
             const auto& values=segment.at("knots");NCollection_Array1<double> knots(1,static_cast<int>(values.size()));NCollection_Array1<int> multiplicities(1,static_cast<int>(values.size()));for(std::size_t j=0;j<values.size();++j){knots.SetValue(static_cast<int>(j+1),values[j].get<double>());multiplicities.SetValue(static_cast<int>(j+1),segment.at("multiplicities")[j].get<int>());}
-            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),segment.at("weights")[j].get<double>());curve=new Geom_BSplineCurve(poles,weights,knots,multiplicities,segment.at("degree").get<int>());}else curve=new Geom_BSplineCurve(poles,knots,multiplicities,segment.at("degree").get<int>());
+            if(segment.contains("weights")){NCollection_Array1<double> weights(1,static_cast<int>(points.size()));for(std::size_t j=0;j<points.size();++j)weights.SetValue(static_cast<int>(j+1),scalar(segment.at("weights")[j],parameters,"dimensionless"));curve=new Geom_BSplineCurve(poles,weights,knots,multiplicities,segment.at("degree").get<int>());}else curve=new Geom_BSplineCurve(poles,knots,multiplicities,segment.at("degree").get<int>());
           } else {
             occ::handle<NCollection_HArray1<gp_Pnt>> data=new NCollection_HArray1<gp_Pnt>(1,static_cast<int>(points.size()));
             for (std::size_t j=0;j<points.size();++j) {
@@ -1286,6 +1296,76 @@ CurveWire curve_wire(const Json& segments,const Json& parameters,const gp_Ax2* p
   if (check.HasErrors() || !check.IsValid()) throw Error("invalid_shape","Curve wire self-intersects or contains invalid geometry");
   return result;
 }
+// Arc-length coordinates are shared by editable trims, tangent construction,
+// query sampling and glyph placement. Enumeration indices never escape here.
+struct CurveStation {gp_Pnt point;gp_Dir tangent;double curvature;};
+class CurvePath {
+public:
+  struct Span {TopoDS_Edge edge;double first,last,length,offset;};
+  std::vector<Span> spans;double length=0;bool closed=false;
+  explicit CurvePath(const TopoDS_Wire& wire) {
+    gp_Pnt previous,start;ShapeMap mapped;TopExp::MapShapes(wire,TopAbs_EDGE,mapped);
+    if(mapped.IsEmpty()||mapped.Extent()>1024)throw Error("invalid_model","Curve path needs 1–1024 connected edges");
+    for(BRepTools_WireExplorer it(wire);it.More();it.Next()) {
+      const auto edge=it.Current();BRepAdaptor_Curve curve(edge);const bool reverse=edge.Orientation()==TopAbs_REVERSED;
+      const double first=reverse?curve.LastParameter():curve.FirstParameter(),last=reverse?curve.FirstParameter():curve.LastParameter();
+      const auto a=curve.Value(first),b=curve.Value(last);if(spans.empty())start=a;else if(a.Distance(previous)>1e-7)throw Error("invalid_shape","Curve path edges are disconnected");
+      const auto size=GCPnts_AbscissaPoint::Length(curve,curve.FirstParameter(),curve.LastParameter(),1e-9);if(!std::isfinite(size)||size<=1e-7)throw Error("invalid_shape","Curve path has zero or nonfinite length");
+      spans.push_back({edge,first,last,size,length});length+=size;previous=b;
+    }
+    if(spans.size()!=static_cast<std::size_t>(mapped.Extent()))throw Error("selection_ambiguous","Curve path is branched or disconnected");closed=previous.Distance(start)<=1e-7;
+  }
+  double parameter(const Span& span,double distance)const {
+    if(distance<=1e-9)return span.first;if(distance>=span.length-1e-9)return span.last;
+    BRepAdaptor_Curve curve(span.edge);GCPnts_AbscissaPoint solver(1e-9,curve,(span.last<span.first?-1:1)*distance,span.first);
+    if(!solver.IsDone())throw Error("kernel_failure","Curve arc-length inversion failed");const auto value=solver.Parameter();
+    if(!std::isfinite(value)||value<std::min(span.first,span.last)-1e-9||value>std::max(span.first,span.last)+1e-9)throw Error("kernel_failure","Curve arc-length inversion escaped its edge");return value;
+  }
+  CurveStation on_span(const Span& span,double distance)const {
+    BRepAdaptor_Curve curve(span.edge);gp_Pnt point;gp_Vec d1,d2;curve.D2(parameter(span,distance),point,d1,d2);
+    if(d1.Magnitude()<1e-12)throw Error("selection_ambiguous","Curve station has an undefined tangent");
+    const double curvature=d1.Crossed(d2).Magnitude()/std::pow(d1.Magnitude(),3);if(span.last<span.first)d1.Reverse();
+    if(!std::isfinite(curvature))throw Error("invalid_shape","Curve station has nonfinite curvature");return {point,gp_Dir(d1),curvature};
+  }
+  CurveStation sample(double fraction)const {
+    if(!std::isfinite(fraction)||fraction<0||fraction>1)throw Error("invalid_argument","Curve fraction must lie in [0,1]");const auto station=fraction*length;
+    std::size_t selected=spans.size()-1;for(std::size_t i=0;i<spans.size();++i)if(station<spans[i].offset+spans[i].length-1e-8){selected=i;break;}
+    const auto& span=spans[selected];const auto local=std::clamp(station-span.offset,0.0,span.length);auto result=on_span(span,local);
+    const auto verify=[&](const CurveStation& other){if(result.tangent.Dot(other.tangent)<1-1e-10||std::abs(result.curvature-other.curvature)>1e-6)throw Error("selection_ambiguous","Curve station lies on a tangent or curvature discontinuity");};
+    if(local<=1e-8&&selected>0)verify(on_span(spans[selected-1],spans[selected-1].length));
+    if(closed&&(station<=1e-8||station>=length-1e-8))verify(on_span(station<=1e-8?spans.back():spans.front(),station<=1e-8?spans.back().length:0));
+    return result;
+  }
+  TopoDS_Wire trim(double start,double end)const {
+    BRepBuilderAPI_MakeWire result;const auto from=start*length,to=end*length;
+    for(const auto& span:spans){const auto a=std::max(from,span.offset)-span.offset,b=std::min(to,span.offset+span.length)-span.offset;if(b-a<=1e-7)continue;
+      const auto u=parameter(span,a),v=parameter(span,b);double original_first,original_last;const auto curve=BRep_Tool::Curve(span.edge,original_first,original_last);
+      BRepBuilderAPI_MakeEdge edge(curve,std::min(u,v),std::max(u,v));if(!edge.IsDone())throw Error("kernel_failure","Exact curve trimming failed");auto trimmed=edge.Edge();if(u>v)trimmed.Reverse();result.Add(trimmed);
+    }
+    if(!result.IsDone())throw Error("invalid_shape","Curve trim produced no connected positive-length wire");check_curve_shape(result.Wire());return result.Wire();
+  }
+};
+TopoDS_Wire single_curve_wire(const TopoDS_Shape& shape) {
+  ShapeMap wires;TopExp::MapShapes(shape,TopAbs_WIRE,wires);
+  if(wires.Extent()!=1)throw Error(wires.IsEmpty()?"selection_missing":"selection_ambiguous","Curve operation requires exactly one connected wire");return TopoDS::Wire(wires(1));
+}
+TopoDS_Wire helix_curve(const Json& feature,const Json& parameters) {
+  const auto frame=parameter_plane(feature.at("frame"),parameters);const auto radius=scalar(feature.at("radius"),parameters),pitch=scalar(feature.at("pitch"),parameters),turns=scalar(feature.at("turns"),parameters,"dimensionless");
+  occ::handle<Geom_CylindricalSurface> surface=new Geom_CylindricalSurface(gp_Ax3(frame),radius);
+  const auto uv=GC_MakeSegment2d(gp_Pnt2d(0,0),gp_Pnt2d((feature.value("handedness",std::string("right"))=="left"?-1:1)*2*std::numbers::pi*turns,pitch*turns)).Value();
+  BRepBuilderAPI_MakeEdge edge(uv,surface,uv->FirstParameter(),uv->LastParameter());if(!edge.IsDone())throw Error("kernel_failure","Helix surface-curve construction failed");
+  const auto wire=BRepBuilderAPI_MakeWire(edge.Edge()).Wire();if(!BRepLib::BuildCurves3d(wire,1e-7))throw Error("kernel_failure","Helix 3D representation failed");
+  const auto measured=CurvePath(wire).length,expected=std::hypot(2*std::numbers::pi*radius,pitch)*turns;
+  if(std::abs(measured-expected)>std::max(1e-6,expected*1e-8))throw Error("invalid_shape","Helix length differs from its analytic intent");return wire;
+}
+TopoDS_Wire tangent_curve(const Json& feature,const Json& parameters,const TopoDS_Shape& source) {
+  const auto station=CurvePath(single_curve_wire(source)).sample(scalar(feature.at("position"),parameters,"dimensionless"));auto tangent=gp_Vec(station.tangent);if(feature.value("reverse",false))tangent.Reverse();
+  TopoDS_Edge edge;
+  if(feature.at("type")=="curve_tangent_line")edge=BRepBuilderAPI_MakeEdge(station.point,station.point.Translated(tangent*scalar(feature.at("length"),parameters))).Edge();
+  else {const auto end=parameter_point(feature.at("end"),parameters);if(station.point.Distance(end)<=1e-7||gp_Vec(station.point,end).Crossed(tangent).Magnitude()<=1e-9)throw Error("invalid_model","Tangent arc needs a distinct endpoint off the initial tangent line");GC_MakeArcOfCircle arc(station.point,tangent,end);if(!arc.IsDone())throw Error("kernel_failure","Tangent arc construction failed");edge=BRepBuilderAPI_MakeEdge(arc.Value()).Edge();}
+  const auto wire=BRepBuilderAPI_MakeWire(edge).Wire();const auto actual=CurvePath(wire).sample(0);if(actual.point.Distance(station.point)>1e-7||actual.tangent.Dot(gp_Dir(tangent))<1-1e-9)throw Error("invalid_shape","Tangent construction failed its explicit start constraint");return wire;
+}
+
 TopoDS_Face sketch_face(const Json& profile, const Json& parameters, const gp_Ax2& plane) {
   const auto kind = text_field(profile,"type");
   TopoDS_Wire wire;
@@ -1886,6 +1966,10 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       const gp_Pnt origin(position[0], position[1], position[2]);
       if(type=="curve") {
         shape=curve_wire(feature.at("path").at("segments"),parameters).wire;
+      } else if(type=="curve_helix") {shape=helix_curve(feature,parameters);
+      } else if(type=="curve_trim") {shape=CurvePath(single_curve_wire(impl_->features.at(text_field(feature,"input")).shape)).trim(scalar(feature.at("start"),parameters,"dimensionless"),scalar(feature.at("end"),parameters,"dimensionless"));
+      } else if(type=="curve_tangent_line"||type=="curve_tangent_arc") {shape=tangent_curve(feature,parameters,impl_->features.at(text_field(feature,"input")).shape);
+      } else if(type=="curve_extract") {const auto input=text_field(feature,"input");BRepBuilderAPI_Copy copy(unique_surface_edge(impl_->features.at(input),feature.at("edges"),parameters,input));shape=BRepBuilderAPI_MakeWire(TopoDS::Edge(copy.Shape())).Wire();
       } else if(type=="curve_project"||type=="surface_project") {
         shape=project_geometry(feature,parameters,impl_->features.at(text_field(feature,"input")),impl_->features.at(text_field(feature,"target")));
       } else if(type=="surface_fill") {
@@ -2663,6 +2747,16 @@ Json BuiltModel::snapshot() const {
 BuiltModel::~BuiltModel() = default;
 BuiltModel::BuiltModel(BuiltModel&&) noexcept = default;
 BuiltModel& BuiltModel::operator=(BuiltModel&&) noexcept = default;
+
+Json BuiltModel::curve_samples(const Json& query,const std::string& feature_id)const {
+  const auto selected=feature_id.empty()?impl_->output:feature_id;validate_curve_query(query,impl_->model.at("parameters"),selected);
+  try {const auto& source=impl_->feature(selected);TopoDS_Wire wire;
+    if(query.contains("edge"))wire=BRepBuilderAPI_MakeWire(unique_surface_edge(source,query.at("edge"),impl_->model.at("parameters"),selected)).Wire();
+    else {if(!source.faces.IsEmpty())throw Error("invalid_argument","Sampling a face or solid requires an explicit unique edge selector");wire=single_curve_wire(source.shape);}
+    const CurvePath path(wire);Json samples=Json::array();for(const auto& fraction:query.value("stations",Json::array({0,.25,.5,.75,1}))){const auto station=path.sample(fraction.get<double>());samples.push_back({{"fraction",fraction},{"point_mm",point(station.point)},{"tangent",direction(station.tangent)},{"curvature_per_mm",station.curvature}});}
+    return {{"feature_id",selected},{"units","mm"},{"parameterization","normalized_arc_length"},{"length_mm",path.length},{"closed",path.closed},{"samples",samples}};
+  }catch(const Standard_Failure& e){throw occt_error(e,{{"feature_id",selected}});}
+}
 
 Json BuiltModel::summary(const std::string& feature_id) const {
   try {

@@ -24,6 +24,7 @@ Json assembly_structure(const Json& model, const std::string& assembly_id = "");
 // Replaces a standalone schema's $defs with only the definitions it reaches
 // through "#/$defs/<name>" references (transitively). Drops an unused $defs.
 void prune_definitions(Json& schema);
+void validate_curve_query(const Json& query,const Json& parameters,const std::string& feature_id);
 void validate_model(const Json& model);
 // Supplier identity is caller-supplied; an imported part additionally binds it
 // to the exact embedded STEP bytes. This performs no network access.

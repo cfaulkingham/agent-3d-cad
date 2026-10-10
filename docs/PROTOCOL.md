@@ -107,7 +107,11 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `surface_trim` | `input`, either `u_range`/`v_range` or `boundary` | Exact UV trim; contour form supports `holes` |
 | `surface_fill` | `boundaries`, `tolerance` | Ordered exact boundary constraints with explicit C0/G1/G2 support continuity |
 | `surface_gordon` | `u_curves`, `v_curves`, `u_parameters`, `v_parameters`, `tolerance` | Compatible polynomial spline curve network interpolation |
-| `curve` | `path` | Exact open/closed 3D wire; nonmaterial output |
+| `curve` | `path` | Exact open/closed 3D wire; rational Beziers and tangent arcs supported |
+| `curve_helix` | `frame`, `radius`, `pitch`, `turns` | Editable cylindrical helix; optional handedness |
+| `curve_extract` | `input`, `edges` | Exactly one source-qualified geometric edge as a curve |
+| `curve_trim` | `input`, `start`, `end` | Exact trim using normalized arc-length fractions |
+| `curve_tangent_line`, `curve_tangent_arc` | `input`, `position`, respectively `length` or `end` | Explicit start tangent; optional reversal |
 | `curve_project`, `surface_project` | `input`, `target`, `faces`, `direction` | Uniquely selected curved face; exact projected wire or closed region |
 | `import_step_surface` | `content`, `sha256` | Explicit captured nonmaterial STEP faces/shells |
 | `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |
@@ -1111,3 +1115,6 @@ paths are local UI state. This adds no modeling tool or document schema, HTTP
 endpoint, shell execution tool, or remote chat-send API. Agents connected to the
 same workspace read the exact displayed picks with existing `cad_context` and
 `cad_resolve_selection` contracts.
+
+Curve sampling uses `cad_query kind:"curve"` with optional `curve:{stations,edge}`;
+see [PARITY_CURVES.md](PARITY_CURVES.md) for arc-length, continuity and selector contracts.

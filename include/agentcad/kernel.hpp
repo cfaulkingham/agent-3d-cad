@@ -35,6 +35,7 @@ public:
   BuiltModel& operator=(BuiltModel&&) noexcept;
   BuiltModel(const BuiltModel&) = delete;
   BuiltModel& operator=(const BuiltModel&) = delete;
+  Json curve_samples(const Json& query,const std::string& feature_id = "") const;
   Json summary(const std::string& feature_id = "") const;
   // IDs are local to this evaluation and feature. They are never design references.
   Json topology(const std::string& feature_id = "", const QueryLimits& limits = {}) const;

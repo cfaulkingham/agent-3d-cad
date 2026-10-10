@@ -129,7 +129,7 @@ Json tool_definitions() {
   const Json identity={{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},
     {"kernel_version",{{"const","8.0.1"}}},{"evaluation_id",id},{"feature_id",id},{"draft",{{"type","boolean"}}},
     {"selection_lifetime",{{"const","evaluation"}}},{"summary",summary_schema()},
-    {"topology",{{"$ref","#/$defs/topology"}}},{"mesh",{{"$ref","#/$defs/mesh"}}},{"path",text},{"data_path",text}};
+    {"curve",{{"$ref","#/$defs/curve_samples"}}},{"topology",{{"$ref","#/$defs/topology"}}},{"mesh",{{"$ref","#/$defs/mesh"}}},{"path",text},{"data_path",text}};
   auto tool=[&](const char* name,const char* description,Json properties,Json required,Json output,bool read_only) {
     auto input=object(properties,required);input["$defs"]=definitions;
     output["$defs"]=definitions;
@@ -172,7 +172,7 @@ Json tool_definitions() {
       {{"document_id",id},{"path",text},{"request_id",id},{"geometry",{{"enum",{"solid","surface"}}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(record_properties,{"schema_version","document_id","revision","kernel_version","model","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
-      {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh"}}}},{"feature_id",id}},
+      {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh","curve"}}}},{"feature_id",id},{"curve",{{"$ref","#/$defs/curve_query"}}}},
       {"document_id","revision"},object(identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
     tool("cad_measure","Measure committed B-reps: face/edge/leaf pair distances, analytic angles, common material volume, or planar section curves and material caps. Clearance queries cover at most 23 leaves. Section queries use an explicit displayed-world plane and optional exploded leaf offsets; distance queries always use the saved source pose. Reject stale/draft/build-mismatched references and ambiguous recovery.",
       {{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},{"query",{{"$ref","#/$defs/measurement_query"}}}},
@@ -752,7 +752,7 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_robot_export") {fields(args,{"document_id","revision","robot"},{"feature_id"});validate_robot_options(args.at("robot"));}
   else if(tool=="cad_bom") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_drawing") fields(args,{"document_id","revision"},{"drawing"});
-  else if(tool=="cad_query") fields(args,{"document_id","revision"},{"kind","feature_id"});
+  else if(tool=="cad_query"){fields(args,{"document_id","revision"},{"kind","feature_id","curve"});if(args.contains("curve")&&args.value("kind",std::string("summary"))!="curve")throw Error("invalid_argument","Curve options require kind curve");}
   else if(tool=="cad_measure") {fields(args,{"document_id","revision","evaluation_id","feature_id","query"});identifier(text_field(args,"evaluation_id"));validate_measurement_query(args.at("query"));}
   else if(tool=="cad_view") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id","kind"});
@@ -1111,8 +1111,9 @@ Json Service::execute(const std::string& tool,const Json& args) {
   }
   if(tool=="cad_query"||tool=="cad_view") {
     const auto kind=tool=="cad_view"?std::string("view"):(args.contains("kind")?text_field(args,"kind"):std::string("summary"));
-    if(kind!="summary"&&kind!="topology"&&kind!="mesh"&&!(kind=="view"&&tool=="cad_view"))throw Error("invalid_argument","Query kind must be summary, topology or mesh");
+    if(kind!="summary"&&kind!="topology"&&kind!="mesh"&&kind!="curve"&&!(kind=="view"&&tool=="cad_view"))throw Error("invalid_argument","Query kind must be summary, topology, mesh or curve");
     Json request={{"kind",kind=="mesh"?"view":kind}};if(args.contains("feature_id"))request["feature_id"]=args.at("feature_id");
+    if(kind=="curve"){request["options"]=args.value("curve",Json::object());validate_curve_query(request.at("options"),record.at("model").at("parameters"),args.value("feature_id",record.at("model").at("output").get<std::string>()));}
     auto result=evaluate_model(store_.root(),record.at("model"),request);
     if(kind!="summary") return save_evaluation(store_.root(),record,result,false,kind=="view");
     result["document_id"]=id;result["revision"]=revision;result["kernel_version"]=kernel_version();

@@ -21,7 +21,7 @@ bool is_surface_feature_type(const std::string& type) {
   static const std::set<std::string> types={"surface_bezier","surface_bspline","surface_trim","surface_shell","import_step_surface","surface_fill","surface_gordon","surface_project"};
   return types.contains(type);
 }
-bool is_curve_feature_type(const std::string& type) { return type=="curve"||type=="curve_project"; }
+bool is_curve_feature_type(const std::string& type) { static const std::set<std::string> types={"curve","curve_project","curve_helix","curve_trim","curve_tangent_line","curve_tangent_arc","curve_extract"};return types.contains(type); }
 void validate_purchase(const Json& purchase,bool require_artifact) {
   fields(purchase,{"supplier","part_number","source_url"},{"artifact_sha256"});
   for(const auto* key:{"supplier","part_number","source_url"}) {
@@ -86,7 +86,8 @@ Json model_definitions() {
     return Json{{"oneOf",Json::array({
       object({{"type",{{"const","line"}}},{"start",point},{"end",point}},{"type","start","end"}),
       object({{"type",{{"const","arc"}}},{"start",point},{"mid",point},{"end",point}},{"type","start","mid","end"}),
-      object({{"type",{{"const","bezier"}}},{"points",points(2,26)}},{"type","points"}),
+      object({{"type",{{"const","bezier"}}},{"points",points(2,26)},{"weights",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",26}}}},{"type","points"}),
+      object({{"type",{{"const","tangent_arc"}}},{"start",point},{"end",point},{"tangent",point}},{"type","start","end","tangent"}),
       object({{"type",{{"const","spline"}}},{"points",points(2,64)},{"periodic",{{"type","boolean"}}},
         {"start_tangent",point},{"end_tangent",point}},{"type","points"})
     })}};
@@ -99,7 +100,11 @@ Json model_definitions() {
     {"expected_count", {{"type", "integer"}, {"minimum", 1}, {"maximum", 10000}}},
     {"direction", object({{"vector", vector_ref}, {"tolerance", scalar_ref}}, {"vector", "tolerance"})},
     {"center", object({{"point", vector_ref}, {"tolerance", scalar_ref}}, {"point", "tolerance"})},
-    {"length", object({{"value", scalar_ref}, {"tolerance", scalar_ref}}, {"value", "tolerance"})}
+    {"length", object({{"value", scalar_ref}, {"tolerance", scalar_ref}}, {"value", "tolerance"})},
+    {"radius",object({{"value",scalar_ref},{"tolerance",scalar_ref}},{"value","tolerance"})},
+    {"axis",object({{"vector",vector_ref},{"tolerance",scalar_ref}},{"vector","tolerance"})},
+    {"closed",{{"type","boolean"}}},
+    {"endpoints",object({{"points",{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",2}}},{"tolerance",scalar_ref}},{"points","tolerance"})}
   }, {"type", "feature_id", "curve_kind", "expected_count"});
   const Json face_selector = object({
     {"type",{{"const","geometric"}}},{"feature_id",id},
@@ -164,6 +169,11 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"const","surface_gordon"}}},{"u_curves",family},{"v_curves",family},
     {"u_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",16}}},{"v_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",16}}},{"tolerance",tolerance}}, {"id","type","u_curves","v_curves","u_parameters","v_parameters","tolerance"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve"}}},{"path",object({{"type",{{"const","wire"}}},{"segments",segments3}}, {"type","segments"})}}, {"id","type","path"}));
+  features.push_back(object({{"id",id},{"type",{{"const","curve_helix"}}},{"frame",{{"$ref","#/$defs/workplane"}}},{"radius",scalar_ref},{"pitch",scalar_ref},{"turns",scalar_ref},{"handedness",{{"enum",{"right","left"}}}}}, {"id","type","frame","radius","pitch","turns"}));
+  features.push_back(object({{"id",id},{"type",{{"const","curve_trim"}}},{"input",id},{"start",scalar_ref},{"end",scalar_ref}}, {"id","type","input","start","end"}));
+  features.push_back(object({{"id",id},{"type",{{"const","curve_tangent_line"}}},{"input",id},{"position",scalar_ref},{"length",scalar_ref},{"reverse",{{"type","boolean"}}}}, {"id","type","input","position","length"}));
+  features.push_back(object({{"id",id},{"type",{{"const","curve_tangent_arc"}}},{"input",id},{"position",scalar_ref},{"end",vector_ref},{"reverse",{{"type","boolean"}}}}, {"id","type","input","position","end"}));
+  features.push_back(object({{"id",id},{"type",{{"const","curve_extract"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}}}, {"id","type","input","edges"}));
   features.push_back(object({{"id",id},{"type",{{"enum",{"surface_project","curve_project"}}}},{"input",id},{"target",id},{"faces",{{"$ref","#/$defs/face_selector"}}},{"direction",vector_ref}}, {"id","type","input","target","faces","direction"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_shell"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}}},
     {"tolerance",{{"type","number"},{"minimum",1e-9},{"maximum",1e-3}}},{"closed",{{"type","boolean"}}}}, {"id","type","inputs","tolerance","closed"}));
@@ -388,8 +398,12 @@ Json model_definitions() {
   const Json edge_output = object({
     {"id",edge_id},{"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},
     {"length_mm",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"direction",point_output},
-    {"degenerate",{{"type","boolean"}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",occurrence}
+    {"degenerate",{{"type","boolean"}}},{"closed",{{"type","boolean"}}},{"endpoints_mm",{{"type","array"},{"items",point_output},{"minItems",2},{"maxItems",2}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",occurrence}
   }, {"id","curve_kind","length_mm","center_mm","bounds_mm","degenerate"});
+  const Json fraction={{"type","number"},{"minimum",0},{"maximum",1}};
+  definitions["curve_query"]=object({{"stations",{{"type","array"},{"items",fraction},{"minItems",1},{"maxItems",257}}},{"edge",{{"$ref","#/$defs/selector"}}}},Json::array());
+  definitions["curve_samples"]=object({{"feature_id",id},{"units",{{"const","mm"}}},{"parameterization",{{"const","normalized_arc_length"}}},{"length_mm",nonnegative},{"closed",{{"type","boolean"}}},
+    {"samples",{{"type","array"},{"items",object({{"fraction",fraction},{"point_mm",point_output},{"tangent",point_output},{"curvature_per_mm",nonnegative}},{"fraction","point_mm","tangent","curvature_per_mm"})},{"minItems",1},{"maxItems",257}}}}, {"feature_id","units","parameterization","length_mm","closed","samples"});
   definitions["face"]=face_output; definitions["edge"]=edge_output;
   definitions["topology"]=object({
     {"schema_version",{{"const",1}}},{"units",{{"const","mm"}}},{"feature_id",id},{"selection_lifetime",{{"const","evaluation"}}},
@@ -453,7 +467,7 @@ std::array<double, 3> vector3(const Json& value, const Json& parameters, const s
 
 namespace {
 void validate_selector(const Json& selector, const Json& parameters, const std::string& input) {
-  fields(selector, {"type", "feature_id", "curve_kind", "expected_count"}, {"direction", "center", "length"});
+  fields(selector, {"type", "feature_id", "curve_kind", "expected_count"}, {"direction", "center", "length","radius","axis","endpoints","closed"});
   if (text_field(selector, "type") != "geometric")
     throw Error("invalid_model", "Only geometric design references can be saved; evaluated selections cannot be persisted");
   if (text_field(selector, "feature_id") != input)
@@ -464,6 +478,10 @@ void validate_selector(const Json& selector, const Json& parameters, const std::
   const auto& count = selector.at("expected_count");
   if (!count.is_number_integer() || count < 1 || count > 10000)
     throw Error("invalid_model", "Selector expected_count must be an integer from 1 to 10000");
+  if(selector.contains("closed")&&!selector.at("closed").is_boolean())throw Error("invalid_model","Selector closed must be boolean");
+  if(selector.contains("radius")){if(selector.at("curve_kind")!="circle")throw Error("invalid_model","Radius selection requires a circular edge");const auto& p=selector.at("radius");fields(p,{"value","tolerance"});if(scalar(p.at("value"),parameters)<=0||scalar(p.at("tolerance"),parameters)<1e-9)throw Error("invalid_model","Radius selector needs positive radius and tolerance");}
+  if(selector.contains("axis")){if(selector.at("curve_kind")!="circle"&&selector.at("curve_kind")!="ellipse")throw Error("invalid_model","Axis selection requires circle or ellipse");const auto& p=selector.at("axis");fields(p,{"vector","tolerance"});const auto v=vector3(p.at("vector"),parameters,"dimensionless");const auto t=scalar(p.at("tolerance"),parameters,"rad");if(std::hypot(v[0],v[1],v[2])<1e-12||t<1e-9||t>std::numbers::pi/2)throw Error("invalid_model","Axis selector requires a nonzero vector and tolerance in (0,pi/2]");}
+  if(selector.contains("endpoints")){const auto& p=selector.at("endpoints");fields(p,{"points","tolerance"});if(!p.at("points").is_array()||p.at("points").size()!=2||scalar(p.at("tolerance"),parameters)<1e-9)throw Error("invalid_model","Endpoint selection requires two points and positive tolerance");for(const auto& point:p.at("points"))vector3(point,parameters);}
   for (const auto* key : {"direction", "center", "length"}) {
     if (!selector.contains(key)) continue;
     const auto& predicate = selector.at(key);
@@ -529,18 +547,20 @@ void curve_segments(const Json& segments,const Json& parameters,std::size_t dime
   for (std::size_t i=0;i<segments.size();++i) {
     try {
       const auto& segment=segments[i]; const auto type=text_field(segment,"type");
-      if (type=="line" || type=="arc") {
+      if (type=="line" || type=="arc"||type=="tangent_arc") {
         if (type=="line") fields(segment,{"type","start","end"});
-        else {fields(segment,{"type","start","mid","end"});point(segment.at("mid"));}
+        else if(type=="arc"){fields(segment,{"type","start","mid","end"});point(segment.at("mid"));}
+        else {fields(segment,{"type","start","end","tangent"});if(point(segment.at("tangent"),"dimensionless")<1e-24)throw Error("invalid_model","Arc tangent must be nonzero");}
         point(segment.at("start"));point(segment.at("end"));
       } else if (type=="bezier" || type=="spline") {
-        if (type=="bezier") fields(segment,{"type","points"});
+        if (type=="bezier") fields(segment,{"type","points"},{"weights"});
         else fields(segment,{"type","points"},{"periodic","start_tangent","end_tangent"});
         const auto& points=segment.at("points");
         const auto maximum=type=="bezier"?26u:64u;
         if (!points.is_array() || points.size()<2 || points.size()>maximum)
           throw Error("invalid_model","Curve point count is outside its supported bounds",{{"maximum",maximum}});
         for (const auto& p:points) point(p);
+        if(type=="bezier"&&segment.contains("weights")){const auto& weights=segment.at("weights");if(!weights.is_array()||weights.size()!=points.size())throw Error("invalid_model","Bezier weights must match its control points");for(const auto& weight:weights){const auto value=scalar(weight,parameters,"dimensionless");if(value<1e-8||value>1e6)throw Error("invalid_model","Bezier weights must lie between 1e-8 and 1e6");}}
         if (type=="spline") {
           if (segment.contains("periodic") && !segment.at("periodic").is_boolean())
             throw Error("invalid_model","Spline periodic must be boolean");
@@ -681,6 +701,12 @@ void validate_face_selection(const Json& selection,const Json& parameters,const 
     for(const auto& selector:selection)validate_face_selector(selector,parameters,input);
   } else validate_face_selector(selection,parameters,input);
 }
+void validate_curve_query(const Json& query,const Json& parameters,const std::string& feature_id) {
+  fields(query,{}, {"stations","edge"});
+  if(query.contains("stations")){const auto& stations=query.at("stations");if(!stations.is_array()||stations.empty()||stations.size()>257)throw Error("invalid_argument","Curve query requires 1–257 stations");for(const auto& value:stations)if(!value.is_number()||number(value)<0||number(value)>1)throw Error("invalid_argument","Curve query stations must be numeric fractions in [0,1]");}
+  if(query.contains("edge")){validate_selector(query.at("edge"),parameters,feature_id);if(query.at("edge").at("expected_count")!=1)throw Error("invalid_argument","Curve query edge must select exactly one edge");}
+}
+
 void validate_model(const Json& model) {
   fields(model, {"schema_version", "units", "parameters", "features", "output"}, {"components"});
   validate_payload_size(model);
@@ -764,6 +790,18 @@ void validate_model(const Json& model) {
       fields(feature,{"id","type","path"});fields(feature.at("path"),{"type","segments"});
       if(feature.at("path").at("type")!="wire")throw Error("invalid_model","Curve path must be a world-coordinate exact wire");
       curve_segments(feature.at("path").at("segments"),parameters,3);
+    } else if(type=="curve_helix") {
+      fields(feature,{"id","type","frame","radius","pitch","turns"},{"handedness"});workplane(feature.at("frame"),parameters);
+      const auto radius=scalar(feature.at("radius"),parameters),pitch=scalar(feature.at("pitch"),parameters),turns=scalar(feature.at("turns"),parameters,"dimensionless");
+      if(radius<1e-5||pitch<1e-5||turns<1e-4||turns>256||pitch*turns>1e6||std::hypot(2*std::numbers::pi*radius,pitch)*turns>1e7)throw Error("invalid_model","Helix requires positive radius/pitch, 0.0001–256 turns, height <=1e6 mm and length <=1e7 mm");
+      if(feature.contains("handedness")&&feature.at("handedness")!="left"&&feature.at("handedness")!="right")throw Error("invalid_model","Helix handedness must be left or right");
+    } else if(type=="curve_trim"||type=="curve_tangent_line"||type=="curve_tangent_arc") {
+      if(type=="curve_trim")fields(feature,{"id","type","input","start","end"});else if(type=="curve_tangent_line")fields(feature,{"id","type","input","position","length"},{"reverse"});else fields(feature,{"id","type","input","position","end"},{"reverse"});
+      const auto input=text_field(feature,"input");if(!prior.contains(input)||!is_curve_feature_type(types.at(input)))throw Error("invalid_model","Curve operation requires an earlier exact curve");
+      const auto station=[&](const char* key){const auto value=scalar(feature.at(key),parameters,"dimensionless");if(value<0||value>1)throw Error("invalid_model","Curve positions must be normalized arc-length fractions in [0,1]");return value;};
+      if(type=="curve_trim"){if(station("end")-station("start")<1e-9)throw Error("invalid_model","Curve trim end must exceed start");}else {station("position");if(feature.contains("reverse")&&!feature.at("reverse").is_boolean())throw Error("invalid_model","Curve reverse must be boolean");if(type=="curve_tangent_line")positive(feature.at("length"));else vector3(feature.at("end"),parameters);}
+    } else if(type=="curve_extract") {
+      fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");if(!prior.contains(input)||types.at(input)=="assembly")throw Error("invalid_model","Curve extraction requires an earlier nonassembly feature");validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1)throw Error("invalid_model","Curve extraction requires exactly one edge");
     } else if(type=="surface_project"||type=="curve_project") {
       fields(feature,{"id","type","input","target","faces","direction"});const auto input=text_field(feature,"input"),target=text_field(feature,"target");
       if(!prior.contains(input)||(!is_sketch_feature_type(types.at(input))&&!is_curve_feature_type(types.at(input))))throw Error("invalid_model","Projection requires an earlier sketch or curve");
@@ -781,7 +819,7 @@ void validate_model(const Json& model) {
       for(const auto* key:{"tolerance","angular_tolerance","curvature_tolerance"})if(feature.contains(key)){const auto value=number(feature.at(key));if(value<1e-7||value>1e-3)throw Error("invalid_model","Filling tolerances must be between 1e-7 and 1e-3");}
     } else if(type=="surface_gordon") {
       fields(feature,{"id","type","u_curves","v_curves","u_parameters","v_parameters","tolerance"});
-      for(const auto* axis:{"u","v"}){const auto curves=std::string(axis)+"_curves",stations=std::string(axis)+"_parameters";const auto& family=feature.at(curves);if(!family.is_array()||family.size()<2||family.size()>16)throw Error("invalid_model","Gordon networks require 2–16 curves in each direction");for(const auto& c:family){curve_segments(Json::array({c}),parameters,3);if(c.at("type")=="arc"||c.value("periodic",false))throw Error("invalid_model","Gordon networks require nonperiodic polynomial lines, Bezier or interpolating spline curves");}
+      for(const auto* axis:{"u","v"}){const auto curves=std::string(axis)+"_curves",stations=std::string(axis)+"_parameters";const auto& family=feature.at(curves);if(!family.is_array()||family.size()<2||family.size()>16)throw Error("invalid_model","Gordon networks require 2–16 curves in each direction");for(const auto& c:family){curve_segments(Json::array({c}),parameters,3);if(c.at("type")=="arc"||c.at("type")=="tangent_arc"||c.contains("weights")||c.value("periodic",false))throw Error("invalid_model","Gordon networks require nonperiodic polynomial lines, Bezier or interpolating spline curves");}
         const auto& values=feature.at(stations);const auto count=feature.at(std::string(axis)=="u"?"v_curves":"u_curves").size();if(!values.is_array()||values.size()!=count)throw Error("invalid_model","Gordon station counts must match the transverse curve family");double prior=-1;for(const auto& v:values){const double x=scalar(v,parameters,"dimensionless");if(x<0||x>1||x-prior<1e-6)throw Error("invalid_model","Gordon stations must strictly increase in [0,1]");prior=x;}if(scalar(values.front(),parameters,"dimensionless")!=0||scalar(values.back(),parameters,"dimensionless")!=1)throw Error("invalid_model","Gordon network boundaries must occur at stations 0 and 1");}
       const auto tolerance=number(feature.at("tolerance"));if(tolerance<1e-7||tolerance>1e-3)throw Error("invalid_model","Gordon crossing tolerance must be between 1e-7 and 1e-3");
     } else if(type=="surface_shell") {

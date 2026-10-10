@@ -926,7 +926,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     };
     const auto feature = request.value("feature_id", std::string{});
     Json result=Json::object();
-    if (kind == "topology" || kind == "view") result["topology"] = geometry().topology(feature);
+    if (kind == "topology" || kind == "view"||kind=="curve") result["topology"] = geometry().topology(feature);
     if (kind == "view") result["mesh"] = geometry().mesh(feature);
     // Views the coordinator projected ahead of this worker, in other processes.
     std::map<std::size_t,Json> supplied;
@@ -996,6 +996,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     else if(kind=="manufacturing") {
       result["manufacturing"]=manufacture(payload.at("model"),geometry(),request.at("options"),request.at("identity"),path_from_utf8(text_field(request,"path")));
     }
+    else if(kind=="curve")result["curve"]=geometry().curve_samples(request.value("options",Json::object()),feature);
     else if(kind=="fabrication")result["fabrication"]=geometry().fabrication_review(request.at("options"),feature);
     else if(kind=="measure")result["measurement"]=geometry().measure(request.at("options"),request.at("topology"),feature);
     else if(kind=="robot") {
