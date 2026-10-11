@@ -162,6 +162,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/package_architecture_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/release_manifest_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/source_identity_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/universal_validation_tests.py
@@ -392,8 +394,21 @@ jobs:
           pattern: native-preview-*
           path: release
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-packages
+          path: universal-release-inputs
       - name: Prepare checksums and release notes
         run: |
+          version=$(cat VERSION)
+          # Copy only the three packages accepted on both actual macOS CPUs.
+          # Keep the source manifest in CI evidence, outside release/* uploads.
+          for asset in \
+            "agent-3d-cad-$version-Darwin-universal.tar.gz" \
+            "agent-cad-plugin-$version-Darwin-universal.zip" \
+            "agent-cad-claude-$version-Darwin-universal.mcpb"; do
+            cp "universal-release-inputs/$asset" release/
+          done
           cp install.sh install.ps1 release/
           python3 packaging/release-manifest.py release
       - name: Create draft release after native and universal runtime gates pass
