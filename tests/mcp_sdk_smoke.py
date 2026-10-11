@@ -18,6 +18,7 @@ https://py.sdk.modelcontextprotocol.io/protocol-versions/
 import asyncio
 import base64
 import csv
+from contextlib import asynccontextmanager
 import io
 import importlib.metadata
 import json
@@ -27,7 +28,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 
+import anyio
 from jsonschema import Draft202012Validator
 from mcp import Client, StdioServerParameters
 from slicer_contract_fixture import options as slice_options, verify_package
@@ -38,6 +41,36 @@ APP_URI = "ui://agent-3d-cad/viewer.html"
 APP_MIME = "text/html;profile=mcp-app"
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 checks = 0
+LIFECYCLE_TIMEOUT_SECONDS = 90
+TOTAL_TIMEOUT_SECONDS = 2 * LIFECYCLE_TIMEOUT_SECONDS
+
+
+@asynccontextmanager
+async def lifecycle(name):
+    """Bound each independent SDK session, including launch and shutdown."""
+    started = time.perf_counter()
+    started_cpu = time.process_time()
+    started_checks = checks
+    deadline = None
+    outcome = "failed"
+    print(f"MCP SDK lifecycle {name}: starting ({LIFECYCLE_TIMEOUT_SECONDS}s deadline)",
+          file=sys.stderr, flush=True)
+    try:
+        with anyio.fail_after(LIFECYCLE_TIMEOUT_SECONDS) as deadline:
+            yield
+        outcome = "passed"
+    except TimeoutError as error:
+        if deadline is not None and deadline.cancelled_caught:
+            outcome = "timed out"
+            raise TimeoutError(
+                f"MCP SDK {name} lifecycle exceeded {LIFECYCLE_TIMEOUT_SECONDS}s") from error
+        raise
+    finally:
+        print(f"MCP SDK lifecycle {name}: {outcome}; "
+              f"{time.perf_counter() - started:.3f}s elapsed, "
+              f"{time.process_time() - started_cpu:.3f}s Python CPU, "
+              f"{checks - started_checks} checks",
+              file=sys.stderr, flush=True)
 
 
 def require(condition, message):
@@ -82,11 +115,17 @@ async def discover(client):
     require({"cad_create", "cad_read", "cad_apply", "cad_export", "cad_bom", "cad_drawing", "cad_gcode_review", "cad_printer_handoff", "cad_slice", "cad_job", "cad_open", "cad_show", "cad_context", "cad_list", "cad_viewer"} <= definitions.keys(),
             "Required editable CAD tools were not discovered")
     require(result.next_cursor is None, "Unexpected unhandled tool pagination")
+    schemas_started = time.perf_counter()
+    schemas_cpu = time.process_time()
     for tool in definitions.values():
         require(tool.output_schema is not None, f"Missing output schema for {tool.name}")
         Draft202012Validator.check_schema(tool.input_schema)
         Draft202012Validator.check_schema(tool.output_schema)
         require(True, f"Input/output schemas valid for {tool.name}")
+    print(f"MCP SDK discovery schemas: {len(definitions) * 2} checked; "
+          f"{time.perf_counter() - schemas_started:.3f}s elapsed, "
+          f"{time.process_time() - schemas_cpu:.3f}s Python CPU",
+          file=sys.stderr, flush=True)
     ui_tools = {name: tool.model_dump(by_alias=True) for name, tool in definitions.items()}
     require(ui_tools["cad_open"]["_meta"]["ui"]["resourceUri"] == APP_URI, "Open does not link the app resource")
     require(ui_tools["cad_viewer"]["_meta"]["ui"]["visibility"] == ["app"], "Viewer internals are not app-only")
@@ -175,7 +214,7 @@ async def smoke(executable, workspace):
     created = None
     # Default auto mode independently probes modern discovery, then negotiates
     # the legacy lifecycle; the test never manufactures those protocol frames.
-    async with Client(params, read_timeout_seconds=15) as client:
+    async with lifecycle("auto"), Client(params, read_timeout_seconds=15) as client:
         definitions = await discover(client)
         example_dir = Path(__file__).resolve().parents[1] / "examples"
         assembly_args = json.loads((example_dir / "assembly.create.json").read_text())
@@ -694,7 +733,7 @@ async def smoke(executable, workspace):
                 "Completed SDK job reported incorrect geometry")
     # Fresh native subprocess and explicit legacy SDK mode establish that source,
     # immutable revisions, dedup receipts and job results survive session teardown.
-    async with Client(params, mode="legacy", read_timeout_seconds=15) as reopened:
+    async with lifecycle("reopened legacy"), Client(params, mode="legacy", read_timeout_seconds=15) as reopened:
         definitions = await discover(reopened)
         require((await call(reopened,definitions,"cad_context",{"view_id":"sdk_annotations"}))["annotations"]==annotation_history,"SDK restart changed historical review note evidence")
         deadline=asyncio.get_running_loop().time()+15
@@ -740,7 +779,7 @@ def main():
         raise SystemExit(f"Install the pinned developer requirements; expected mcp=={EXPECTED_SDK}, got {installed}")
     executable = Path(sys.argv[1]).resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="cad-mcp-sdk-") as directory:
-        asyncio.run(asyncio.wait_for(smoke(executable, Path(directory)), timeout=90))
+        asyncio.run(asyncio.wait_for(smoke(executable, Path(directory)), timeout=TOTAL_TIMEOUT_SECONDS))
     print(f"MCP SDK {installed}: {checks} interoperability checks passed (native stdio, auto + legacy lifecycle)")
 
 
