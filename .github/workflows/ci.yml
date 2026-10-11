@@ -111,6 +111,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_deadline_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/universal_runtime_contract_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $exe = Join-Path $PWD 'build/agent-3d-cad'
           if ($IsWindows) {
             $exe = Join-Path $PWD 'build/Release/agent-3d-cad.exe'
@@ -160,6 +162,12 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/package_architecture_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/source_identity_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($IsMacOS) {
+            python tests/universal_composer_tests.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
           python tests/packaging_provenance_test.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/linux_staging_test.py
@@ -181,6 +189,14 @@ jobs:
         run: |
           cpack --config build/CPackConfig.cmake -C Release -B build/packages
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Retain verified thin macOS core for one universal composition
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-input-${{ matrix.architecture }}
+          path: build/packages/agent-3d-cad-*-Darwin-${{ matrix.architecture }}.tar.gz
+          if-no-files-found: error
+          retention-days: 14
       - name: Package and test native ChatGPT plugin (no standalone app)
         run: |
           python tests/package_documentation_test.py bundle .
@@ -251,10 +267,119 @@ jobs:
             build/geometry-evidence/**
             build-deps/**/CMakeConfigureLog.yaml
 
+  macos-universal-compose:
+    # Compose exactly once from this run's verified, source-stamped thin cores.
+    # No thin core is rebuilt or selected by an end user's host application.
+    needs: native
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-input-arm64
+          path: universal-inputs/arm64
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-input-x64
+          path: universal-inputs/x64
+      - name: Compose and package one universal native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          mkdir -p universal-thin/arm64 universal-thin/x64 universal-build published
+          tar -xzf "universal-inputs/arm64/agent-3d-cad-$version-Darwin-arm64.tar.gz" -C universal-thin/arm64
+          tar -xzf "universal-inputs/x64/agent-3d-cad-$version-Darwin-x64.tar.gz" -C universal-thin/x64
+          universal="agent-3d-cad-$version-Darwin-universal"
+          python packaging/compose-macos-universal.py \
+            "universal-thin/arm64/agent-3d-cad-$version-Darwin-arm64" \
+            "universal-thin/x64/agent-3d-cad-$version-Darwin-x64" "universal-build/$universal"
+          cmake "-DSOURCE_ROOT=$PWD" "-DOUTPUT_MANIFEST=$PWD/published/source-inputs.sha256" -P cmake/SourceIdentity.cmake
+          python tests/package_documentation_test.py "universal-build/$universal" .
+          (cd universal-build && cmake -E tar czf "../published/$universal.tar.gz" --format=gnutar "$universal")
+          python packaging/make-plugin.py "universal-build/$universal" published
+          python packaging/make-mcpb.py "universal-build/$universal" "published/agent-cad-claude-$version-Darwin-universal.mcpb"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-packages
+          path: |
+            published/*.tar.gz
+            published/*.zip
+            published/*.mcpb
+            published/source-inputs.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-universal-runtime:
+    needs: macos-universal-compose
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            architecture: arm64
+          - runner: macos-15-intel
+            architecture: x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      # Fresh runners download the SAME artifact; no build/SDK/cache setup here.
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-packages
+          path: universal-packages
+      - name: Run relocated native and both plugin packages on the actual CPU
+        env:
+          TEST_SOURCE_COMMIT: ${{ github.sha }}
+          TEST_NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          python tests/universal_package_runtime.py run --packages universal-packages \
+            --architecture "$TEST_NATIVE_ARCHITECTURE" --source "$TEST_SOURCE_COMMIT" \
+            --report "universal-runtime-$TEST_NATIVE_ARCHITECTURE.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-universal-runtime-${{ matrix.architecture }}
+          path: universal-runtime-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 14
+
+  macos-universal-acceptance:
+    needs: macos-universal-runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: macos-universal-runtime-*
+          path: universal-evidence
+          merge-multiple: true
+      - name: Require same archive bytes and actual native processes on both CPUs
+        env:
+          TEST_SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 tests/universal_package_runtime.py compare \
+            universal-evidence/universal-runtime-arm64.json universal-evidence/universal-runtime-x64.json \
+            --source "$TEST_SOURCE_COMMIT" --report universal-acceptance.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal-acceptance
+          path: universal-acceptance.json
+          retention-days: 14
+
   release:
     # 1.0 publication needs actual two-host acceptance, not just a green build.
     if: startsWith(github.ref, 'refs/tags/v0.')
-    needs: native
+    needs: [native, macos-universal-acceptance]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -269,7 +394,7 @@ jobs:
         run: |
           cp install.sh install.ps1 release/
           python3 packaging/release-manifest.py release
-      - name: Create draft release after all five platforms pass
+      - name: Create draft release after native and universal runtime gates pass
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
