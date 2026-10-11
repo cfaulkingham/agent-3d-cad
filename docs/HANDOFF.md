@@ -102,6 +102,32 @@ packages are thin ARM, require macOS 27.0 and have ad-hoc signatures only.
 Same-build lifecycle replacement does not establish cross-version migration or
 actual host installation/update/save acceptance; the user will run those checks.
 
+Optional developer-only publisher preparation is integrated as `7f8f2e2` and
+`9d99dba`; see [MACOS_PUBLISHER.md](MACOS_PUBLISHER.md). It validates an explicitly
+approved macOS core, signs a separate staged copy with an exact Developer ID
+certificate/team, audits every slice and preserves unsigned code, loader,
+source/build/cache and resource identities. Successful signing publishes only
+by exclusive atomic rename. Submission captures and verifies the approved ZIP,
+retains that read-only capture and attempt evidence, and never automatically
+retries an unknown upload outcome. Apple acceptance requires actual fetched
+`info` and full `log` responses for the same submission and archive hash; there
+is no offline acceptance command. Existing ad-hoc build, CI and packaging paths
+are unchanged. Root verification passed **93 offline checks** using actual
+thin ARM/Intel/fat Mach-O fixtures, including signature/payload/loader tampering,
+Apple-chain rejection of ad-hoc signatures, exclusive publication and upload
+capture failures. Read-only inspection passed all **57 native paths** in the
+exact preview.2 core; its production source hash remains
+`a8319ee6bf9152fe0ddcd278080a9c9cf47bcc73f6d73e553b18cf49345feb18`.
+Evidence is `.local/evidence/macos-publisher-tests.log`,
+`macos-publisher-preview2-inspection.json` and
+`macos-publisher-production-source.sha256`. The Mac still has zero valid signing
+identities. No Developer ID signing, Apple timestamp/submission, notarization,
+stapling, public release or host acceptance was performed. Next inputs are an
+authorized Developer ID Application identity/private key already configured in
+the OS, its fingerprint and Team ID, a publisher-owned identifier prefix and an
+authorized notarytool keychain profile. Actual signed-byte dual-CPU/host and
+distribution acceptance remain required.
+
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
 authorized branch publication for CI. Published checkpoint
 `59291ef81440c984c77d92d1c894ca8ad77c388e` completed

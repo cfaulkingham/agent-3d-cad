@@ -10,7 +10,7 @@ This is the completion ledger, not a declaration that planned APIs exist.
 |---|---|---|
 | Solid operations | Uniform/nonuniform scaling, existing-face draft with neutral plane, asymmetric/angle chamfers with reference side, twist extrusion, holed lofts and vertex endpoints | Integrated `ad59f5b`; strict analytic/STEP, edit/rollback, cache and component tests. [Bounded contract](PARITY_SOLIDS.md); native/actual-call acceptance at `d359331` passed |
 | Surface robustness | Both signs/joins of the existing freeform-panel thickening case; explicit surface/shell STEP round trips | Integrated `d154229`; four thickening cases, nonmaterial STEP imports and explicit solid materialization tested. [Contract](PARITY_SURFACES.md); native/actual-call acceptance at `d359331` passed |
-| Surface construction | Curve-network/Gordon surfaces, boundary fills with tangent/curvature continuity, arbitrary trim contours/holes, curved curve/sketch projection | `bbd2a81` adds expanded networks/projection; `b967c74` verifies exact complete-support candidates while retaining general bounded fills and strict tolerances. Combined 73/73 suites and 268 actual-call checks pass. CI51 exposed four surface failures; corrected current-source platform acceptance awaits the next CI checkpoint. [Bounds](PARITY_SURFACES.md) |
+| Surface construction | Curve-network/Gordon surfaces, boundary fills with tangent/curvature continuity, arbitrary trim contours/holes, curved curve/sketch projection | `bbd2a81` adds expanded networks/projection; `b967c74` verifies exact complete-support candidates while retaining general bounded fills and strict tolerances. Combined 73/73 suites and 268 actual-call checks pass. All five CI52 platforms passed the modeling parity suites; that run still failed SDK/viewer checks. CI53 overall platform acceptance is pending. [Bounds](PARITY_SURFACES.md) |
 | Sheet metal | Chained flanges, bends through blanks, hems, jogs, miters, generated bend/corner relief, cuts through bends and matching developed geometry; investigate Bezier verification abort | `2eca6b8` adds an internal jog carrying a captured far panel and attached flange trees. Combined 73/73 suites and 106 actual-call checks pass. [Contract](PARITY_SHEET_METAL.md) |
 | Parametric authoring | Bounded trig/square-root/conditional expressions and parameter-driven pattern counts; explicit units, dependency tracking and failure rollback | Implemented `fcc4f1b`; focused and final native/actual-call acceptance at `d359331` passed |
 | Curves and queries | Dedicated helices; constrained tangent lines/arcs; hull, trace, full-round; curve sampling/tangents/trimming and richer geometric selection | `b9925f0` adds point/common tangency, fixed-radius arcs, inverted full-round and general native-curve hull inputs. Combined 73/73 suites and 133 completion actual-call checks pass. [Bounds](PARITY_CURVES.md) |
@@ -130,6 +130,18 @@ checks, packaged curve/sheet/surface audits and independent archive validation;
 hashes and full scope are in HANDOFF and `.local/evidence/package-audit-preview2/`.
 These require macOS 27.0 and remain ad-hoc signed. Current-source CI, actual host
 journeys, publisher signing and distribution acceptance remain pending.
+
+Publisher preparation `7f8f2e2` / `9d99dba` adds a separate optional developer
+tool and [guide](MACOS_PUBLISHER.md); default builds/CI/packagers are unchanged.
+Root verification passed 93 offline real Mach-O checks and read-only inspection
+of the exact preview.2 core's 57 native images, with unchanged production source
+identity. Exact certificate/team audits, preserved unsigned bytes and exclusive
+publication are implemented; submission captures approved ZIP bytes and retains
+unknown outcomes without automatic retry. Actual Apple acceptance requires
+fetched responses for the same submission/archive hash. No credentialed signing
+or Apple service request occurred. Zero valid local signing identities remains
+an external prerequisite; successful signed-byte CPU/host/distribution checks
+remain unfinished. Exact evidence and missing inputs are recorded in HANDOFF.
 
 Source-helper `9265da3` fixes actual CPack embedded installation and passes
 **42 identity checks**, including source/binary substitution and stale-build
