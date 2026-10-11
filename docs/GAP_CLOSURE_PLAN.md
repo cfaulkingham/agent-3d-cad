@@ -104,6 +104,26 @@ requests pass independent STEP readback without changing public tolerances,
 worker budgets, schemas or deadlines. Exact details and executable hashes are
 in HANDOFF.
 
+Published `6dc4b6f` completed
+[run 52](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38103287281):
+all five platforms passed every modeling parity suite. macOS arm64 and Linux
+arm64 completed successfully; Linux x64 and Windows passed every native suite
+then hit the SDK lifecycle deadline with predominantly Python CPU. Intel macOS
+passed 72/73 native suites and hit the large-model viewer worker deadline.
+Universal jobs were skipped. Integrated `8fbe2af` pre-indexes schema anchors
+without skipping independent validation; its complete isolated SDK run passed
+1,845 checks, and nine equivalence plus three deadline tests pass. `457f2e6`
+prunes impossible generated-selector candidates while retaining full geometric
+matching; exact large-model topology is unchanged and six related suites pass.
+Neither fix changes deadlines or public contracts. Integrated `457f2e6` passed
+73/73 CTests, 1,906 official SDK checks, nine equivalence and three deadline
+tests, and relocated empty-PATH/no-SDK bundle smoke. Current-source CI acceptance
+remains pending; exact timing and evidence are in HANDOFF. Development version
+`0.1.0-preview.2` distinguishes an actual host upgrade from the published preview;
+no new tag or release is created. Its rebuild passed 15 targeted CTests, 1,922
+SDK checks, 42 source identity checks and relocated bundle smoke; archives and
+current-source CI validation remain pending.
+
 Source-helper `9265da3` fixes actual CPack embedded installation and passes
 **42 identity checks**, including source/binary substitution and stale-build
 rejection. Reconfigure/relink produced the same previously tested runtime bytes
@@ -133,6 +153,9 @@ has occurred; new five-platform and dual-CPU acceptance await publication/CI.
 Computer Use explicitly rejects the confirmed target's `com.openai.codex` bundle
 identifier. No host registration, update or acceptance action was performed;
 native resource-delivery tests do not establish the target-host save journey.
+The user has offered to run the actual host journeys. Claude currently lists
+the older tool catalog; a same-version package preview alone did not
+establish an update to the expanded 31-tool catalog.
 
 
 Numerical integration required independent corrections. `450656f` selects
@@ -171,7 +194,8 @@ explicit nearest/farthest branches on complete curved projection faces; and an
 internal jog carrying a far panel and attached walls. Those native workstreams
 are now integrated at `bbd2a81`; focused evidence is recorded above, with combined
 native/schema/package acceptance passed locally as recorded above; corrected
-current-source five-platform acceptance remains pending after CI51's failures.
+current-source five-platform acceptance remains pending after CI52's SDK/viewer
+failures. Every modeling parity suite passed on all five platforms in that run.
 General sketch solving, arbitrary imported-sheet unfolding and universal Python
 API parity were not named requirements in the original comparison.
 

@@ -1,6 +1,6 @@
 # Implementation handoff
 
-Updated: 2026-10-10. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-11. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
@@ -8,6 +8,72 @@ validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
+
+Published `6dc4b6f8323569a49629b49df31a1948066c6cf9` completed
+[run 52](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38103287281).
+All modeling parity suites passed on all five platforms. macOS arm64 and Linux
+arm64 completed their entire jobs successfully. Linux x64 passed 73/73 native
+suites and Windows passed 72/72, then their official SDK harnesses exceeded the
+unchanged 90-second lifecycle deadline: respectively 90.445/87.929 seconds
+wall/Python CPU and 90.650/83.297 seconds. Intel macOS passed 72/73 native suites;
+the large-model viewer exceeded its geometry-worker wall-time budget. Universal
+composition/runtime jobs were skipped after these failures. Complete job state
+and decoded evidence are in `.local/evidence/ci-run-52/`; this run does not
+establish complete platform or universal acceptance.
+
+SDK harness fix `8fbe2af` indexes local schema anchors once in a checked,
+discovery-owned schema snapshot. Every instance still undergoes full independent
+Draft 2020-12 validation; the official MCP SDK remains unchanged. Fresh and
+reused validators spent 28.94/28.99 seconds CPU on the same 364 captured real
+instances, versus 0.336 seconds with a pre-crawled registry and identical
+outcomes. The complete checked helper took 2.091 seconds including schema
+checks and identities. Nine scope/identity/error-equivalence tests and three
+deadline tests pass. Its isolated complete SDK run passed 1,845 checks in
+27.830/20.706 seconds wall/Python CPU for the primary lifecycle, versus the
+50.631/44.730-second baseline. Evidence is
+`.local/evidence/sdk-validation-performance/`.
+
+Viewer fix `457f2e6` indexes generated selector candidates on their widest
+center-coordinate axis, uses outward-rounded inclusive bounds, and retains the
+existing complete geometric match predicate and ambiguity rules. Authored
+selector resolution is unchanged. All 1,536 face and 3,072 edge descriptors and
+suggestions in the 256-solid fixture exactly match the pre-change topology.
+The isolated view fell from 3.036 to 0.791 seconds; six related native suites
+passed in 20.99 seconds. An independent all-pairs oracle covers coincident,
+near-tolerance, varied-axis, diagonal, negative-coordinate and curved inputs.
+No schema, tolerance, worker budget or test deadline changed. Integrated root
+`457f2e6` passed **73/73 CTests in 307.21 seconds**, **1,906 official SDK checks**
+(28.534/21.035 seconds wall/Python CPU for the primary lifecycle), nine schema
+equivalence tests, three deadline tests and relocated empty-PATH/no-SDK bundle
+smoke. Evidence is `.local/evidence/gap-closure-performance-{ctest,sdk,bundle}.log`.
+Its raw executable SHA-256 is
+`7c4077f596367ae1fb5c3d0c2487e5c64d73dc2ef481d6094012045ac1f1945f`;
+production source identity is
+`ade597b3b1b420490fc391b8ee65767d284814dff9550d8f7ef442a7893e1b91`.
+Independent review additionally compared full error trees for 620 real-schema
+instances and probed 1,080,756 floating-point bounds without excluding an
+accepted candidate. Current-source CI acceptance remains pending.
+
+The user will run the actual host acceptance journeys. Claude's existing
+installation still advertises the older tool catalog; previewing the audited
+same-version extension did not establish an update. No installation, removal,
+permission change or host acceptance is claimed from that preview.
+Development `VERSION` is now `0.1.0-preview.2`, giving the expanded native/plugin/
+Claude packages a distinct upgrade identity. This does not create a tag or
+release, change the immutable published preview, or establish the host journey.
+The version rebuild passed **15/15 targeted CTests in 97.88 seconds** (protocol,
+CLI, workers, viewer, live bridge, cache/dependencies, components and service),
+**1,922 official SDK checks**, **42 source/build identity checks** and relocated
+empty-PATH/no-SDK bundle smoke. The primary SDK lifecycle took 29.798/21.307
+seconds wall/Python CPU. Raw executable SHA-256 is
+`9f96536a6b4a472bc11fe7ff9888ef375a2bd2ae8db11f7dbb23172f0f256904`;
+production source identity is
+`a8319ee6bf9152fe0ddcd278080a9c9cf47bcc73f6d73e553b18cf49345feb18`.
+The 31-tool compact result remains 467,231/476,160 bytes. Evidence is
+`.local/evidence/gap-closure-preview2-{ctest,sdk,source-identity,bundle}.log` and
+`gap-closure-preview2-native-identity.json`. Rebuilt archives and current-source
+CI acceptance remain pending; the preceding 73-suite run is the performance
+checkpoint before this version-only increment.
 
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
 authorized branch publication for CI. Published checkpoint
