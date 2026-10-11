@@ -10,6 +10,9 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
 #include <BRep_Tool.hxx>
+#include <BRepTools.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <thread>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GProp_GProps.hxx>
 #include <TopExp_Explorer.hxx>
@@ -134,6 +137,92 @@ void projections(const fs::path& root){const auto select=Json{{"type","geometric
  d["features"][1]["path"]["segments"]=polygon({{15,2,1},{15,8,1},{15,8,4},{15,2,4}});d["features"][2]["type"]="surface_project";BuiltModel region(d);near(region.summary().at("area_mm2"),30*(std::asin(.8)-std::asin(.2)),1e-3);independent_step(region,root/"projected-region.step");
  const auto outer=polygon({{0,0},{6,0},{6,3},{0,3}}),hole=polygon({{2,1},{4,1},{4,2},{2,2}});d["features"][1]={{"id","path"},{"type","sketch"},{"workplane",{{"origin",{15,2,1}},{"normal",{1,0,0}},{"x_direction",{0,1,0}}}},{"profile",{{"type","wire"},{"segments",outer},{"holes",Json::array({hole})}}}};BuiltModel holed(d);near(holed.summary().at("area_mm2"),30*(std::asin(.8)-std::asin(.2))-10*(std::asin(.6)-std::asin(.4)),1e-3);independent_step(holed,root/"projected-hole.step");
 }
+Json circle_segments(double radius,double z,bool dimensions3=true) {
+  if(dimensions3)return Json::array({{{"type","arc"},{"start",{radius,0,z}},{"mid",{0,radius,z}},{"end",{-radius,0,z}}},{{"type","arc"},{"start",{-radius,0,z}},{"mid",{0,-radius,z}},{"end",{radius,0,z}}}});
+  return Json::array({{{"type","arc"},{"start",{radius,0}},{"mid",{0,radius}},{"end",{-radius,0}}},{{"type","arc"},{"start",{-radius,0}},{"mid",{0,-radius}},{"end",{radius,0}}}});
+}
+Json network(Json u,Json v){return {{"id","network"},{"type","surface_gordon"},{"u_curves",u},{"v_curves",v},{"tolerance",1e-6}};}
+Json different_parameter_network() {
+  auto n=network(Json::array({line({0,0,0},{10,0,0}),{{"type","bezier"},{"points",{{0,5,0},{2,5,0},{10,5,0}}}},line({0,10,0},{10,10,0})}),Json::array({line({0,0,0},{0,10,0}),line({5,0,0},{5,10,0}),line({10,0,0},{10,10,0})}));
+  n["u_parameters"]={0,.5,1};n["v_parameters"]={0,.5,1};return n;
+}
+void generalized_networks(const fs::path& root) {
+  auto planar=model(Json::array({different_parameter_network()}),"network");BuiltModel plane_net(planar);near(plane_net.summary().at("area_mm2"),100,1e-6);near(plane_net.summary().at("center_of_mass_mm")[0],5,1e-6);
+  const auto plane_shape=independent_step(plane_net,root/"different-parameters.step");GProp_GProps area;BRepGProp::SurfaceProperties(plane_shape,area,1e-10);near(area.Mass(),100,1e-6);
+  auto reversed=planar;reversed["features"][0]["u_curves"][2]=line({10,10,0},{0,10,0});near(BuiltModel(reversed).summary().at("area_mm2"),100,1e-6);
+  for(const auto* kind:{"arc","weighted","closed","collapsed","periodic"}) {
+    const std::string name=kind;const bool closed=name=="closed"||name=="collapsed"||name=="periodic";
+    Json profiles=Json::array(),guides=Json::array();
+    for(int z:name=="weighted"?std::vector<int>{0,2,5}:std::vector<int>{0,5}) {
+      if(name=="arc")profiles.push_back({{"type","arc"},{"start",{10,0,z}},{"mid",{std::sqrt(50),std::sqrt(50),z}},{"end",{0,10,z}}});
+      else if(name=="weighted")profiles.push_back({{"type","bezier"},{"points",{{10,0,z},{10,10,z},{0,10,z}}},{"weights",{1,std::sqrt(.5),1}}});
+      else if(name=="collapsed"&&z==0)profiles.push_back({{"type","point"},{"point",{0,0,0}}});
+      else if(name=="periodic")profiles.push_back({{"type","spline"},{"points",{{10,0,z},{0,10,z},{-10,0,z},{0,-10,z}}},{"periodic",true}});
+      else profiles.push_back({{"type","wire"},{"segments",circle_segments(10,z)}});
+    }
+    for(int i=0;i<(closed?4:3);++i){const auto angle=i*std::numbers::pi/(closed?2:4);const auto x=10*std::cos(angle),y=10*std::sin(angle);guides.push_back(line(name=="collapsed"?Json{0,0,0}:Json{x,y,0},Json{x,y,5}));}
+    auto d=model(Json::array({network(profiles,guides)}),"network");BuiltModel built(d);const auto shape=independent_step(built,root/(name+"-network.step"));
+    const auto face=TopoDS::Face(TopExp_Explorer(shape,TopAbs_FACE).Current());const auto surface=BRep_Tool::Surface(face);double u0,u1,v0,v1;BRepTools::UVBounds(face,u0,u1,v0,v1);
+    if(name=="closed"){auto explicit_stations=d;explicit_stations["features"][0]["u_parameters"]={0,.25,.5,.75,1};explicit_stations["features"][0]["v_parameters"]={0,1};near(BuiltModel(explicit_stations).summary().at("area_mm2"),100*std::numbers::pi,1e-4);explicit_stations["features"][0]["u_parameters"]={0,.25,.5,1};fails("invalid_model",[&]{BuiltModel bad(explicit_stations);});}
+    if(closed)for(int j=1;j<8;++j){const auto v=v0+(v1-v0)*j/8.0;gp_Pnt a,b;gp_Vec au,av,bu,bv;surface->D1(u0,v,a,au,av);surface->D1(u1,v,b,bu,bv);require(a.Distance(b)<1e-7,"Periodic network seam remains closed after STEP");require(gp_Dir(au.Crossed(av)).Dot(gp_Dir(bu.Crossed(bv)))>1-1e-8,"Periodic network seam retains a continuous tangent plane after STEP");}
+    if(name!="periodic") {
+      const double expected=name=="collapsed"?10*std::numbers::pi*std::sqrt(125):(closed?100:25)*std::numbers::pi;
+      near(built.summary().at("area_mm2"),expected,1e-4);
+      for(int i=0;i<=32;++i)for(int j=0;j<=8;++j){const auto p=surface->Value(u0+(u1-u0)*i/32.0,v0+(v1-v0)*j/8.0);near(std::hypot(p.X(),p.Y()),name=="collapsed"?2*p.Z():10,2e-6);require(p.Z()>-1e-6&&p.Z()<5+1e-6,"Gordon analytic height bounds after STEP");}
+      if(closed)for(int j=1;j<8;++j)require(surface->Value(u0,v0+(v1-v0)*j/8.0).Distance(surface->Value(u1,v0+(v1-v0)*j/8.0))<1e-7,"Closed profile seam remains geometrically closed after STEP");
+      if(name=="collapsed")require(surface->Value((u0+u1)/2,v0).Distance(gp_Pnt(0,0,0))<1e-7,"Collapsed profile is the authored apex, not a tiny replacement edge");
+    } else {
+      BuiltModel reference(model(Json::array({{{"id","curve"},{"type","curve"},{"path",{{"type","wire"},{"segments",Json::array({profiles[0]})}}}}}),"curve"));
+      const auto reference_shape=independent_step(reference,root/"periodic-source.step");GProp_GProps length;BRepGProp::LinearProperties(reference_shape,length);near(built.summary().at("area_mm2"),length.Mass()*5,1e-4);
+      BRepAdaptor_Curve curve(TopoDS::Edge(TopExp_Explorer(reference_shape,TopAbs_EDGE).Current()));
+      for(int i=0;i<=64;++i)for(double z:{0.0,2.5,5.0}){auto p=curve.Value(curve.FirstParameter()+(curve.LastParameter()-curve.FirstParameter())*i/64.0);p.SetZ(z);GeomAPI_ProjectPointOnSurf project(p,surface);require(project.IsDone()&&project.NbPoints()>0&&project.LowerDistance()<2e-6,"Periodic network retains complete independently read source curves");}
+    }
+    near(BuiltModel(d,built.snapshot()).summary().at("area_mm2"),built.summary().at("area_mm2"),1e-6);
+  }
+  auto invalid=planar;invalid["features"][0]["u_curves"][1]={{"type","point"},{"point",{5,5,0}}};fails("invalid_model",[&]{BuiltModel bad(invalid);});
+  invalid=planar;invalid["features"][0]["v_curves"][1]=line({5,0,1},{5,10,1});fails("invalid_model",[&]{BuiltModel bad(invalid);});
+  // One curve crossing the same rail more than once is not an ordered network.
+  invalid=planar;invalid["features"][0]["u_curves"][1]={{"type","bezier"},{"points",{{0,4,0},{20,4,0},{-10,6,0},{10,6,0}}}};fails("selection_ambiguous",[&]{BuiltModel bad(invalid);});
+  // This second ambiguous grid agrees exactly at all explicit stations. The
+  // three crossings of its middle rail must still prevent polynomial shortcutting.
+  invalid["features"][0]["u_curves"][2]=line({0,8,0},{10,12,0});invalid["features"][0]["v_curves"][0]=line({0,0,0},{0,8,0});invalid["features"][0]["v_curves"][2]=line({10,0,0},{10,12,0});fails("selection_ambiguous",[&]{BuiltModel bad(invalid);});
+  Service service(root/"network-worker");service.call("cad_create",{{"document_id","network"},{"model",planar}});const auto before=service.call("cad_read",{{"document_id","network"}});
+  fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","network"},{"expected_revision",1},{"operations",Json::array({{{"op","replace_feature"},{"id","network"},{"feature",network(Json::array({line({0,0,0},{10,0,0}),line({0,10,0},{10,10,0})}),Json::array({line({0,0,1},{0,10,1}),line({10,0,1},{10,10,1})}))}}})}});});require(service.call("cad_read",{{"document_id","network"}})==before,"Failed generalized Gordon worker edit preserves exact revision and source");
+  auto changed=planar;changed["features"][0]["u_parameters"][1]=.4;require(feature_cache_keys(planar).at("network")!=feature_cache_keys(changed).at("network"),"Gordon station edit invalidates its cached geometry");near(BuiltModel(changed).summary().at("area_mm2"),100,1e-6);
+  const auto dispatch=[&](const Json& request){for(int retry=0;;++retry){try{return service.call("cad_job",request);}catch(const Error& e){if(e.code!="workspace_busy"||retry>=1000)throw;}std::this_thread::sleep_for(std::chrono::milliseconds(5));}};
+  dispatch({{"action","submit"},{"request_id","network-job"},{"tool","cad_query"},{"arguments",{{"document_id","network"},{"revision",1}}}});Json job;for(int i=0;i<1000;++i){job=dispatch({{"action","get"},{"job_id","network-job"}});if(job.at("state")=="succeeded"||job.at("state")=="failed")break;std::this_thread::sleep_for(std::chrono::milliseconds(5));}require(job.at("state")=="succeeded","Durable generalized Gordon query succeeds");near(job.at("result").at("summary").at("area_mm2"),100,1e-6);
+  planar["features"].push_back({{"id","body"},{"type","thicken"},{"input","network"},{"thickness",1}});planar["output"]="body";service.call("cad_create",{{"document_id","library"},{"model",planar}});service.call("cad_create",{{"document_id","consumer"},{"model",model(Json::array({{{"id","seed"},{"type","box"},{"size",{1,1,1}}}}),"seed")}});
+  const auto capture=service.call("cad_apply",{{"document_id","consumer"},{"expected_revision",1},{"operations",Json::array({{{"op","set_component"},{"id","module"},{"source_document_id","library"},{"source_revision",1}},{{"op","set_output"},{"feature_id","module"}}})}});near(capture.at("summary").at("volume_mm3"),100,1e-4);
+  const auto saved=service.call("cad_read",{{"document_id","consumer"},{"revision",capture.at("revision")}});Service portable(root/"portable-general-network");near(portable.call("cad_create",{{"document_id","copy"},{"model",saved.at("model")}}).at("summary").at("volume_mm3"),100,1e-4);
+}
+Json sphere_features() {
+  return Json::array({{{"id","profile"},{"type","sketch"},{"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"profile",{{"type","wire"},{"segments",Json::array({{{"type","arc"},{"start",{0,-10}},{"mid",{10,0}},{"end",{0,10}}},line({0,10},{0,-10})})}}}},{{"id","target"},{"type","revolve"},{"input","profile"},{"axis",{{"origin",{0,0,0}},{"direction",{0,1,0}}}},{"angle_deg",360}}});
+}
+void projection_branches(const fs::path& root) {
+  for(const auto* kind:{"cylinder","sphere"})for(const auto* branch:{"nearest","farthest"}) {
+    const bool sphere=std::string(kind)=="sphere",near_branch=std::string(branch)=="nearest";Json features=sphere?sphere_features():Json::array({{{"id","target"},{"type","cylinder"},{"radius",10},{"height",5}}});
+    const auto outer=sphere?circle_segments(3,0,false):polygon({{0,0},{6,0},{6,3},{0,3}}),hole=sphere?circle_segments(1,0,false):polygon({{2,1},{4,1},{4,2},{2,2}});
+    features.push_back({{"id","path"},{"type","sketch"},{"workplane",{{"origin",sphere?Json{15,0,0}:Json{15,2,1}},{"normal",{1,0,0}},{"x_direction",{0,1,0}}}},{"profile",{{"type","wire"},{"segments",outer},{"holes",Json::array({hole})}}}});
+    features.push_back({{"id","projected"},{"type","surface_project"},{"input","path"},{"target","target"},{"faces",{{"type","geometric"},{"feature_id","target"},{"surface_kind",kind},{"expected_count",1}}},{"direction",{-1,0,0}},{"branch",branch}});
+    auto d=model(features,"projected");BuiltModel region(d);const double expected=sphere?20*std::numbers::pi*(std::sqrt(99)-std::sqrt(91)):30*(std::asin(.8)-std::asin(.2))-10*(std::asin(.6)-std::asin(.4));near(region.summary().at("area_mm2"),expected,1e-4);
+    require(region.summary().at("center_of_mass_mm")[0].get<double>()*(near_branch?1:-1)>5,"Projected region lies on the requested forward branch");
+    const auto shape=independent_step(region,root/(std::string(kind)+"-"+branch+"-hole.step"));GProp_GProps area;BRepGProp::SurfaceProperties(shape,area,1e-10);near(area.Mass(),expected,1e-4);near(BuiltModel(d,region.snapshot()).summary().at("area_mm2"),expected,1e-4);
+    if(sphere){const auto step_face=TopoDS::Face(TopExp_Explorer(shape,TopAbs_FACE).Current());const auto support=BRep_Tool::Surface(step_face);const gp_Pnt p((near_branch?1:-1)*std::sqrt(96),2,0);GeomAPI_ProjectPointOnSurf projected(p,support);require(projected.IsDone()&&projected.LowerDistance()<1e-6,"Sphere projection retains its analytic support after STEP");double u,v;projected.LowerDistanceParameters(u,v);GeomLProp_SLProps geometry(support,u,v,1,1e-9);auto normal=geometry.Normal();if(step_face.Orientation()==TopAbs_REVERSED)normal.Reverse();require(normal.Dot(gp_Dir(p.X(),p.Y(),p.Z()))>1-1e-8,"Both projected spherical branches retain outward target orientation after STEP");}
+    auto unique=d;unique["features"].back().erase("branch");fails("selection_ambiguous",[&]{BuiltModel bad(unique);});
+    unique["features"].back()["branch"]="unique";fails("selection_ambiguous",[&]{BuiltModel bad(unique);});
+    auto open=d;open["features"][open["features"].size()-2]={{"id","path"},{"type","curve"},{"path",{{"type","wire"},{"segments",Json::array({line(sphere?Json{15,2,0}:Json{15,2,2},sphere?Json{15,8,0}:Json{15,8,2})})}}}};open["features"].back()["type"]="curve_project";BuiltModel projected(open);near(projected.curve_samples(Json::object()).at("length_mm"),10*(std::asin(.8)-std::asin(.2)),1e-4);independent_step(projected,root/(std::string(kind)+"-"+branch+"-curve.step"));
+    auto tangent=open;tangent["features"][tangent["features"].size()-2]["path"]["segments"]=Json::array({line(sphere?Json{15,10,0}:Json{15,10,1},sphere?Json{20,10,0}:Json{15,10,4})});fails("selection_ambiguous",[&]{BuiltModel bad(tangent);});
+    auto discontinuous=open;discontinuous["features"][discontinuous["features"].size()-2]["path"]["segments"]=Json::array({line({15,2,2},{15,11,2})});fails("selection_missing",[&]{BuiltModel bad(discontinuous);});
+    if(near_branch){auto switching=open;switching["features"][switching["features"].size()-2]["path"]["segments"]=Json::array({line({15,2,2},{5,8,2})});fails("selection_missing",[&]{BuiltModel bad(switching);});}
+    const auto keys=feature_cache_keys(d);d["features"].back()["branch"]=near_branch?"farthest":"nearest";require(keys.at("projected")!=feature_cache_keys(d).at("projected"),"Projection branch changes invalidate the dependent geometry");
+  }
+}
+
+void reversed_projection_orientation(const fs::path& root) {
+  auto d=model(Json::array({{{"id","target"},{"type","box"},{"size",{10,10,10}}},{{"id","path"},{"type","sketch"},{"workplane",{{"origin",{1,2,-5}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"profile",{{"type","rectangle"},{"width",2},{"height",3}}}},{{"id","projected"},{"type","surface_project"},{"input","path"},{"target","target"},{"faces",{{"type","geometric"},{"feature_id","target"},{"surface_kind","plane"},{"expected_count",1},{"normal",{{"vector",{0,0,-1}},{"tolerance",1e-6}}}}},{"direction",{0,0,1}}}}),"projected");
+  BuiltModel projected(d);near(projected.topology().at("faces")[0].at("normal")[2],-1,1e-8);near(projected.summary().at("area_mm2"),6,1e-8);
+  for(int sign:{-1,1}){auto material=d;material["features"].push_back({{"id","body"},{"type","thicken"},{"input","projected"},{"thickness",sign}});material["output"]="body";BuiltModel built(material);const auto summary=built.summary();near(summary.at("volume_mm3"),6,1e-8);near(summary.at("bounds_mm").at("min")[2],sign>0?-1:0,1e-8);near(summary.at("bounds_mm").at("max")[2],sign>0?0:1,1e-8);near(summary.at("center_of_mass_mm")[2],-.5*sign,1e-8);const auto shape=independent_step(built,root/("reversed-projection-"+std::to_string(sign)+".step"));GProp_GProps mass;BRepGProp::VolumeProperties(shape,mass,1e-9);near(mass.Mass(),6,1e-8);near(mass.CentreOfMass().Z(),-.5*sign,1e-8);}
+}
 void rollback(const fs::path& root){auto d=model(Json::array({plane()}),"patch");Service service(root/"rollback");service.call("cad_create",{{"document_id","surface"},{"model",d}});const auto before=service.call("cad_read",{{"document_id","surface"}});const auto bad=Json{{"id","trimmed"},{"type","surface_trim"},{"input","patch"},{"boundary",polygon({{-.1,.1},{.9,.1},{.9,.9},{-.1,.9}})}};fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","surface"},{"expected_revision",1},{"operations",Json::array({{{"op","add_feature"},{"feature",bad}},{{"op","set_output"},{"feature_id","trimmed"}}})}});});require(service.call("cad_read",{{"document_id","surface"}})==before,"Failed worker surface edit preserves committed revision and bytes");}
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);component_capture(temp.path);networks(temp.path);projections(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);component_capture(temp.path);networks(temp.path);projections(temp.path);generalized_networks(temp.path);projection_branches(temp.path);reversed_projection_orientation(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

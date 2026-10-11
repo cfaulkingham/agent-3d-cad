@@ -76,42 +76,92 @@ separately; boundary G2 does not imply an exactly cylindrical interior.
 
 ## Gordon curve networks
 
-`surface_gordon` requires `u_curves`, `v_curves`, `u_parameters`, `v_parameters`
-and numeric `tolerance` (1e-7 to 1e-3 mm). Each family contains 2–16 nonperiodic
-polynomial line, Bezier or interpolating-spline segments. Each curve runs in its
-named direction and is normalized to [0,1]. `u_parameters` gives the crossing
-stations of the V curves on every U curve; `v_parameters` gives the crossing
-stations of U curves on every V curve. Stations strictly increase, include 0
-and 1 and have a minimum separation of 1e-6. Counts match the transverse family.
-Author curves in compatible directions and parameterizations; reversed curves
-or inconsistent crossing positions fail with the offending curve indices.
+`surface_gordon` requires `u_curves`, `v_curves` and numeric `tolerance`
+(1e-7 to 1e-3 mm). Each family contains 2–16 entries: world-coordinate line,
+three-point arc, tangent arc, weighted or unweighted Bezier, interpolating spline
+(including `periodic:true`), or `{type:"wire",segments:[...]}` with 1–64 exact
+connected segments. A closed wire can contain rational arcs, such as two
+semicircles defining a complete circle. Source curves and their rational weights
+remain unchanged in the editable document.
 
-The implementation elevates and inserts knots into exact compatible B-spline
-bases and constructs the Gordon sum: U-family interpolation plus V-family
-interpolation minus the tensor interpolation of crossings. It does not replace
-the interior network with a four-edge fill. The resulting surface interpolates
-complete polynomial curves; independent samples verify tolerance and reject
-ill-conditioned station sets. Bounds are degree 25, 512 distinct knots per axis
-and 65,536 control points. Rational arcs/weighted curves and periodic networks
-remain unsupported, as does automatic reparameterization of incompatible curves.
+An endpoint profile may instead be `{type:"point",point:[x,y,z]}`. Only the first
+or last entry of a family may collapse, and every family needs a noncollapsed
+curve. A point-ended cone is supported without replacing its apex with a tiny
+edge. Collapsed profiles cannot occur in a cyclic transverse family.
+
+Native curve/curve intersections establish every crossing. Missing crossings,
+overlapping curves, multiple isolated crossings and grids whose crossings cannot
+be monotonically ordered fail explicitly. Open curves must be covered from one
+endpoint to the other. Curve orientation is reconciled to the authored family
+order. All noncollapsed curves in a family must consistently be open or closed.
+Closed profiles have one implicit closing copy of the first transverse curve;
+that copy establishes the seam without dropping the remainder of the profile.
+
+Optional `u_parameters` and `v_parameters` give desired surface crossing stations
+rather than requiring every input curve to share one native parameterization.
+Omitting them uses uniformly spaced stations. Each supplied array strictly
+increases from 0 to 1, has minimum spacing 1e-6 and matches the transverse family
+count, plus one implicit seam station when curves in that direction are closed.
+For example, four guides around closed U profiles need five U stations.
+
+Already compatible polynomial curves with explicit stations retain the exact
+B-spline degree-elevation/knot-insertion construction. General networks use
+monotone cubic parameter maps and adaptively refined quintic B-splines to compose
+the original curves. Approximation is checked within each native knot span;
+one eighth of the public tolerance is reserved for that composition, tested at
+15 interior samples per candidate interval before refinement. Bounded
+local cardinal functions construct the Gordon sum: U-family interpolation plus
+V-family interpolation minus the tensor interpolation of crossings. Two-profile
+interpolation remains linear, preserving ruled cylinder and cone cases. Closed
+cardinal seams have matching derivatives. This is a full curve-network operation,
+not a four-boundary fill.
+
+The completed surface is checked against every original reparameterized curve
+at 17 samples across every resulting knot interval, using the unchanged public
+tolerance.
+General rational/periodic construction produces a native B-spline approximation;
+it does not claim exact rational or analytic support identity. These finite
+checks supplement native validity/interference checks, not a global approximation
+proof. Limits remain degree 25, 512 distinct knots per axis and 65,536 control
+points, with at most 18 local refinement subdivisions. Difficult curves,
+unresolved intersections, excessive refinement and invalid/crossed resulting
+surfaces fail without publishing a revision.
 
 ## Curved projection
 
 `curve_project` and `surface_project` require `input`, `target`, `faces` and
 world-space `direction`. Input is an earlier exact curve or sketch; target is
 an earlier surface or solid. `faces` is one geometric face selector with
-`expected_count:1`, preventing a guessed choice between front/back faces.
-Projection is directional along the forward ray. Source samples must have one
-forward intersection, and the exact OCCT projection must produce one wire for
-each source wire and preserve closure. Missing, backward, ambiguous or split
-projections fail. Open wires use `curve_project`; `surface_project` requires
-closed boundaries and at most one source sketch region, retaining its holes.
-The projected region must remain inside the selected target face.
+`expected_count:1`.
 
-Projection is onto the exact curved support and preserves its pcurves. It is not
-flattening, geodesic wrapping or a nearest-point projection. Complex folds,
-seams, tangent rays and partial coverage can fail explicitly. Finite ray samples
-supplement native exact projection checks; they are not a global visibility proof.
+Optional `branch:"unique"|"nearest"|"farthest"` selects a forward-ray sheet.
+Omitted `branch` means `unique` and preserves the previous ambiguity error.
+`nearest` and `farthest` choose the smallest or largest nonnegative ray distance
+on that selected face, so complete cylinders and spheres can expose distinct
+front/back projections without confusing face identity with branch identity.
+Each source edge has 65 ray witnesses, with forward reach bounded to 1e9 mm
+and 1e-7 mm tolerance at the source. Every witness must reach the requested sheet,
+and one complete exact
+OCCT projected wire must match all selected witnesses. Tangent/singular hits,
+missing coverage, branch discontinuities and unresolved/split wires fail. Up to
+64 candidate wires may be examined. Matching uses 1e-6 mm point/wire distance;
+projected region candidates also check 17 witnesses per boundary edge against
+the face. This is directional projection, not Euclidean
+nearest-point projection.
+
+Open wires use `curve_project`; `surface_project` requires closed boundaries and
+at most one source sketch region, retaining holes. For sketches, intersection
+of the exact forward region prism with the target builds periodic seam topology.
+Adjacent partitions on the same support are unified with edge fitting and spline
+concatenation disabled; private input, native validity, self-interference and
+containment checks remain mandatory. This supports holed spherical regions
+crossing the original parameter seam. Closed curve inputs retain the direct
+bounded-wire construction and can still fail on unsupported seam configurations.
+
+Projection preserves the curved support and its pcurves. It is not flattening or
+geodesic wrapping. Complex folds, multiple faces, partial coverage and unresolved
+sheet changes can fail explicitly. Finite ray/branch witnesses supplement exact
+native construction; they are not a global visibility proof.
 
 ## Curved thickening
 
@@ -129,7 +179,19 @@ no shape healing or tolerance increase is used.
 
 `parity_surfaces` exercises the crown, independent STEP readers, explicit
 surface import and material rejection, exact contour holes and containment,
-C0/G1/G2 filling, interior spline-network interpolation, curved open/closed
-projection, portable component support remapping, native snapshots/cache dependencies and worker rollback. Existing
+C0/G1/G2 filling, interior spline-network interpolation, different curve
+parameterizations, rational arc/weighted profiles, exact closed-wire and periodic
+spline profiles, collapsed cone endpoints, complete cylinder/sphere open and
+holed projections on both forward branches, tangent/branch-change rejection, portable component support remapping, native snapshots/cache dependencies and worker rollback. Existing
 `surface` and `shell_offset` suites cover earlier analytic and material checks.
 Executed counts/results are recorded by the integration handoff after testing.
+
+The generalized-network tests use analytic plane/cylinder/cone oracles and fresh
+STEP readers. Periodic spline geometry is checked against a separately exported
+source curve throughout its length. STEP area checks request converged native
+quadrature explicitly; fixed-order area integration is insufficient for highly
+nonuniform spline parameterizations. The dedicated Draft 2020-12 script validates
+actual creates, queries, meshes, STEP captures, branch edits and historical reads,
+including rejected closed-schema fields and failed-edit rollback. Reversed target
+face normals and both signs of subsequent thickening are checked independently;
+both spherical projection branches retain outward orientation after STEP.

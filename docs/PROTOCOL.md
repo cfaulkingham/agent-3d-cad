@@ -109,13 +109,13 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `surface_bspline` | `control_points`, `degree_u`, `degree_v`, `knots_u`, `knots_v`, `multiplicities_u`, `multiplicities_v` | Nonperiodic exact patch; optional rational weights |
 | `surface_trim` | `input`, either `u_range`/`v_range` or `boundary` | Exact UV trim; contour form supports `holes` |
 | `surface_fill` | `boundaries`, `tolerance` | Ordered exact boundary constraints with explicit C0/G1/G2 support continuity |
-| `surface_gordon` | `u_curves`, `v_curves`, `u_parameters`, `v_parameters`, `tolerance` | Compatible polynomial spline curve network interpolation |
+| `surface_gordon` | `u_curves`, `v_curves`, `tolerance` | Geometric curve network; optional surface stations, rational/periodic/wire profiles and endpoint points; bounded interpolation |
 | `curve` | `path` | Exact open/closed 3D wire; rational Beziers and tangent arcs supported |
 | `curve_helix` | `frame`, `radius`, `pitch`, `turns` | Editable cylindrical helix; optional handedness |
 | `curve_extract` | `input`, `edges` | Exactly one source-qualified geometric edge as a curve |
 | `curve_trim` | `input`, `start`, `end` | Exact trim using normalized arc-length fractions |
 | `curve_tangent_line`, `curve_tangent_arc` | `input`, `position`, respectively `length` or `end` | Explicit start tangent; optional reversal |
-| `curve_project`, `surface_project` | `input`, `target`, `faces`, `direction` | Uniquely selected curved face; exact projected wire or closed region |
+| `curve_project`, `surface_project` | `input`, `target`, `faces`, `direction` | One selected curved face; optional forward `branch: unique|nearest|farthest` (default unique); projected wire or closed region |
 | `import_step_surface` | `content`, `sha256` | Explicit captured nonmaterial STEP faces/shells |
 | `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |
 | `surface_solid` | `input` | Closed shell materialization; optional explicit `reverse` |

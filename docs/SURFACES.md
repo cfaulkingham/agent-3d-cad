@@ -12,7 +12,7 @@ knots, parameter references, trim ranges and every shell input ID.
 |---|---|---|
 | `surface_bezier` | `id`, `type`, `control_points` | `weights` |
 | `surface_bspline` | `id`, `type`, `control_points`, `degree_u`, `degree_v`, `knots_u`, `knots_v`, `multiplicities_u`, `multiplicities_v` | `weights` |
-| `surface_trim` | `id`, `type`, `input`, `u_range`, `v_range` | Exact rectangle in the source patch's UV domain |
+| `surface_trim` | `id`, `type`, `input`, either `u_range`/`v_range` or `boundary` | Contour form supports exact UV `holes` |
 | `surface_shell` | `id`, `type`, `inputs`, `tolerance`, `closed` | Exact manifold sewing of earlier patches/shells |
 | `surface_solid` | `id`, `type`, `input` | `reverse`: explicitly reverse an inward shell |
 
@@ -53,7 +53,11 @@ the source face's actual parameter bounds. It builds an exact trimmed native fac
 and retains orientation. UV trim ranges are parameter coordinates rather than
 world lengths. Out-of-domain ranges fail with the source domain in error details.
 Contour trims with holes, constrained filling, Gordon networks and curved
-projection are now specified in [PARITY_SURFACES.md](PARITY_SURFACES.md).
+projection are specified in [PARITY_SURFACES.md](PARITY_SURFACES.md). Gordon
+networks accept distinct parameterizations, rational/periodic profiles and
+collapsed endpoint profiles within an explicit interpolation tolerance. Curved
+projection has explicit unique/nearest/farthest forward branch selection on one
+qualified face, including holed regions across spherical parameter seams.
 
 `surface_shell.inputs` contains 1–64 distinct earlier patch or shell IDs, with
 at most 256 source faces in total. `tolerance` is an explicit numeric sewing

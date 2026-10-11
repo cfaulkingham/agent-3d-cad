@@ -165,9 +165,12 @@ Json model_definitions() {
   boundary["allOf"]=parse_json(R"JSON([{"if":{"properties":{"continuity":{"enum":["G1","G2"]}}},"then":{"required":["face"]}}])JSON");
   features.push_back(object({{"id",id},{"type",{{"const","surface_fill"}}},{"boundaries",{{"type","array"},{"items",boundary},{"minItems",2},{"maxItems",32}}},
     {"points",{{"type","array"},{"items",vector_ref},{"maxItems",64}}},{"tolerance",tolerance},{"angular_tolerance",tolerance},{"curvature_tolerance",tolerance}}, {"id","type","boundaries","tolerance"}));
-  const auto family=Json{{"type","array"},{"items",curve_schema(3)},{"minItems",2},{"maxItems",16}};
+  auto network_curve=curve_schema(3);
+  network_curve["oneOf"].push_back(object({{"type",{{"const","wire"}}},{"segments",segments3}}, {"type","segments"}));
+  network_curve["oneOf"].push_back(object({{"type",{{"const","point"}}},{"point",vector_ref}}, {"type","point"}));
+  const auto family=Json{{"type","array"},{"items",network_curve},{"minItems",2},{"maxItems",16}};
   features.push_back(object({{"id",id},{"type",{{"const","surface_gordon"}}},{"u_curves",family},{"v_curves",family},
-    {"u_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",16}}},{"v_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",16}}},{"tolerance",tolerance}}, {"id","type","u_curves","v_curves","u_parameters","v_parameters","tolerance"}));
+    {"u_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",17}}},{"v_parameters",{{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",17}}},{"tolerance",tolerance}}, {"id","type","u_curves","v_curves","tolerance"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve"}}},{"path",object({{"type",{{"const","wire"}}},{"segments",segments3}}, {"type","segments"})}}, {"id","type","path"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve_helix"}}},{"frame",{{"$ref","#/$defs/workplane"}}},{"radius",scalar_ref},{"pitch",scalar_ref},{"turns",scalar_ref},{"handedness",{{"enum",{"right","left"}}}}}, {"id","type","frame","radius","pitch","turns"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve_trim"}}},{"input",id},{"start",scalar_ref},{"end",scalar_ref}}, {"id","type","input","start","end"}));
@@ -185,7 +188,7 @@ Json model_definitions() {
     features.push_back(object(properties,required));
   }
   features.push_back(object({{"id",id},{"type",{{"const","curve_extract"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}}}, {"id","type","input","edges"}));
-  features.push_back(object({{"id",id},{"type",{{"enum",{"surface_project","curve_project"}}}},{"input",id},{"target",id},{"faces",{{"$ref","#/$defs/face_selector"}}},{"direction",vector_ref}}, {"id","type","input","target","faces","direction"}));
+  features.push_back(object({{"id",id},{"type",{{"enum",{"surface_project","curve_project"}}}},{"input",id},{"target",id},{"faces",{{"$ref","#/$defs/face_selector"}}},{"direction",vector_ref},{"branch",{{"enum",{"unique","nearest","farthest"}}}}}, {"id","type","input","target","faces","direction"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_shell"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}}},
     {"tolerance",{{"type","number"},{"minimum",1e-9},{"maximum",1e-3}}},{"closed",{{"type","boolean"}}}}, {"id","type","inputs","tolerance","closed"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_solid"}}},{"input",id},{"reverse",{{"type","boolean"}}}}, {"id","type","input"}));
@@ -837,7 +840,7 @@ void validate_model(const Json& model) {
     } else if(type=="curve_extract") {
       fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");if(!prior.contains(input)||types.at(input)=="assembly")throw Error("invalid_model","Curve extraction requires an earlier nonassembly feature");validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1)throw Error("invalid_model","Curve extraction requires exactly one edge");
     } else if(type=="surface_project"||type=="curve_project") {
-      fields(feature,{"id","type","input","target","faces","direction"});const auto input=text_field(feature,"input"),target=text_field(feature,"target");
+      fields(feature,{"id","type","input","target","faces","direction"},{"branch"});if(feature.contains("branch")&&feature.at("branch")!="unique"&&feature.at("branch")!="nearest"&&feature.at("branch")!="farthest")throw Error("invalid_model","Projection branch must be unique, nearest or farthest");const auto input=text_field(feature,"input"),target=text_field(feature,"target");
       if(!prior.contains(input)||(!is_sketch_feature_type(types.at(input))&&!is_curve_feature_type(types.at(input))))throw Error("invalid_model","Projection requires an earlier sketch or curve");
       if(!prior.contains(target)||is_sketch_feature_type(types.at(target))||is_curve_feature_type(types.at(target))||types.at(target)=="assembly")throw Error("invalid_model","Projection target must be an earlier surface or solid");
       validate_face_selector(feature.at("faces"),parameters,target);if(feature.at("faces").at("expected_count")!=1)throw Error("invalid_model","Projection requires exactly one selected target face");unit_vector(feature.at("direction"),parameters);
@@ -852,9 +855,24 @@ void validate_model(const Json& model) {
       if(feature.contains("points")){const auto& points=feature.at("points");if(!points.is_array()||points.size()>64)throw Error("invalid_model","Filling allows at most 64 internal point constraints");for(const auto& p:points)vector3(p,parameters);}
       for(const auto* key:{"tolerance","angular_tolerance","curvature_tolerance"})if(feature.contains(key)){const auto value=number(feature.at(key));if(value<1e-7||value>1e-3)throw Error("invalid_model","Filling tolerances must be between 1e-7 and 1e-3");}
     } else if(type=="surface_gordon") {
-      fields(feature,{"id","type","u_curves","v_curves","u_parameters","v_parameters","tolerance"});
-      for(const auto* axis:{"u","v"}){const auto curves=std::string(axis)+"_curves",stations=std::string(axis)+"_parameters";const auto& family=feature.at(curves);if(!family.is_array()||family.size()<2||family.size()>16)throw Error("invalid_model","Gordon networks require 2–16 curves in each direction");for(const auto& c:family){curve_segments(Json::array({c}),parameters,3);if(c.at("type")=="arc"||c.at("type")=="tangent_arc"||c.contains("weights")||c.value("periodic",false))throw Error("invalid_model","Gordon networks require nonperiodic polynomial lines, Bezier or interpolating spline curves");}
-        const auto& values=feature.at(stations);const auto count=feature.at(std::string(axis)=="u"?"v_curves":"u_curves").size();if(!values.is_array()||values.size()!=count)throw Error("invalid_model","Gordon station counts must match the transverse curve family");double prior=-1;for(const auto& v:values){const double x=scalar(v,parameters,"dimensionless");if(x<0||x>1||x-prior<1e-6)throw Error("invalid_model","Gordon stations must strictly increase in [0,1]");prior=x;}if(scalar(values.front(),parameters,"dimensionless")!=0||scalar(values.back(),parameters,"dimensionless")!=1)throw Error("invalid_model","Gordon network boundaries must occur at stations 0 and 1");}
+      fields(feature,{"id","type","u_curves","v_curves","tolerance"},{"u_parameters","v_parameters"});
+      for(const auto* axis:{"u","v"}) {
+        const auto curves=std::string(axis)+"_curves",stations=std::string(axis)+"_parameters";const auto& family=feature.at(curves);
+        if(!family.is_array()||family.size()<2||family.size()>16)throw Error("invalid_model","Gordon networks require 2–16 curves in each direction");
+        std::size_t nonpoints=0;
+        for(std::size_t i=0;i<family.size();++i) {
+          const auto& c=family[i];
+          if(c.at("type")=="point") {fields(c,{"type","point"});vector3(c.at("point"),parameters);if(i!=0&&i+1!=family.size())throw Error("invalid_model","Collapsed Gordon profiles must be first or last in a family");}
+          else {++nonpoints;if(c.at("type")=="wire"){fields(c,{"type","segments"});curve_segments(c.at("segments"),parameters,3);}else curve_segments(Json::array({c}),parameters,3);}
+        }
+        if(nonpoints==0)throw Error("invalid_model","Each Gordon family requires a noncollapsed curve");
+        if(feature.contains(stations)) {
+          const auto& values=feature.at(stations);const auto count=feature.at(std::string(axis)=="u"?"v_curves":"u_curves").size();
+          if(!values.is_array()||(values.size()!=count&&values.size()!=count+1))throw Error("invalid_model","Gordon stations must match the transverse family, with one extra seam station for closed curves");
+          double prior=-1;for(const auto& v:values){const double x=scalar(v,parameters,"dimensionless");if(x<0||x>1||x-prior<1e-6)throw Error("invalid_model","Gordon stations must strictly increase in [0,1]");prior=x;}
+          if(scalar(values.front(),parameters,"dimensionless")!=0||scalar(values.back(),parameters,"dimensionless")!=1)throw Error("invalid_model","Gordon network boundaries must occur at stations 0 and 1");
+        }
+      }
       const auto tolerance=number(feature.at("tolerance"));if(tolerance<1e-7||tolerance>1e-3)throw Error("invalid_model","Gordon crossing tolerance must be between 1e-7 and 1e-3");
     } else if(type=="surface_shell") {
       fields(feature,{"id","type","inputs","tolerance","closed"});const auto& inputs=feature.at("inputs");std::set<std::string> used;

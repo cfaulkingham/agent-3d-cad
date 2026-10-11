@@ -21,9 +21,10 @@ check differential geometry and STEP round trips.
 Public Bezier segments now accept `weights`, one dimensionless scalar per pole,
 in [1e-8,1e6]. This applies to world curves, sketch profiles, sweeps, fill
 boundaries and UV trims. Weights remain rational intent; they are not silently
-converted to unweighted curves. Gordon networks still require polynomial curves
-and explicitly reject weighted segments. Captured font/DXF paths keep their
-separate validated source contract.
+converted to unweighted curves. Gordon networks retain weighted source curves
+and use the explicit approximation/verification contract described in
+[PARITY_SURFACES.md](PARITY_SURFACES.md#gordon-curve-networks). Captured font/DXF
+paths keep their separate validated source contract.
 
 A `tangent_arc` segment has `start`, `end` and a dimensionless `tangent` at start
 in the same 2D or 3D coordinate convention as its containing path. Degenerate

@@ -70,6 +70,9 @@
 #include <BRepTools_Modification.hxx>
 #include <BRepTools_Modifier.hxx>
 #include <GeomConvert.hxx>
+#include <GeomConvert_CompCurveToBSplineCurve.hxx>
+#include <GeomAPI_ExtremaCurveCurve.hxx>
+#include <GeomAPI_ProjectPointOnCurve.hxx>
 #include <GeomAPI.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <GeomLProp_SLProps.hxx>
@@ -80,6 +83,7 @@
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
 #include <ShapeUpgrade_ShapeDivideClosed.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <BRepTools_Modifier.hxx>
 #include <BRepTools_Modification.hxx>
 #include <Geom_SurfaceOfLinearExtrusion.hxx>
@@ -1669,7 +1673,7 @@ void compatible_network_basis(std::vector<Spline>& family,std::vector<Spline>& c
   for(const auto& c:all){if(c->NbPoles()!=all.front()->NbPoles()||c->NbKnots()!=all.front()->NbKnots())throw Error("invalid_shape","Gordon basis could not be reconciled exactly");
     for(int i=1;i<=c->NbKnots();++i)if(std::abs(c->Knot(i)-all.front()->Knot(i))>1e-12||c->Multiplicity(i)!=all.front()->Multiplicity(i))throw Error("invalid_shape","Gordon basis knot values or multiplicities differ");}
 }
-occ::handle<Geom_BSplineSurface> gordon_surface(const Json& feature,const Json& parameters) {
+occ::handle<Geom_BSplineSurface> polynomial_gordon_surface(const Json& feature,const Json& parameters) {
   std::vector<Spline> us,vs;for(const auto& c:feature.at("u_curves"))us.push_back(network_curve(c,parameters));for(const auto& c:feature.at("v_curves"))vs.push_back(network_curve(c,parameters));
   auto uc=cardinal_splines(feature.at("u_parameters"),parameters),vc=cardinal_splines(feature.at("v_parameters"),parameters);const auto tolerance=feature.at("tolerance").get<double>();
   std::vector<std::vector<gp_Pnt>> crossings(us.size(),std::vector<gp_Pnt>(vs.size()));
@@ -1683,29 +1687,263 @@ occ::handle<Geom_BSplineSurface> gordon_surface(const Json& feature,const Json& 
   for(std::size_t j=0;j<vs.size();++j)for(int n=0;n<=128;++n){const double v=n/128.0,u=scalar(feature.at("u_parameters")[j],parameters,"dimensionless");if(surface->Value(u,v).Distance(vs[j]->Value(v))>tolerance)throw Error("invalid_shape","Gordon surface fails V-network interpolation tolerance");}
   return surface;
 }
-TopoDS_Wire projected_wire(const TopoDS_Wire& source,const TopoDS_Face& target,const gp_Dir& direction) {
-  // Require a unique forward hit over each source edge before asking OCCT to
-  // build the exact section. A target behind the curve is never selected.
-  for(TopExp_Explorer it(source,TopAbs_EDGE);it.More();it.Next()){BRepAdaptor_Curve edge(TopoDS::Edge(it.Current()));for(int n=0;n<=64;++n){const auto p=edge.Value(edge.FirstParameter()+(edge.LastParameter()-edge.FirstParameter())*n/64.0);IntCurvesFace_ShapeIntersector ray;ray.Load(target,1e-7);ray.Perform(gp_Lin(p,direction),-1e-7,1e9);if(!ray.IsDone()||ray.NbPnt()!=1)throw Error(ray.NbPnt()>1?"selection_ambiguous":"selection_missing","Projection needs exactly one forward target intersection along every source edge",{{"sample_index",n},{"intersection_count",ray.NbPnt()}});}}
-  BRepProj_Projection projection(source,target,direction);if(!projection.IsDone())throw Error("kernel_failure","Exact curved-surface projection failed");projection.Init();if(!projection.More())throw Error("selection_missing","Projection misses its target");const auto wire=projection.Current();projection.Next();if(projection.More())throw Error("selection_ambiguous","Projection produces multiple wires on the selected face");
-  // The boundary endpoints must be represented; projection is not an implicit
-  // trimming/clipping operation. Closedness must also survive the projection.
-  if(source.Closed()!=wire.Closed())throw Error("invalid_shape","Projection changed wire closure");check_curve_shape(wire);return wire;
+struct NetworkCurve {
+  Spline curve;
+  bool collapsed=false,closed=false;
+  gp_Pnt point;
+};
+NetworkCurve load_network_curve(const Json& value,const Json& parameters) {
+  if(value.at("type")=="point")return {{},true,false,parameter_point(value.at("point"),parameters)};
+  const auto wire=curve_wire(value.at("type")=="wire"?value.at("segments"):Json::array({value}),parameters).wire;
+  GeomConvert_CompCurveToBSplineCurve joined;
+  for(BRepTools_WireExplorer edges(wire);edges.More();edges.Next()) {
+    double first,last;const auto curve=BRep_Tool::Curve(edges.Current(),first,last);
+    occ::handle<Geom_TrimmedCurve> piece=new Geom_TrimmedCurve(curve,first,last);
+    if(edges.Current().Orientation()==TopAbs_REVERSED)piece->Reverse();
+    if(!joined.Add(piece,1e-9,true,true,0))throw Error("invalid_shape","Gordon wire cannot be joined without changing its geometry");
+  }
+  auto spline=joined.BSplineCurve();if(spline.IsNull())throw Error("invalid_shape","Empty Gordon curve");
+  if(spline->IsPeriodic())spline->SetNotPeriodic();
+  auto knots=spline->Knots();BSplCLib::Reparametrize(0.0,1.0,knots);spline->SetKnots(knots);
+  return {spline,false,spline->Value(0).Distance(spline->Value(1))<1e-7,{}};
+}
+struct NetworkCrossing {double u,v;gp_Pnt point;};
+NetworkCrossing network_crossing(const NetworkCurve& a,const NetworkCurve& b,double tolerance,std::size_t i,std::size_t j) {
+  std::vector<NetworkCrossing> hits;
+  const auto add=[&](double u,double v) {
+    const auto p=a.collapsed?a.point:a.curve->Value(u),q=b.collapsed?b.point:b.curve->Value(v);
+    if(p.Distance(q)>tolerance)return;
+    if(a.closed&&std::abs(u-1)<1e-8)u=0;if(b.closed&&std::abs(v-1)<1e-8)v=0;
+    for(const auto& hit:hits)if(std::abs(u-hit.u)<1e-7&&std::abs(v-hit.v)<1e-7)return;
+    hits.push_back({u,v,gp_Pnt((p.XYZ()+q.XYZ())*.5)});
+  };
+  const auto project=[&](const gp_Pnt& point,const NetworkCurve& curve,const auto& accept) {
+    if(curve.collapsed){if(point.Distance(curve.point)<=tolerance)accept(0.0);return;}
+    for(double t:{0.0,1.0})if(point.Distance(curve.curve->Value(t))<=tolerance)accept(t);
+    GeomAPI_ProjectPointOnCurve projection(point,curve.curve,0,1);
+    for(int k=1;k<=projection.NbPoints();++k)if(projection.Distance(k)<=tolerance)accept(projection.Parameter(k));
+  };
+  if(a.collapsed)project(a.point,b,[&](double v){add(0,v);});
+  else if(b.collapsed)project(b.point,a,[&](double u){add(u,0);});
+  else {
+    GeomAPI_ExtremaCurveCurve intersections(a.curve,b.curve,0,1,0,1);
+    if(intersections.IsParallel())throw Error("selection_ambiguous","Gordon curves overlap or have no isolated crossing",{{"u_curve_index",i},{"v_curve_index",j}});
+    for(int k=1;k<=intersections.NbExtrema();++k)if(intersections.Distance(k)<=tolerance){double u,v;intersections.Parameters(k,u,v);add(u,v);}
+    for(double u:{0.0,1.0})project(a.curve->Value(u),b,[&](double v){add(u,v);});
+    for(double v:{0.0,1.0})project(b.curve->Value(v),a,[&](double u){add(u,v);});
+  }
+  if(hits.size()!=1)throw Error(hits.empty()?"invalid_model":"selection_ambiguous","Gordon curves need one isolated geometric crossing",{{"u_curve_index",i},{"v_curve_index",j},{"crossing_count",hits.size()}});
+  return hits.front();
+}
+// Monotone cubic parameter maps retain curve direction and every crossing.
+// Harmonic slopes avoid overshoot; closed curves share the seam derivative.
+struct NetworkMap {
+  NetworkCurve source;
+  std::vector<double> stations,native,slopes;
+  std::size_t span(double t,int side=1)const {
+    auto p=side<0?std::lower_bound(stations.begin(),stations.end(),t):std::upper_bound(stations.begin(),stations.end(),t);
+    return std::clamp<std::ptrdiff_t>(p-stations.begin()-1,0,static_cast<std::ptrdiff_t>(stations.size()-2));
+  }
+  std::array<double,3> parameter(double t,int side=1)const {
+    const auto i=span(t,side);const double h=stations[i+1]-stations[i],x=(t-stations[i])/h;
+    const double y0=native[i],y1=native[i+1],m0=h*slopes[i],m1=h*slopes[i+1];
+    const double a=2*y0-2*y1+m0+m1,b=-3*y0+3*y1-2*m0-m1;
+    return {((a*x+b)*x+m0)*x+y0,(3*a*x*x+2*b*x+m0)/h,(6*a*x+2*b)/(h*h)};
+  }
+  double inverse(double u)const {double lo=0,hi=1;for(int n=0;n<55;++n){const auto mid=(lo+hi)*.5;if(parameter(mid)[0]<u)lo=mid;else hi=mid;}return (lo+hi)*.5;}
+  void evaluate(double t,int side,gp_Pnt& point,gp_Vec& first,gp_Vec& second)const {
+    if(source.collapsed){point=source.point;first=gp_Vec();second=gp_Vec();return;}
+    auto p=parameter(t,side);double u=p[0];
+    if(source.closed){u-=std::floor(u);if(u<1e-12&&side<0)u=1;}
+    else u=std::clamp(u,0.0,1.0);
+    int interval=1;
+    for(int k=2;k<source.curve->NbKnots();++k)if(side<0?source.curve->Knot(k)<u-1e-12:source.curve->Knot(k)<=u+1e-12)interval=k;
+    gp_Vec d1,d2;source.curve->LocalD2(u,interval,interval+1,point,d1,d2);
+    first=d1*p[1];second=d2*(p[1]*p[1])+d1*p[2];
+  }
+  gp_Pnt value(double t)const {gp_Pnt p;gp_Vec d1,d2;evaluate(t,1,p,d1,d2);return p;}
+};
+NetworkMap make_network_map(NetworkCurve curve,std::vector<double> native,const std::vector<double>& stations) {
+  if(curve.collapsed)native=stations;
+  else {
+    const auto orient=[&](bool reverse)->std::vector<double>{auto values=native;for(auto& v:values)if(reverse)v=1-v;
+      if(curve.closed){const auto start=values.front();for(std::size_t k=1;k<values.size();++k)if(values[k]<=start+1e-8)values[k]+=1;values.push_back(start+1);}
+      for(std::size_t k=1;k<values.size();++k)if(values[k]-values[k-1]<1e-8)return {};
+      if(!curve.closed&&(std::abs(values.front())>1e-7||std::abs(values.back()-1)>1e-7))return {};
+      return values;};
+    auto oriented=orient(false);if(oriented.empty()){oriented=orient(true);if(!oriented.empty())curve.curve->Reverse();}
+    if(oriented.empty())throw Error("invalid_model","Gordon crossings must cover and monotonically order each whole curve");native=std::move(oriented);
+  }
+  if(native.size()!=stations.size())throw Error("invalid_model","Gordon station count differs from the closed or open curve network");
+  std::vector<double> slopes(native.size()),secants;
+  for(std::size_t i=1;i<native.size();++i)secants.push_back((native[i]-native[i-1])/(stations[i]-stations[i-1]));
+  const auto harmonic=[](double a,double b){return 2*a*b/(a+b);};
+  slopes.front()=secants.front();slopes.back()=secants.back();
+  for(std::size_t i=1;i+1<native.size();++i)slopes[i]=harmonic(secants[i-1],secants[i]);
+  if(curve.closed)slopes.front()=slopes.back()=harmonic(secants.front(),secants.back());
+  return {curve,stations,native,slopes};
+}
+Spline quintic_segments(const std::vector<double>& breaks,const std::vector<std::array<gp_Pnt,6>>& pieces) {
+  NCollection_Array1<gp_Pnt> poles(1,static_cast<int>(pieces.size()*5+1));NCollection_Array1<double> knots(1,static_cast<int>(breaks.size()));NCollection_Array1<int> mults(1,static_cast<int>(breaks.size()));
+  int pole=1;for(std::size_t i=0;i<pieces.size();++i)for(int j=0;j<(i+1==pieces.size()?6:5);++j)poles.SetValue(pole++,pieces[i][j]);
+  for(std::size_t i=0;i<breaks.size();++i){knots.SetValue(static_cast<int>(i+1),breaks[i]);mults.SetValue(static_cast<int>(i+1),i==0||i+1==breaks.size()?6:5);}
+  return new Geom_BSplineCurve(poles,knots,mults,5);
+}
+std::array<gp_Pnt,6> network_hermite(const NetworkMap& curve,double a,double b) {
+  gp_Pnt p,q;gp_Vec d1,d2,e1,e2;curve.evaluate(a,1,p,d1,d2);curve.evaluate(b,-1,q,e1,e2);const auto h=b-a;
+  return {p,p.Translated(d1*(h/5)),p.Translated(d1*(2*h/5)+d2*(h*h/20)),q.Translated(-e1*(2*h/5)+e2*(h*h/20)),q.Translated(-e1*(h/5)),q};
+}
+std::vector<Spline> approximate_network(const std::vector<NetworkMap>& family,double tolerance) {
+  std::vector<double> initial=family.front().stations;
+  for(const auto& c:family)if(!c.source.collapsed)for(int i=1;i<=c.source.curve->NbKnots();++i)for(int period=0;period<=1;++period) {
+    const auto u=c.source.curve->Knot(i)+period;if(u>c.native.front()+1e-10&&u<c.native.back()-1e-10)initial.push_back(c.inverse(u));
+  }
+  std::sort(initial.begin(),initial.end());initial.erase(std::unique(initial.begin(),initial.end(),[](double a,double b){return std::abs(a-b)<1e-10;}),initial.end());
+  std::vector<double> breaks{0};std::vector<std::vector<std::array<gp_Pnt,6>>> pieces(family.size());
+  const auto refine=[&](auto&& self,double a,double b,int depth)->void {
+    std::vector<std::array<gp_Pnt,6>> trial;bool acceptable=true;
+    for(const auto& c:family){auto p=network_hermite(c,a,b);trial.push_back(p);
+      NCollection_Array1<gp_Pnt> poles(1,6);for(int k=0;k<6;++k)poles.SetValue(k+1,p[k]);Geom_BezierCurve segment(poles);
+      for(int k=1;k<16;++k){const double fraction=k/16.0;if(segment.Value(fraction).Distance(c.value(a+(b-a)*fraction))>tolerance*.125){acceptable=false;break;}}
+    }
+    if(!acceptable){if(depth>=18||b-a<1e-10)throw Error("limit_exceeded","Gordon reparameterization cannot meet the requested tolerance within refinement bounds");const auto mid=(a+b)*.5;self(self,a,mid,depth+1);self(self,mid,b,depth+1);return;}
+    if(breaks.size()>=512)throw Error("limit_exceeded","Gordon reparameterization exceeds 512 distinct knots per direction");
+    breaks.push_back(b);for(std::size_t i=0;i<trial.size();++i)pieces[i].push_back(trial[i]);
+  };
+  for(std::size_t i=1;i<initial.size();++i)refine(refine,initial[i-1],initial[i],0);
+  std::vector<Spline> result;for(const auto& p:pieces)result.push_back(quintic_segments(breaks,p));return result;
+}
+std::vector<Spline> local_cardinal_splines(const std::vector<double>& stations) {
+  if(stations.size()==2){std::vector<Spline> result;for(int i=0;i<2;++i){NCollection_Array1<gp_Pnt> poles(1,2);poles.SetValue(1,gp_Pnt(i==0?1:0,0,0));poles.SetValue(2,gp_Pnt(i==1?1:0,0,0));NCollection_Array1<double> knots(1,2);knots.SetValue(1,0);knots.SetValue(2,1);NCollection_Array1<int> mults(1,2);mults.Init(2);result.push_back(new Geom_BSplineCurve(poles,knots,mults,1));}return result;}
+  // Quintic smoothstep cardinal functions form a partition of unity with zero
+  // first/second derivatives at stations. Unlike global Lagrange interpolation,
+  // they stay bounded and reconcile closed seams without an arbitrary cut crease.
+  std::vector<Spline> result;
+  for(std::size_t i=0;i<stations.size();++i){std::vector<std::array<gp_Pnt,6>> pieces;
+    for(std::size_t k=1;k<stations.size();++k){const gp_Pnt a(i==k-1?1:0,0,0),b(i==k?1:0,0,0);pieces.push_back({a,a,a,b,b,b});}
+    result.push_back(quintic_segments(stations,pieces));
+  }return result;
+}
+occ::handle<Geom_BSplineSurface> gordon_surface(const Json& feature,const Json& parameters) {
+  const auto tolerance=feature.at("tolerance").get<double>();
+  std::vector<NetworkCurve> us,vs;for(const auto& c:feature.at("u_curves"))us.push_back(load_network_curve(c,parameters));for(const auto& c:feature.at("v_curves"))vs.push_back(load_network_curve(c,parameters));
+  // Explicit stations must not bypass the same isolated-crossing contract used
+  // by reparameterized networks, even when their polynomial bases already agree.
+  std::vector<std::vector<NetworkCrossing>> crossings(us.size(),std::vector<NetworkCrossing>(vs.size()));
+  for(std::size_t i=0;i<us.size();++i)for(std::size_t j=0;j<vs.size();++j)crossings[i][j]=network_crossing(us[i],vs[j],tolerance,i,j);
+  // Keep exact polynomial interpolation whenever the original compatible basis
+  // contract applies. General networks use bounded native curve composition.
+  bool exact=feature.contains("u_parameters")&&feature.contains("v_parameters");
+  for(const auto* axis:{"u_curves","v_curves"})for(const auto& c:feature.at(axis))if(c.at("type")=="point"||c.at("type")=="wire"||c.at("type")=="arc"||c.at("type")=="tangent_arc"||c.contains("weights")||c.value("periodic",false))exact=false;
+  if(exact&&feature.at("u_parameters").size()==feature.at("v_curves").size()&&feature.at("v_parameters").size()==feature.at("u_curves").size()) {
+    std::vector<Spline> us,vs;for(const auto& c:feature.at("u_curves"))us.push_back(network_curve(c,parameters));for(const auto& c:feature.at("v_curves"))vs.push_back(network_curve(c,parameters));
+    for(std::size_t i=0;i<us.size();++i)for(std::size_t j=0;j<vs.size();++j)if(us[i]->Value(scalar(feature.at("u_parameters")[j],parameters,"dimensionless")).Distance(vs[j]->Value(scalar(feature.at("v_parameters")[i],parameters,"dimensionless")))>tolerance)exact=false;
+    if(exact)return polynomial_gordon_surface(feature,parameters);
+  }
+  const auto closure=[](const std::vector<NetworkCurve>& curves){std::optional<bool> closed;for(const auto& c:curves)if(!c.collapsed){if(closed&&*closed!=c.closed)throw Error("invalid_model","Gordon family mixes open and closed curves");closed=c.closed;}return closed.value_or(false);};
+  const bool closed_u=closure(us),closed_v=closure(vs);
+  if(closed_u&&std::any_of(vs.begin(),vs.end(),[](const auto& c){return c.collapsed;}))throw Error("invalid_model","A cyclic Gordon family cannot contain collapsed transverse profiles");
+  if(closed_v&&std::any_of(us.begin(),us.end(),[](const auto& c){return c.collapsed;}))throw Error("invalid_model","A cyclic Gordon family cannot contain collapsed transverse profiles");
+  const auto stations=[&](const char* key,std::size_t count){std::vector<double> result;if(feature.contains(key)){for(const auto& x:feature.at(key))result.push_back(scalar(x,parameters,"dimensionless"));if(result.size()!=count)throw Error("invalid_model","Gordon station count must include the implicit closing seam only for closed profiles");}else for(std::size_t i=0;i<count;++i)result.push_back(static_cast<double>(i)/(count-1));return result;};
+  const auto u=stations("u_parameters",vs.size()+(closed_u?1:0)),v=stations("v_parameters",us.size()+(closed_v?1:0));
+  std::vector<NetworkMap> um,vm;
+  for(std::size_t i=0;i<us.size();++i){std::vector<double> native;for(const auto& c:crossings[i])native.push_back(c.u);um.push_back(make_network_map(us[i],native,u));}
+  for(std::size_t j=0;j<vs.size();++j){std::vector<double> native;for(const auto& row:crossings)native.push_back(row[j].v);vm.push_back(make_network_map(vs[j],native,v));}
+  if(closed_u){vm.push_back(vm.front());for(auto& row:crossings)row.push_back(row.front());}
+  if(closed_v){um.push_back(um.front());crossings.push_back(crossings.front());}
+  auto up=approximate_network(um,tolerance),vp=approximate_network(vm,tolerance),uc=local_cardinal_splines(u),vc=local_cardinal_splines(v);
+  compatible_network_basis(up,uc);compatible_network_basis(vp,vc);const auto nu=up.front()->NbPoles(),nv=vp.front()->NbPoles();
+  if(static_cast<std::size_t>(nu)*nv>65536)throw Error("limit_exceeded","Gordon surface exceeds 65536 control points");
+  NCollection_Array2<gp_Pnt> poles(1,nu,1,nv);
+  for(int k=1;k<=nu;++k)for(int l=1;l<=nv;++l){gp_XYZ point(0,0,0);for(std::size_t i=0;i<up.size();++i)point+=up[i]->Pole(k).XYZ()*vc[i]->Pole(l).X();for(std::size_t j=0;j<vp.size();++j)point+=vp[j]->Pole(l).XYZ()*uc[j]->Pole(k).X();for(std::size_t i=0;i<up.size();++i)for(std::size_t j=0;j<vp.size();++j)point-=crossings[i][j].point.XYZ()*(uc[j]->Pole(k).X()*vc[i]->Pole(l).X());poles.SetValue(k,l,gp_Pnt(point));}
+  auto surface=occ::handle<Geom_BSplineSurface>(new Geom_BSplineSurface(poles,up.front()->Knots(),vp.front()->Knots(),up.front()->Multiplicities(),vp.front()->Multiplicities(),up.front()->Degree(),vp.front()->Degree()));
+  const auto verify=[&](const std::vector<NetworkMap>& family,const Spline& basis,const std::vector<double>& transverse,bool along_u) {
+    for(std::size_t i=0;i<family.size();++i)for(int interval=1;interval<basis->NbKnots();++interval)for(int n=0;n<=16;++n){const double t=basis->Knot(interval)+(basis->Knot(interval+1)-basis->Knot(interval))*n/16.0;const auto expected=family[i].value(t),actual=along_u?surface->Value(t,transverse[i]):surface->Value(transverse[i],t);if(expected.Distance(actual)>tolerance)throw Error("invalid_shape","Gordon surface fails original curve interpolation tolerance",{{"curve_index",i},{"distance_mm",expected.Distance(actual)}});}
+  };
+  verify(um,up.front(),v,true);verify(vm,vp.front(),u,false);return surface;
+}
+
+TopoDS_Wire projected_wire(const TopoDS_Wire& source,const TopoDS_Face& target,const gp_Dir& direction,const std::string& branch) {
+  // Branch choice is an authored forward-ray rule, never a nearest-shape guess.
+  // Verify the chosen sheet over every source edge; a branch switch, partial
+  // projection or seam split must still resolve to one complete exact wire.
+  std::vector<gp_Pnt> witnesses;
+  for(TopExp_Explorer it(source,TopAbs_EDGE);it.More();it.Next()) {
+    BRepAdaptor_Curve edge(TopoDS::Edge(it.Current()));
+    for(int n=0;n<=64;++n) {
+      const auto p=edge.Value(edge.FirstParameter()+(edge.LastParameter()-edge.FirstParameter())*n/64.0);
+      IntCurvesFace_ShapeIntersector ray;ray.Load(target,1e-7);ray.Perform(gp_Lin(p,direction),-1e-7,1e9);
+      if(!ray.IsDone()||ray.NbPnt()==0)throw Error("selection_missing","Projection misses its forward target",{{"sample_index",n}});
+      if(branch=="unique"&&ray.NbPnt()!=1)throw Error("selection_ambiguous","Projection needs exactly one forward target intersection; select nearest or farthest explicitly",{{"sample_index",n},{"intersection_count",ray.NbPnt()}});
+      int selected=1;
+      for(int i=2;i<=ray.NbPnt();++i)if(branch=="farthest"?ray.WParameter(i)>ray.WParameter(selected):ray.WParameter(i)<ray.WParameter(selected))selected=i;
+      BRepAdaptor_Surface support(target);gp_Pnt hit;gp_Vec du,dv;support.D1(ray.UParameter(selected),ray.VParameter(selected),hit,du,dv);const auto normal=du.Crossed(dv);
+      if(normal.Magnitude()<1e-12||std::abs(normal.Dot(gp_Vec(direction)))<=normal.Magnitude()*1e-8)throw Error("selection_ambiguous","Projection branch has a tangent or singular target intersection",{{"sample_index",n}});
+      witnesses.push_back(ray.Pnt(selected));
+    }
+  }
+  BRepProj_Projection projection(source,target,direction);
+  if(!projection.IsDone())throw Error("kernel_failure","Exact curved-surface projection failed");
+  std::vector<TopoDS_Wire> matches;std::size_t candidates=0;
+  for(projection.Init();projection.More();projection.Next()) {
+    if(++candidates>64)throw Error("limit_exceeded","Projection exceeds 64 candidate wires");
+    const auto wire=projection.Current();bool selected=true;
+    for(const auto& point:witnesses) {
+      BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(point).Vertex(),wire);
+      if(!distance.IsDone()||distance.Value()>1e-6){selected=false;break;}
+    }
+    if(selected)matches.push_back(wire);
+  }
+  if(matches.empty())throw Error("selection_missing","No complete projected wire satisfies the selected forward branch");
+  if(matches.size()!=1)throw Error("selection_ambiguous","More than one exact projected wire satisfies the selected forward branch");
+  const auto wire=matches.front();
+  if(source.Closed()!=wire.Closed())throw Error("invalid_shape","Projection changed wire closure");
+  check_curve_shape(wire);return wire;
 }
 TopoDS_Shape project_geometry(const Json& feature,const Json& parameters,const FeatureGeometry& source,const FeatureGeometry& target) {
   const auto original_face=TopoDS::Face(target.faces(select_faces(target,feature.at("faces"),parameters,text_field(feature,"target")).front()));
   BRepBuilderAPI_Copy target_copy(original_face),source_copy(source.shape);
   auto face=TopoDS::Face(target_copy.Shape());face.Orientation(original_face.Orientation());const auto direction=parameter_direction(feature.at("direction"),parameters);const bool region=feature.at("type")=="surface_project";
   if(region&&source.faces.Extent()>1)throw Error("invalid_model","Surface projection accepts one sketch region at a time");
-  TopoDS_Compound curves;BRep_Builder builder;builder.MakeCompound(curves);BRepBuilderAPI_MakeFace projected;
+  TopoDS_Compound curves;BRep_Builder builder;builder.MakeCompound(curves);BRepBuilderAPI_MakeFace projected;std::vector<TopoDS_Wire> projected_boundaries;
   ShapeMap wires;TopExp::MapShapes(source_copy.Shape(),TopAbs_WIRE,wires);if(wires.IsEmpty())throw Error("invalid_model","Projection input must contain exact wires");
-  for(int i=1;i<=wires.Extent();++i){const auto wire=projected_wire(TopoDS::Wire(wires(i)),face,direction);if(region){
+  for(int i=1;i<=wires.Extent();++i){const auto wire=projected_wire(TopoDS::Wire(wires(i)),face,direction,feature.value("branch",std::string("unique")));if(region){
+      projected_boundaries.push_back(wire);
       if(!wire.Closed())throw Error("invalid_model","Surface projection needs a closed boundary; use curve_project for open curves");
+      if(source.faces.Extent()==1)continue;
       BRepBuilderAPI_MakeFace contour(BRep_Tool::Surface(face),wire,true);if(!contour.IsDone())throw Error("invalid_shape","Projected wire has no valid bounded surface region");
       if(i==1)projected=contour;else projected.Add(TopoDS::Wire(BRepTools::OuterWire(contour.Face()).Reversed()));
     }else builder.Add(curves,wire);}
 
   if(!region)return curves;
+  if(source.faces.Extent()==1) {
+    // A closed outline crossing a periodic support seam cannot be represented by
+    // naively stitching its separate pcurve intervals. Intersect the exact
+    // forward prism of the authored sketch region with the original target face.
+    // OCCT then creates the seam topology, including holes, without a repair pass.
+    Bnd_Box bounds;BRepBndLib::AddOptimal(source_copy.Shape(),bounds,false,false);BRepBndLib::AddOptimal(face,bounds,false,false);
+    double x0,y0,z0,x1,y1,z1;bounds.Get(x0,y0,z0,x1,y1,z1);
+    const double reach=2*std::hypot(x1-x0,y1-y0,z1-z0)+1;
+    BRepPrimAPI_MakePrism prism(source_copy.Shape(),gp_Vec(direction)*reach,true);
+    if(!prism.IsDone())throw Error("kernel_failure","Projected sketch prism construction failed");
+    const auto partition=extrusion_boolean<BRepAlgoAPI_Common>(prism.Shape(),face);
+    // Boolean partitioning may retain a cut at the target's parameter seam.
+    // Only merge adjacent faces on the same exact support; no edge fitting or
+    // B-spline concatenation is enabled, and input geometry remains private.
+    ShapeUpgrade_UnifySameDomain domains(partition,false,true,false);domains.SetSafeInputMode(true);domains.SetLinearTolerance(1e-9);domains.SetAngularTolerance(1e-12);domains.Build();
+    const auto clipped=domains.Shape();
+    std::vector<TopoDS_Face> candidates;
+    for(TopExp_Explorer faces(clipped,TopAbs_FACE);faces.More();faces.Next()) {
+      const auto candidate=TopoDS::Face(faces.Current());bool matches=true;
+      for(const auto& boundary:projected_boundaries)for(TopExp_Explorer edges(boundary,TopAbs_EDGE);edges.More()&&matches;edges.Next()) {
+        BRepAdaptor_Curve edge(TopoDS::Edge(edges.Current()));
+        for(int n=0;n<=16;++n){const auto p=edge.Value(edge.FirstParameter()+(edge.LastParameter()-edge.FirstParameter())*n/16.0);BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(),candidate);if(!distance.IsDone()||distance.Value()>1e-6){matches=false;break;}}
+      }
+      if(matches)candidates.push_back(candidate);
+    }
+    if(candidates.size()!=1)throw Error(candidates.empty()?"selection_missing":"selection_ambiguous","Projected sketch region does not resolve to one complete face on the selected branch");
+    check_surface_shape(candidates.front());require_surface_containment(face,candidates.front());return candidates.front();
+  }
   if(!projected.IsDone())throw Error("kernel_failure","Projected surface boundary construction failed");auto result=projected.Face();if(face.Orientation()==TopAbs_REVERSED)result.Reverse();check_surface_shape(result);require_surface_containment(face,result);return result;
 }
 
