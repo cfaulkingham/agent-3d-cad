@@ -99,9 +99,29 @@ optional `holes` is an array of disjoint closed segment arrays. Sweep paths can
 use the same wire form in world 3D coordinates; the first tangent must follow
 the sketch normal. Open splines accept paired start/end tangent directions;
 periodic splines close implicitly without repeating their first point. Loft
-sections must have a single boundary. `circular_pattern` repeats an input about
+sections support holes and endpoint vertices; multiple holes require explicit
+correspondence. See PARITY_SOLIDS.md before supplying that correspondence.
+`circular_pattern` repeats an input about
 an `axis` with `count` and signed step `angle_deg`; four copies at 90 degrees
 form a full ring. Patterns keep distinct solids; fuse explicitly when needed.
+
+Use native `scale` for uniform/affine scaling, `draft` for qualified existing
+faces with a neutral plane, and `twist_extrude` for signed twisted material.
+Asymmetric/angle chamfers require an explicit reference side. Read the discovered
+schemas and PARITY_SOLIDS.md for the exact controls and geometric limits.
+Parameters support dimension-checked trig/root/conditional expressions and
+parameter-driven pattern counts; use PARAMETRIC_EXPRESSIONS.md rather than
+executing caller code or calculating every relationship outside the model.
+
+`curve_helix` preserves a declared frame, radius, pitch, turns and handedness.
+Rational Bezier weights remain editable intent. `curve_tangent_line` and
+`curve_tangent_arc` construct from a selected arc-length station and its tangent.
+Use `cad_query kind:"curve"` for native arc-length points, oriented tangents and
+curvature; `curve_trim` retains exact segments between normalized fractions.
+`curve_extract` requires a unique geometric edge rule. `sketch_hull`,
+`sketch_trace` and `sketch_full_round` produce editable planar regions for later
+extrusion. Check PARITY_CURVES.md for input bounds; these helpers do not imply a
+general sketch constraint solver.
 
 Use `shell` with signed `thickness` and explicit geometric `faces` selectors;
 `faces: []` creates a sealed cavity. `offset` independently offsets source
@@ -142,12 +162,16 @@ bend deduction is `null`. Missing/ambiguous references and material collisions
 fail instead of guessing. See `SHEET_METAL.md` and `PARITY_SHEET_METAL.md`.
 
 Use `surface_bezier`/`surface_bspline` for exact world-space rational patches,
-`surface_trim` for rectangular UV trimming, and `surface_shell` for connected
+`surface_trim` for exact rectangular or contour/holed UV trimming, and `surface_shell` for connected
 manifold sewing with an explicit closure claim. Surface outputs have area and
 zero solid volume. `surface_solid` explicitly materializes a closed shell;
 `thicken` requires an open patch. Solid creation is required for assembly or
-manufacturing material. Arbitrary trim wires and curved projection remain
-unsupported. See SURFACES.md.
+manufacturing material. `surface_fill` supports qualified C0/G1/G2 boundary
+constraints; `surface_gordon` interpolates compatible polynomial curve networks.
+`curve_project`/`surface_project` project onto a uniquely selected curved face
+in a declared direction, rejecting ambiguous intersections. Surface STEP import
+uses explicit `geometry:"surface"` and retains zero material volume. See
+SURFACES.md and PARITY_SURFACES.md for construction and projection limits.
 
 For an assembly, create source solid features, then an `assembly` feature with
 named `parts`: each part has `id`, earlier solid or assembly `input`, and optional `placement`

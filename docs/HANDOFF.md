@@ -19,6 +19,11 @@ actual-call modeling schema audits plus artifact SDK/flow schema validation on
 each native platform. YAML parsing and referenced-script inventory pass; the
 expanded recipe is not yet executed in CI.
 
+Corrected stale packaged native-cad instructions that still limited lofts to one
+boundary and rejected contour trims/curved projection. The skill now documents
+the tested solid, expression and curve operations and references their bounded
+contracts. Every skill guide reference is included in the curated bundle.
+
 Original-scope completion audit at `2cdf20d` reopened concrete native workflows:
 constrained point/common tangency and fixed-radius arcs, inverted full-round and
 general curved hull inputs; differently parameterized/rational/closed Gordon
