@@ -47,6 +47,16 @@ full conformance including the native slicer fixture passed **893 checks**.
 Assertions, tolerances, catalog and worker budgets remain unchanged. Executed
 source, binary/archive hashes and evidence locations are recorded in HANDOFF.
 
+The continuation audit at ledger `465e937` additionally passed **110 final-package
+resource-delivery checks across 10 files**, including independent byte decoding,
+restart/edit persistence and original-export deletion. Actual host save remains
+unverified. GitHub confirms the tested source is unpublished and has zero workflow
+runs; branch publication for CI awaits approval. Docker's configured socket is
+absent and its restart question remains pending. The local signing query reports
+zero valid identities. Installed ChatGPT app metadata combines the ChatGPT name
+with `com.openai.codex`; the intended acceptance target is being clarified.
+These are external prerequisites, not missing native acceptance evidence.
+
 Numerical integration required independent corrections. `450656f` selects
 rational quadrature per support face; `6d82d1f` corrects exact planar polygon
 moments, and `fc25da3` conditions rational first moments away from symmetry

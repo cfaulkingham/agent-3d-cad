@@ -9,6 +9,26 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
+Continuation audit at ledger `465e937`: the final packaged binary passed **110
+additional resource-delivery checks across 10 files** (STEP, STL, 3MF/layout,
+PDF, SVG and four DXFs). Independently decoded bytes match native outputs after
+fresh-process restart, a source edit and deletion of the original STEP export;
+malformed URIs are rejected. Evidence is
+`.local/evidence/packaged-download-d359331.json`. This verifies packaged resource
+delivery, not an actual host save/download action. Signature verification passes
+as **ad hoc**, with no TeamIdentifier; the local signing-identity query reports
+zero valid identities. Current Docker context remains `desktop-linux`, whose
+configured daemon socket is absent; the restart question is pending.
+GitHub's commit lookup finds no published `d359331`, and the exact-source
+workflow query returns zero runs. Publishing the tested local branch for the
+five-platform CI is awaiting user approval. The installed app named ChatGPT
+reports `CFBundleName=ChatGPT`, `CFBundleIdentifier=com.openai.codex`, version
+26.707.30751; Claude reports `com.anthropic.claudefordesktop`, version 2.31226.1.
+The intended ChatGPT acceptance target is awaiting clarification; no host
+registration or application update was made during this audit. The app's host
+inventory request did not return and was explicitly cancelled; that observation
+is not evidence that the host itself is unavailable.
+
 The user authorized implementing all comparison workstreams with parallel agents
 and local tested commits, and explicitly selected compact mutation receipts.
 The integration branch is `codex/build123d-gap-closure`, based on `f90033f`;
