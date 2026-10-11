@@ -1,6 +1,6 @@
 # Appearance and saved review views
 
-The viewer's Colors panel sets an opaque default model color and optional
+The viewer's Colors panel sets a default model color and optional
 colors for individual leaf occurrence paths. A part can return to the default
 color, or Reset colors can restore all defaults. These settings affect source
 surfaces and PNG captures. Exact section caps keep their distinct review color.
@@ -20,8 +20,10 @@ Each RGB vector contains exactly three finite numbers in [0,1]. The default
 is `{"default_color":[0.66,0.75,0.80],"parts":[]}`. Up to 1,024 unique overrides
 may name current assembly leaves; hierarchy groups and absent leaves fail.
 A single solid can use the default color and cannot have leaf overrides.
-Fields are closed; alpha, materials, textures and shader/code inputs are not
-part of this contract. Omitted appearance retains the current setting.
+Fields are closed. Optional `material:{opacity,finish}` on the default or a part
+override supplies alpha in [0,1] and `matte`, `satin`, `glossy` or `metal` finish.
+[RENDERING.md](RENDERING.md) defines visual modes, perspective, studio lighting,
+floor/shadows and authored external-file textures. Shader/code inputs are absent. Omitted appearance retains the current setting.
 
 Ready sync and `cad_context` return current appearance and saved presets.
 Revision refresh keeps the default color and prunes overrides for removed

@@ -386,7 +386,7 @@ replay behavior.
 | `cad_artifact_show` | No `document_id`; `review_path`, review `expected_sha256`, optional `view_id` | Verify/reparse and display a frozen artifact in the MCP App; `{view_id,document_id:null,read_only:true,artifact,resource_uri}` |
 | `cad_query` | `revision`, optional `kind`, `feature_id` | Summary, topology or mesh of that revision |
 | `cad_measure` | `revision`, `evaluation_id`, `feature_id`, `query` | Exact source-pose pair distances/angles, clearance/interference, or native planar section curves/material caps; see [measurement](MEASUREMENTS.md) and [section](SECTIONS.md) contracts |
-| `cad_export` | `revision`, `format` (`step`/`stl`/`3mf`), optional `feature_id`, 3MF-only `layout` | Artifact path, bytes, units, identity and bounded download resources; 3MF also returns all plates and layout manifest |
+| `cad_export` | `revision`, `format` (`step`/`stl`/`3mf`/`glb`), optional `feature_id`; 3MF-only `layout`; GLB-only `appearance`, `animation` | Artifact path, bytes, units, identity and bounded download resources; 3MF adds plates/layout; GLB adds source/file hashes, mesh/sample counts and optional sequence identity |
 | `cad_manufacture` | `revision`, optional `feature_id`, `options` | Complete native manufacturing package: editable source, unique leaf STEP/STL/drawings, saved assembly pose, BOM/purchasing data, explicit process assumptions and portable hash manifest; see [manufacturing contract](MANUFACTURING.md) |
 | `cad_fabrication_review` | `revision`, `options`, optional `feature_id` | Hashed native JSON review with explicit process inputs, exact or sampled measurements, unknown unsupported checks and saved-pose clearance/interference; see [review contract](FABRICATION_REVIEW.md) |
 | `cad_gcode_review` | `revision`, absolute plain `.gcode` `path`, `expected_sha256`, `options`, optional `feature_id` | Native stateful static review, unchanged G-code and portable hash ledger; explicit machine/material/initial assumptions and caller CAD association; see [G-code contract](GCODE_REVIEW.md) |
@@ -394,7 +394,7 @@ replay behavior.
 | `cad_slice` | `revision`, `action: plan` with explicit executable/profile hashes, `options`, optional `feature_id`; or `action: run` with `plan_path`, `expected_sha256` | Native bounded installed OrcaSlicer 2.4.2 workflow for one solid; reviewed plan, actual G-code/effective settings, static findings and portable manifest; no printer contact; see [slicing contract](SLICING.md) |
 | `cad_robot_export` | `revision`, `robot: {format, joint_properties, inertials?}`, optional `feature_id` | URDF+SRDF or SDF 1.12 directory with STL meshes, SI joint coordinates, frame ledger and hash manifest; explicit physical inputs required; see [robot contract](ROBOT_EXPORT.md) |
 | `cad_bom` | `revision`, optional assembly `feature_id` (defaults output) | Source-grouped BOM with instance quantities, JSON/CSV artifacts and manifest path |
-| `cad_drawing` | `revision`, optional `drawing` recipe | Native PDF/SVG sheet, per-view DXF, aligned layouts, sections, measured dimensions, tolerances, optional BOM/balloons, saved recipe/manifest paths and bounded download resources |
+| `cad_drawing` | `revision`, optional `drawing` recipe | Native single/multipage PDF/SVG, per-view DXF, ISO A0–A4 sheets, aligned/manual layouts, sections, measured dimensions/hole callouts, optional BOM/balloons, recipe/manifest paths and bounded downloads |
 | `cad_view` | `revision`, optional `feature_id` | Offline HTML path, .view.json path, summary and evaluation identity |
 | `cad_preview` | `expected_revision`, `operations`, optional `feature_id`, `kind` | Draft HTML/data artifacts (`kind: view`, default) or full draft mesh/topology (`kind: mesh`); no commit |
 | `cad_resolve_selection` | Remaining evaluated pick fields | Measurements and available persistent selector |
@@ -403,7 +403,9 @@ replay behavior.
 | `cad_list` | No arguments | Up to 1,000 document IDs and committed HEAD revisions; `truncated` flag |
 | `cad_open` | Optional `document_id`, `view_id` | Open an MCP App; `{view_id, document_id, resource_uri}` |
 | `cad_show` | `document_id`, optional `view_id` | Retarget a workspace view without opening another app |
-| `cad_context` | Optional `view_id` | Validated selection, camera, visibility, presentation, prompt and explicit stale state |
+| `cad_context` | Optional `view_id` | Validated selection, camera, visibility, presentation, appearance/render settings, optional artifact pose, prompt and explicit stale state |
+| `cad_screenshot` | No document ID; optional `view_id`, `timeout_ms` | Actual displayed source/context-qualified PNG image content, path, dimensions, byte count and SHA-256; requires a rendered open viewer |
+| `cad_render` | No top-level document ID; native/external `source`, optional `settings`, `format`, `animation`, `loop`, `inline_image` | Native CPU PNG or native-sequence GIF, source/file hashes, dimensions and bounded image/download delivery; no open viewer required |
 | `cad_viewer` | App-only actions below | Asynchronous view state, mesh chunks, context publication |
 
 `cad_viewer` context accepts optional closed `presentation` settings for a unit
@@ -411,9 +413,17 @@ clipping plane and leaf explosion directions. Ready sync and `cad_context`
 return current settings; omitted input retains them. These view transformations
 preserve source geometry, measurements and topology identity. See
 [PRESENTATION.md](PRESENTATION.md) and [SECTIONS.md](SECTIONS.md) for limits,
-persistence and optional native material caps. Closed opaque RGB `appearance`
-settings and saved review presets are defined in [APPEARANCE.md](APPEARANCE.md).
-They affect review only and never source geometry or material properties.
+persistence and optional native material caps. Closed RGB `appearance` settings
+accept optional visual `material:{opacity,finish}` on the default and each leaf.
+The independent closed `render` object supplies `mode`, `projection`, `lens_mm`,
+surfaces, lighting, background, floor and guide visibility. Modes are `solid`,
+`render`, `xray`, `hidden_line` and `wireframe`; finishes are `matte`, `satin`,
+`glossy` and `metal`. Global surface opacity multiplies authored opacity.
+Ready sync/context return normalized settings; omitted publication fields retain
+current settings. Render/material settings survive reopen and named review
+presets. They affect display without changing exact geometry, selection identity
+or physical material properties. See [APPEARANCE.md](APPEARANCE.md) and
+[RENDERING.md](RENDERING.md) for defaults, bounds and shading semantics.
 
 `cad_viewer action:"sequence"` lists/saves/deletes native source-qualified
 keyframes, persists speed/loop options and seeks a bounded joint/presentation
@@ -522,6 +532,105 @@ hint that is verified against the named revision and rebuilt from the revisions
 when absent (workspaces from older builds) or untrustworthy. IDs are scoped to a document for synchronous mutations and workspace-wide
 for jobs. Without request_id, reread HEAD after an uncertain outcome.
 
+### Source-qualified visual outputs
+
+`cad_screenshot({view_id?,timeout_ms?})` captures the actual open viewer frame.
+`view_id` defaults to `main`; timeout defaults to 15,000 ms and accepts 1–15,000.
+The result includes `capture_id`, `source`, absolute PNG `path`, `sha256`,
+`bytes`, `width`, `height` and `image:{type:"image",mimeType:"image/png",data}`.
+PNG bytes are capped at 2 MiB, dimensions at 4,096 per axis and decoded pixels at
+16 million. Camera, render/material settings, clipping, visibility, notes and
+current native or artifact pose belong to the captured display.
+
+The closed `source` contains `view_id`, `document_id`, `revision`,
+`evaluation_id`, `feature_id`, `review_sha256`, `model_sha256`,
+`pose_model_sha256`, `draft` and `context_sha256`. Native sources carry the
+saved model hash and the displayed candidate pose model hash (equal for
+committed source poses, distinct for changed settled motion). Artifact sources
+carry the review hash and null model/pose/document/revision/feature values. The
+context hash binds the frozen display and visual context, excluding prompt text
+and context timestamps. Changed source/evaluation/pose/presentation fails as
+`stale_capture`; unavailable or unsettled viewers fail as
+`screenshot_unavailable`, with `screenshot_timeout` and `screenshot_busy` for
+bounded waits/admission. MCP continues serving app calls during screenshot waits.
+The bundled app retries an explicit pre-write `workspace_busy` rejection every
+25 ms for at most one second per capture send, checking the unchanged displayed
+frame before each attempt. An uncertain acknowledgment never replays image bytes.
+
+`cad_render` uses bounded native workers without an open viewer. Its `source`
+is either `{document_id,revision,feature_id?}` or
+`{review_path,expected_sha256,configuration?}` for a verified external review.
+The latter hash identifies captured `review.json`; external configuration uses
+robot joints or GLB animation/time. Optional `settings` contains `width`,
+`height`, `camera`, `render`, `presentation`, `appearance` and `hidden_part_ids`.
+The camera is `{yaw,pitch,zoom,pan:[x,y]}`; presentation contains `clip` and
+`explode`. Omitted settings use shared viewport defaults and 1,024×768 pixels.
+Each axis accepts 16–2,048 pixels, with at most four million output pixels.
+
+`format` defaults to `png`, limited to 16 MiB. `format:"gif"` requires a native
+revision and `animation:{view_id,sequence_name,sample_rate_hz?,max_frames?}`;
+`sample_rate_hz` defaults to 15 within 1–60, and GIF `max_frames` defaults to 256
+within 2–256. The saved sequence must match document, revision, feature and model
+hash. It owns clipping/explosion, so GIF settings cannot supply `presentation`.
+Optional `loop` defaults to false and requires GIF. GIF output uses a stable
+RGB 3-3-2 palette, centisecond frame delays, at most 128 million total frame
+pixels and a 64 MiB file. External GIF animation is unsupported.
+
+Both formats return qualified `source`, `format`, absolute `path`, `width`,
+`height`, `bytes`, `sha256` and `method:"native_cpu_rasterizer"`. GIF additionally
+returns `frame_count`, `duration_s`, `loop` and `palette`; its native source adds
+sequence hash/name/rate. Optional image content is returned up to 2 MiB;
+`inline_image:false` or larger files report `image_omitted_reason` as `disabled`
+or `exceeds_inline_limit`. Native outputs attach bounded downloads separately.
+Use `cad_job` for substantial rendering. CPU PNG textures and ASCII text render
+actual authored data; unsupported JPEG textures or glyphs fail explicitly.
+See [RENDERING.md](RENDERING.md) for rendering fidelity and work limits.
+
+`cad_export format:"glb"` writes self-contained GLB 2 from a committed native
+revision, with nested occurrence names/hierarchy, leaf placement, normals,
+visual color/finish/alpha and immutable source metadata. Source millimeters
+convert to meters with CAD Z-up mapped to glTF Y-up; output reports `units:"m"`,
+`source_units:"mm"`, file/source hashes, `mesh_count` and `sample_count`.
+Optional `appearance` is GLB-only and uses the same visual material contract.
+Static output uses the saved source pose. Optional GLB-only `animation` uses the
+saved sequence selector above with default 15 Hz and at most 2,048 samples;
+source qualification is rechecked before sampling. Rigid pose and exploded
+placement become leaf translation/quaternion channels. Clipping fails with
+`unsupported_export_effect`; it is never silently omitted. GLB is capped at
+64 MiB and 1,024 leaves, and remains independent of exact STEP or editable
+feature history. See [RENDERING.md](RENDERING.md).
+
+### Drawing sets and measured hole callouts
+
+`cad_drawing` preserves its default A4 landscape third-angle sheet. ISO `sheet`
+accepts A0–A4; `sheet_orientation` accepts landscape/portrait. `pages` creates
+1–16 explicit sheets, each requiring 1–6 views. Formats and hidden-line choice
+apply to the set; page-local dimensions, balloons and callouts use globally
+unique view IDs, including case-insensitive output names. Pages inherit header,
+sheet, layout, scale, notes, tolerances and BOM defaults. Results add per-page
+sheet/scale/layout/placements, one multipage PDF, numbered SVGs and 1:1 mm DXFs.
+Top-level sheet/scale/layout describe the first page. Single-page defaults remain
+unchanged. Drawing-wide caps are 96 views, 512 dimensions, 64 balloons,
+32 callouts and 115 artifacts.
+
+Views include top/front/right/back/bottom/left/isometric/section and `custom`
+with numeric nonparallel `direction` and `up` vectors. Opposite/custom views use
+`grid` or `manual`; manual views require `cell_mm:[x,y,width,height]` in sheet
+mm from the upper-left corner, with validated margins, footer and nonoverlap.
+Each page retains one common scale.
+
+Each `hole_callouts` item requires `view`, projected `centers`, `radius`,
+`termination:"through"|"blind"` and `label`. Blind calls require `depth`.
+Optional counterbore `{radius,depth}` or countersink `{radius,angle}` is mutually
+exclusive. The kernel verifies complete inward analytic walls, visible entry,
+exact cavity termination/depth and every counted center; projected circles or
+bosses alone cannot establish holes. Thread and fit are bounded explicit caller
+designations, without thread/fit-conformance claims. Results retain measured
+centers, diameter/depth/termination/count, entry-stage geometry and supplied
+labels. Ambiguous geometry or overlapping labels fail atomically. Saved recipes
+retain matching intent for later revision-qualified regeneration. See
+[DRAWINGS.md](DRAWINGS.md) for exact supported geometries, layouts and budgets.
+
 ### External artifact review
 
 `cad_artifact` reviews original STEP/STL/3MF/GLB/DXF/URDF/SDF/SRDF bytes without
@@ -552,7 +661,16 @@ editable native document or grant its display native face/edge selectors.
 `cad_artifact_show` verifies/reparses the package and publishes a frozen live
 view. Its MCP App resource is the same viewer used by `cad_open`; `view_id`
 defaults to `main`. Showing a real native document with `cad_show` restores the
-ordinary native workflow. See [ARTIFACT_REVIEW.md](ARTIFACT_REVIEW.md) for exact
+ordinary native workflow. External authored mesh materials, textures, normals,
+vertex RGBA, DXF text/hatches and robot frame/semantic data retain their declared
+representation. `cad_viewer action:"artifact_pose"` takes the current view and
+evaluation plus `configuration:{joints?,animation?,time_seconds?}` to evaluate
+a transient frozen pose. Robot joints use radians/meters; GLB supports authored
+animation, skinning and morph deformation. Configuration `{}` restores captured
+rest geometry. Sync/context expose `artifact_pose`; source hashes and native HEAD
+remain unchanged, and picks clear when the pose changes. Captured rest bounds
+define the fixed camera frame while displayed bounds describe posed geometry.
+See [ARTIFACT_REVIEW.md](ARTIFACT_REVIEW.md) for exact
 format support, unsupported features, bounds, package lifetime and errors.
 
 ### Geometry, views and previews
@@ -666,7 +784,8 @@ view. Show can initialize a view, but does not cause a host to mount an app;
 call open once when a UI is needed. Show on the same failed document explicitly
 retries its evaluation. Ordinary committed edits need no additional show call.
 
-An artifact view admits only `sync`, `mesh` and `context`. Sync/context carry
+An artifact view admits `sync`, `mesh`, `context`, `capture` and `artifact_pose`.
+Sync/context carry
 `read_only: true`, null `document_id`, `revision` and `feature_id`, plus
 `artifact: {review_sha256,source,summary}`. Context also has `head_revision: null`.
 They expose no editable model; `hidden_part_ids`, `presets`, `annotations` and `sequences` are empty, and
@@ -681,7 +800,8 @@ native topology. Artifact context selections are exactly
 `artifact-1` and `curve-1` expire with that complete review hash; server
 publication checks their membership and the current display under the view lock.
 They cannot be passed to `cad_resolve_selection` as original face/edge picks.
-Camera, prompt, visual clipping and default color remain available. Clipping
+Camera, prompt, visual clipping, default color and render settings remain
+available. `artifact_pose` is separate from native motion/sequence playback. Clipping
 leaves cut surfaces open; no native caps or exact mesh measurements are implied.
 Sync does not continuously reread original external files or portable packages.
 
@@ -704,7 +824,7 @@ The app uses `cad_viewer` with these closed actions:
   read-only result identifiers. See SECTIONS.md.
 - `preset`: `view_id`, `evaluation_id`, `operation` (`list`, `save`, `apply`,
   `delete`), with `name` required except for list. Stores up to 16 current review
-  views containing camera, presentation, visibility and appearance. Save/apply
+  views containing camera, presentation, visibility, appearance and render settings. Save/apply
   require committed geometry; stale evaluations and unknown owners fail. Apply
   clears picks and retires sections only when their plane/explosion changes.
   See APPEARANCE.md.
@@ -715,7 +835,7 @@ The app uses `cad_viewer` with these closed actions:
   coverage limits. Draft or stale view references fail explicitly.
 - `sync`: `view_id`, optional `known_evaluation_id`. Returns `state` (`empty`,
   `loading`, `ready`, `error`), document/revision, and `changed`. Ready state also
-  includes evaluation/feature identity, summary, `presentation`, `appearance`,
+  includes evaluation/feature identity, summary, `presentation`, `appearance`, `render`,
   saved `presets`, qualified camera when available and `hidden_part_ids` (default `[]`), including when `changed` is false; the complete editable model
   is included when the caller's known evaluation differs. Sync starts or observes
   a durable mesh job and does not wait for kernel completion. Publication checks
@@ -728,11 +848,26 @@ The app uses `cad_viewer` with these closed actions:
   chunks before parsing; `next_offset: null` means complete. Every chunk checks
   displayed evaluation and HEAD. A changed view/revision fails explicitly.
 - `context`: `view_id`, `evaluation_id`, `selection` (a complete evaluated pick
-  or null), optional `camera`, `prompt`, `hidden_part_ids` and `presentation`. Camera has finite `yaw`, `pitch`,
+  or null), optional `camera`, `prompt`, `hidden_part_ids`, `presentation`, `appearance` and
+  `render`. Omitted visual settings retain the view's current values. Camera has finite `yaw`, `pitch`,
   `zoom`, and two-element `pan`; angles are radians, pan is in viewport fractions.
   Prompt is bounded to 8,192 UTF-8 bytes. Selection resolution and a final locked
   HEAD/evaluation recheck precede publication. Null clears selection. Omitted
   camera/prompt fields retain prior values only within the same evaluation.
+- `capture`: app-only submission for a pending `cad_screenshot`. Ready sync
+  exposes up to four `capture_requests`, each with `capture_id`, qualified
+  `source` and `max_bytes`. Submit the current `view_id`, `evaluation_id`,
+  `capture_id`, base64 `data` (at most 128 KiB), encoded-character `offset` and
+  `final` boolean. Chunks must be in order; final submission validates bounded
+  PNG pixels/bytes and publishes the capture result. Alternatively submit a
+  bounded `error` string. Native source/context is rechecked for every chunk.
+- `artifact_pose`: `view_id`, current `evaluation_id` and closed `configuration`.
+  Accepts robot `joints` or GLB `animation`/`time_seconds`, with source-format and
+  declared-limit checks. Publishes a new frozen artifact evaluation without
+  mutating review bytes. The live schema bounds 1,024 joint properties,
+  magnitudes at 1e6, animation index at 255 and time at 1e9; the headless input
+  schema limits 128 joint properties, animation index to 63 and time to 3,600.
+  Source-specific declared limits apply to both. See [ARTIFACT_REVIEW.md](ARTIFACT_REVIEW.md).
 - `motion_preview`: `view_id`, `evaluation_id`, optional `assembly_id`, and either `pose_id` or
   `values: [{mate_id,coordinate,value},...]`. Numeric values must specify every
   independent coordinate of the chosen definition exactly once. The target must
@@ -797,7 +932,8 @@ the evaluation-qualified selection context.
 
 `cad_context` returns view/document identity, displayed or selected revision and
 evaluation, current `head_revision`, `stale`, `selection`, `hidden_part_ids` and
-`presentation`. Hidden IDs and presentation settings describe the current display even if a saved pick is
+`presentation`, `appearance` and `render`. Artifact views also expose
+`artifact_pose`. Hidden IDs and visual settings describe the current display even if a saved pick is
 stale. Validated geometry
 and a selector, when available, appear in `resolved_selection`. Saved camera,
 prompt and timestamp are optional. Old context is retained with `stale: true`
@@ -1054,7 +1190,8 @@ draft_selection, already_exists, not_found, revision_conflict, request_conflict,
 kernel_mismatch, artifact_invalid, artifact_mismatch, artifact_source_missing,
 artifact_source_mismatch, read_only_artifact, workspace_busy, queue_full, job_timeout, job_cancelled,
 job_interrupted, job_record_corrupt, worker_failed, memory_limit, export_failed,
-slicer_failed, slicer_version_mismatch,
+slicer_failed, slicer_version_mismatch, unsupported_format, unsupported_export_effect,
+screenshot_unavailable, screenshot_timeout, screenshot_busy, stale_capture,
 storage_error, internal_error.
 Modeling errors identify their failed feature. Missing/ambiguous selectors include
 candidate descriptors for repair. A failure never silently changes modeling intent.
@@ -1079,7 +1216,7 @@ Tool replies contain JSON text and structuredContent; domain failures set isErro
 The server advertises the MCP Apps extension and resources with no subscriptions.
 `resources/list` exposes the single viewer resource. `resources/read` accepts its
 exact URI and source-qualified `cad-export://<manifest-sha256>/<filename>` links
-returned by `cad_export`, `cad_drawing` and their completed jobs. Export links
+returned by `cad_export`, `cad_drawing`, native `cad_render` and their completed jobs. Export links
 also appear as native MCP resource-link content blocks. Each capture is limited
 to 128 files of at most 64 MiB each; reads verify source, manifest and file hashes
 and return base64 bytes. Arbitrary file URIs and local paths are rejected.

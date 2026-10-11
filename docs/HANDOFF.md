@@ -7,6 +7,90 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Visual workflow priorities — completed native preview, 2026-10-11
+
+Implemented the four authorized priorities from the local `../text-to-cad`
+comparison on `codex/visual-workflow-parity`. The shared native Service now
+advertises **33 tools**, including `cad_screenshot` and `cad_render`.
+[VISUAL_WORKFLOW_PARITY.md](VISUAL_WORKFLOW_PARITY.md) records delivered behavior
+and the remaining comparison differences.
+
+- Agent screenshots capture the actual displayed WebGL frame, texture and DXF
+  overlays. Committed-model and displayed-pose hashes, context fingerprints,
+  source locks and bounded transfers reject changed or unavailable frames.
+  MCP remains responsive during capture waits; only explicit pre-write lock
+  rejections receive bounded retries. Headless PNG rendering uses native bounded
+  workers and shared camera/material/display settings.
+- Drawings support multi-page PDF, per-page SVG, per-view 1:1 DXF, ISO A0–A4
+  sheets/orientations, checked manual placement, additional/custom view frames
+  and geometry-checked hole callouts. Caller-declared thread/fit labels do not
+  establish manufacturing certification.
+- The actual viewer persists five display modes, orthographic/perspective
+  projection, material finish/opacity, studio lighting, floor/shadows and
+  presets. Native static/animated hierarchical GLB and streamed GIF share
+  qualified source/sequence data, preserve history, and support jobs/downloads.
+- External reviews preserve supported DXF blocks/text/curves/hatches, GLB
+  materials/textures/skin/morph/animation, URDF/SDF joint poses and relative
+  frames, and paired SRDF semantics. Native pose evaluation changes actual
+  displayed geometry while preserving captured source hashes and camera framing.
+  Unsupported semantics fail explicitly rather than being silently dropped.
+
+Final local verification against frozen production source:
+
+- **81/81 CTests passed in 107.72 seconds**, warning-free Release build;
+  selected suites include screenshot **455**, CPU render **858**, drawings
+  **2,232**, artifact review **334**, GLB **199**, GIF **115**, and visual Service
+  **16,510** checks. The screenshot fixture was corrected to retry rejected
+  admissions; its final whole-suite pass includes **13** real MCP/app checks.
+- Official MCP SDK **2.3.0** passed **2,636** interoperability checks. Primary
+  lifecycle: **30.706/20.477 seconds** wall/Python CPU; reopened legacy:
+  **3.384/2.756**. Its independent visual check passed **369** assertions for
+  PNG/GIF/GLB, image blocks, downloads and concurrent screenshots. Independent
+  conformance passed **847** checks across all **33** tools; artifact schema
+  checks passed **227 + 44** assertions.
+- Actual Chromium/WebGL2/native MCP check passed **57** assertions, including
+  deterministic image-chunk and hidden-error lock contention. CPU/GPU silhouette
+  IoU is **0.987804878**; **652** differing pixels lie within two-pixel boundaries,
+  with zero interior RGB error. Actual GLB and robot poses change **15,350** and
+  **4,486** pixels respectively, reset exactly, and produce no browser faults.
+- Independent Pillow decoding, analytic clipping, PNG/GIF pixel parity,
+  timing/loop/source and native jobs passed **65,664** checks; relocated output
+  with empty PATH passed **65,660**. Independent pypdf/Poppler drawing inspection
+  verified both ISO sheets, four views, **24/24** bore-circle raster witnesses,
+  readable labels and unchanged committed source; the independent stdlib DXF
+  reader verified exact 1:1 bore geometry and callout text.
+- Source/build identity: **49** checks. Relocated native bundle and packaged
+  plugin smoke passed with empty PATH, including MCP/viewer discovery and
+  create/edit/reopen/export. Package documentation resolves **367** links;
+  isolated package replacement/reopen passes **391** checks. This lifecycle
+  tests same-build replacement, not an actual host GUI upgrade.
+
+Production source SHA-256:
+`72327b71e1d402dd4579005123eddd50319fd78ad4682a7441ae484ccdb669e3`.
+Raw executable SHA-256:
+`dc157a25ba3cbbc84fcd1c9f0d99c64420fb6bbba1dc4efa17ca9774c2a79ac4`.
+The relocated bundle verifies **368** files and provenance SHA-256
+`c2ed7f4dd35ee26458a277489afbacb70f062392c3a04361e407be5c89317cc1`.
+Packaged executable SHA-256:
+`2acfd4e1b355f016df76339f5984c5ceeb5be2b8c73f63eec1bbbad3098074f3`.
+Fresh macOS arm64 native TGZ, Agent Plugins ZIP and Claude MCPB artifacts are
+under `build/packages/visual-workflow-20261011/`; none were installed, published
+or tagged. Exact logs use `.local/evidence/visual-workflow-*-complete.log` and
+the package/relocated/source-identity logs. Browser, SDK and drawing artifacts
+are in `.local/evidence/visual-workflow/`; final native artifact calls/poses are
+in `build/artifact-flow-final-external-evidence.json`. The independently verified
+final binary, current production-input manifest, inventory and archive hashes
+are recorded in `.local/evidence/visual-workflow/completion.json`.
+
+Limits remain explicit: MP4 encoding, CPU JPEG textures/non-ASCII glyphs,
+additional PBR texture channels and unsupported external-format semantics;
+native GLB animation is sampled rigid motion and refuses clipping. Adaptive
+LOD, freehand viewport sketches, manufacturing workflow expansion and new host
+entry points remain outside these four priorities. Current-source cross-platform
+CI, hardware GPU validation, signing/notarization and actual target-host
+install/reload/download acceptance remain next release tasks. Existing installed
+preview packages and the user's pending two-line CI edit are unchanged.
+
 ## Main integration verification — 2026-10-11
 
 Before the requested merge into `main`, rebuilt completed source `5e60e0b` and

@@ -1,6 +1,11 @@
 #include "agentcad/mcp.hpp"
 #include "agentcad/app.hpp"
 #include <set>
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 namespace agentcad {
 namespace {
@@ -8,9 +13,13 @@ Json rpc_error(const Json& id, int code, const std::string& message) {
   return {{"jsonrpc", "2.0"}, {"id", id}, {"error", {{"code", code}, {"message", message}}}};
 }
 Json tool_result(const Json& value, bool error = false) {
-  Json content=Json::array({{{"type", "text"}, {"text", value.dump()}}});
+  auto text_value=value;
+  if(!error&&text_value.contains("image"))text_value.erase("image");
+  if(!error&&text_value.value("state","")=="succeeded"&&text_value.contains("result")&&text_value.at("result").is_object())text_value["result"].erase("image");
+  Json content=Json::array({{{"type", "text"}, {"text", text_value.dump()}}});
   const auto& exported=value.value("state","")=="succeeded"&&value.contains("result")?value.at("result"):value;
   if(!error&&exported.contains("downloads"))for(const auto& link:exported.at("downloads"))content.push_back(link);
+  if(!error&&exported.contains("image"))content.push_back(exported.at("image"));
   return {{"content",content},{"structuredContent", value}, {"isError", error}};
 }
 Json app_metadata() {
@@ -124,7 +133,11 @@ void serve(Service& service, std::istream& input, std::ostream& output) {
   McpSession session(service);
   std::string line;
   bool oversized = false;
-  auto reply = [&](const Json& message) { output << message.dump() << '\n'; output.flush(); };
+  std::mutex output_mutex;
+  auto reply = [&](const Json& message) { const auto bytes=message.dump();std::lock_guard lock(output_mutex);output << bytes << '\n'; output.flush(); };
+  struct CaptureWait { std::thread thread;std::shared_ptr<std::atomic<bool>> done; };
+  std::vector<CaptureWait> captures;
+  const auto reap=[&]{for(auto it=captures.begin();it!=captures.end();)if(it->done->load()){it->thread.join();it=captures.erase(it);}else ++it;};
   auto dispatch = [&] {
     // A CRLF delimiter's carriage return is framing, not message content.
     if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -132,7 +145,14 @@ void serve(Service& service, std::istream& input, std::ostream& output) {
     // Blank keep-alive lines carry no message, so they never get an error reply.
     else if (line.find_first_not_of(" \t\r") != std::string::npos) {
       try {
-        if (auto response = session.handle(parse_json(line))) reply(*response);
+        auto request=parse_json(line);reap();
+        // Only bounded frame waits run beside the serial dispatcher. They read
+        // native state and receive browser pixels, never enter the OCCT kernel.
+        // Initialization is complete and immutable before concurrent handling.
+        if(session.ready()&&request.is_object()&&request.value("method",Json())=="tools/call"&&request.contains("id")&&request.value("params",Json::object()).is_object()&&request.at("params").value("name",Json())=="cad_screenshot"){
+          if(captures.size()>=4)reply(rpc_error(request.at("id"),-32000,"Four screenshot waits are already active"));
+          else {auto done=std::make_shared<std::atomic<bool>>(false);captures.push_back({std::thread([&,request=std::move(request),done]{try{if(auto response=session.handle(request))reply(*response);}catch(const std::exception& error){reply(rpc_error(request.value("id",Json(nullptr)),-32603,error.what()));}done->store(true);}),done});}
+        }else if (auto response = session.handle(request)) reply(*response);
       } catch (const Error& e) { reply(rpc_error(nullptr, -32700, e.what())); }
       catch (const std::exception& e) { reply(rpc_error(nullptr, -32603, e.what())); }
     }
@@ -149,5 +169,6 @@ void serve(Service& service, std::istream& input, std::ostream& output) {
   }
   // Accept a final JSON message at EOF even without a trailing newline.
   if (!line.empty() || oversized) dispatch();
+  for(auto& capture:captures)capture.thread.join();
 }
 }

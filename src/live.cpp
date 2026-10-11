@@ -7,6 +7,9 @@
 #include "agentcad/section.hpp"
 #include "agentcad/artifact_review.hpp"
 #include "agentcad/service.hpp"
+#include "agentcad/screenshot.hpp"
+#include "agentcad/render_settings.hpp"
+#include "agentcad/visual.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cctype>
@@ -46,7 +49,7 @@ fs::path view_path(const fs::path& root, const std::string& id, bool create = fa
   return path;
 }
 Json empty_state(const std::string& id) {
-  return {{"view_id",id},{"document_id",nullptr},{"generation",nonce()},{"build",AGENTCAD_CACHE_BUILD},{"context",nullptr},{"hidden_part_ids",Json::array()}};
+  return {{"view_id",id},{"document_id",nullptr},{"generation",nonce()},{"build",AGENTCAD_CACHE_BUILD},{"context",nullptr},{"hidden_part_ids",Json::array()},{"render",normalize_render_settings()}};
 }
 Json default_appearance() {return {{"default_color",{0.66,0.75,0.80}},{"parts",Json::array()}};}
 Json artifact_status(const Json&,const Json&);
@@ -76,7 +79,7 @@ void cancel_view_job(Service& service,const Json& id) {
     catch(const Error& e){if(e.code!="workspace_busy"||std::chrono::steady_clock::now()>=deadline)throw;}
     std::this_thread::sleep_for(std::chrono::milliseconds(2));}
 }
-Json read_state(const fs::path& path) { return parse_json(read_text(path / "state.json")); }
+Json read_state(const fs::path& path) {auto state=parse_json(read_text(path / "state.json"));state["render"]=normalize_render_settings(state.value("render",Json::object()));if(state.contains("presets"))for(auto& preset:state["presets"])preset["render"]=normalize_render_settings(preset.value("render",Json::object()));return state; }
 void save_state(const fs::path& path, const Json& state) { atomic_text(path / "state.json",state.dump()); }
 Json snapshot(const fs::path& root, const std::string& id) {
   const auto path = view_path(root,id);
@@ -150,12 +153,12 @@ void validate_color(const Json& color) {
   for(const auto& component:color){const auto n=number(component);if(n<0||n>1)throw Error("invalid_argument","Appearance RGB components must be between zero and one");}
 }
 Json validate_appearance(const Json& value,const Json& state) {
-  fields(value,{"default_color","parts"});validate_color(value.at("default_color"));const auto& parts=value.at("parts");
+  fields(value,{"default_color","parts"},{"material"});auto result=value;if(value.contains("material"))result["material"]=normalize_render_material(value.at("material"));validate_color(value.at("default_color"));const auto& parts=value.at("parts");
   if(!parts.is_array()||parts.size()>assembly_leaf_limit)throw Error("invalid_argument","Appearance overrides exceed 1024 leaf occurrences");
   const auto available=display_part_ids(state);std::set<std::string> seen;
-  for(const auto& item:parts){fields(item,{"part_id","color"});const auto id=text_field(item,"part_id");validate_occurrence_path(id);validate_color(item.at("color"));
+  for(std::size_t i=0;i<parts.size();++i){const auto& item=parts.at(i);fields(item,{"part_id","color"},{"material"});if(item.contains("material"))result["parts"][i]["material"]=normalize_render_material(item.at("material"));const auto id=text_field(item,"part_id");validate_occurrence_path(id);validate_color(item.at("color"));
     if(!available.contains(id)||!seen.insert(id).second)throw Error("invalid_argument","Appearance overrides must name unique current leaf occurrences",{{"part_id",id}});}
-  return value;
+  return result;
 }
 void prune_appearance(Json& review,const Json& state) {
   auto appearance=review.value("appearance",default_appearance());const auto available=display_part_ids(state);Json parts=Json::array();
@@ -230,7 +233,7 @@ Json ready_status(const Json& state, const Json& record, const Json& arguments) 
   if (result.at("draft")==true) result["preview_operations"]=state.at("motion").at("operations");
   result["hidden_part_ids"] = state.value("hidden_part_ids",Json::array());
   result["presentation"] = state.value("presentation",default_presentation());
-  result["appearance"]=state.value("appearance",default_appearance());result["presets"]=state.value("presets",Json::array());
+  result["appearance"]=state.value("appearance",default_appearance());result["render"]=state.value("render",normalize_render_settings());result["presets"]=state.value("presets",Json::array());
   result["annotations"]=annotation_records(state,record.at("revision"));
   result["sequences"]=state.value("sequences",Json::array());result["playback"]=playback_status(state);
   if(!state.at("context").is_null()&&state.at("context").at("evaluation_id")==display.at("evaluation_id")&&state.at("context").contains("camera"))result["camera"]=state.at("context").at("camera");
@@ -361,7 +364,7 @@ Json context_result(Store& store, const Json& state) {
   if(state.value("read_only",false))return artifact_context(store,state);
   Json result = {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
     {"revision",nullptr},{"evaluation_id",nullptr},{"feature_id",nullptr},{"head_revision",nullptr},{"stale",false},{"selection",nullptr},
-    {"hidden_part_ids",state.value("hidden_part_ids",Json::array())},{"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"presets",state.value("presets",Json::array())},{"annotations",Json::array()},{"sequences",state.value("sequences",Json::array())},{"playback",playback_status(state)}};
+    {"hidden_part_ids",state.value("hidden_part_ids",Json::array())},{"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",state.value("presets",Json::array())},{"annotations",Json::array()},{"sequences",state.value("sequences",Json::array())},{"playback",playback_status(state)}};
   if (state.at("document_id").is_null()) return result;
   try { result["head_revision"] = store.read(state.at("document_id").get<std::string>()).at("revision"); }
   catch (const Error& e) { if (e.code != "not_found") throw; }
@@ -381,7 +384,7 @@ Json context_result(Store& store, const Json& state) {
   // to an older evaluation. It is never restored from that stale context.
   result["hidden_part_ids"]=state.value("hidden_part_ids",Json::array());
   result["presentation"]=state.value("presentation",default_presentation());
-  result["appearance"]=state.value("appearance",default_appearance());result["presets"]=state.value("presets",Json::array());
+  result["appearance"]=state.value("appearance",default_appearance());result["render"]=state.value("render",normalize_render_settings());result["presets"]=state.value("presets",Json::array());
   result["annotations"]=annotation_records(state,result.at("head_revision"));
   result["sequences"]=state.value("sequences",Json::array());result["playback"]=playback_status(state);
   result["stale"] = (!result.at("revision").is_null() && result.at("revision") != result.at("head_revision")) ||
@@ -647,7 +650,7 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
       if (geometry.contains("part_id") && std::find(hidden.begin(),hidden.end(),geometry.at("part_id"))!=hidden.end())
         throw Error("invalid_argument","Selection belongs to a hidden assembly part",{{"part_id",geometry.at("part_id")}});
     }
-    current["appearance"]=validate_appearance(arguments.contains("appearance")?arguments.at("appearance"):current.value("appearance",default_appearance()),current);
+    current["render"]=normalize_render_settings(arguments.value("render",current.value("render",Json::object())));current["appearance"]=validate_appearance(arguments.contains("appearance")?arguments.at("appearance"):current.value("appearance",default_appearance()),current);
     current["hidden_part_ids"]=hidden;
     if(arguments.contains("presentation")&&arguments.at("presentation")!=current.value("presentation",default_presentation()))current.erase("playback");
     current["presentation"]=validate_presentation(arguments.contains("presentation")?arguments.at("presentation"):
@@ -677,7 +680,7 @@ Json preset_action(Service& service,Store& store,const Json& arguments) {
       if(found==presets.end()&&presets.size()>=16)throw Error("limit_exceeded","A view stores at most 16 review presets");
       auto camera=default_camera();if(!current.at("context").is_null()&&current.at("context").at("evaluation_id")==eid&&current.at("context").contains("camera"))camera=current.at("context").at("camera");
       Json saved={{"name",name},{"camera",validate_camera(camera)},{"presentation",validate_presentation(current.value("presentation",default_presentation()),current)},
-        {"hidden_part_ids",validate_hidden_parts(current.value("hidden_part_ids",Json::array()),current)},{"appearance",validate_appearance(current.value("appearance",default_appearance()),current)}};
+        {"hidden_part_ids",validate_hidden_parts(current.value("hidden_part_ids",Json::array()),current)},{"appearance",validate_appearance(current.value("appearance",default_appearance()),current)},{"render",normalize_render_settings(current.value("render",Json::object()))}};
       if(found==presets.end())presets.push_back(std::move(saved));else *found=std::move(saved);
     } else if(operation=="apply"||operation=="delete") {
       if(found==presets.end())throw Error("not_found","Review preset is absent",{{"name",name}});
@@ -685,7 +688,7 @@ Json preset_action(Service& service,Store& store,const Json& arguments) {
       else {
         const auto presentation=validate_presentation(found->at("presentation"),current),appearance=validate_appearance(found->at("appearance"),current),hidden=validate_hidden_parts(found->at("hidden_part_ids"),current),camera=validate_camera(found->at("camera"));
         if(current.value("presentation",default_presentation())!=presentation)current.erase("playback");
-        current["presentation"]=presentation;current["appearance"]=appearance;current["hidden_part_ids"]=hidden;
+        current["presentation"]=presentation;current["render"]=normalize_render_settings(found->value("render",Json::object()));current["appearance"]=appearance;current["hidden_part_ids"]=hidden;
         if(current.contains("section")&&!section_matches(current.at("section").at("query"),presentation)){retired_section=current.at("section").at("job_id");current.erase("section");}
         Json context={{"revision",current.at("display").at("revision")},{"evaluation_id",eid},{"feature_id",current.at("display").at("feature_id")},{"selection",nullptr},{"camera",camera},
           {"updated_at_unix_ms",std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count()}};
@@ -762,21 +765,7 @@ std::string sequence_name(const Json& arguments) {
   const auto name=text_field(arguments,"name");if(name.size()>64||std::any_of(name.begin(),name.end(),[](unsigned char c){return c<32||c==127;})||std::all_of(name.begin(),name.end(),[](unsigned char c){return std::isspace(c);}))throw Error("invalid_argument","Sequence names need 1 to 64 UTF-8 bytes without control characters");return name;
 }
 Json sequence_operations(const Json& joints,const Json& model,const std::string& feature) {
-  if(!joints.is_array()||joints.size()>16)throw Error("invalid_argument","A sequence supports at most sixteen mechanism definitions");
-  const auto mechanisms=assembly_mechanisms(model,feature);std::set<std::string> scopes;Json operations=Json::array();
-  for(const auto& item:joints) {
-    fields(item,{"assembly_id","values"});const auto id=text_field(item,"assembly_id");model_identifier(id);const Json* scope=nullptr;
-    for(const auto& candidate:mechanisms)if(candidate.at("assembly_id")==id)scope=&candidate;
-    if(!scope||!scopes.insert(id).second)throw Error("invalid_argument","Sequence mechanism definitions must be unique and reachable");
-    const auto& values=item.at("values");if(!values.is_array()||values.empty()||values.size()>126)throw Error("invalid_argument","Sequence values need every independent coordinate");
-    std::set<std::string> expected,seen;for(const auto& dof:scope->at("motion").at("dofs"))if(!dof.at("driven").get<bool>())expected.insert(text_field(dof,"mate_id")+"."+text_field(dof,"coordinate"));
-    for(const auto& value:values){fields(value,{"mate_id","coordinate","value"});number(value.at("value"));const auto key=text_field(value,"mate_id")+"."+text_field(value,"coordinate");
-      if(!expected.contains(key)||!seen.insert(key).second)throw Error("invalid_argument","Sequence values must include every independent coordinate exactly once");
-      auto operation=value;operation["op"]="set_joint_value";operation["assembly_id"]=id;operations.push_back(std::move(operation));}
-    if(seen!=expected)throw Error("invalid_argument","Sequence omits an independent coordinate");
-  }
-  if(operations.size()>126)throw Error("limit_exceeded","A sequence frame supports at most 126 independent coordinates in total");
-  if(!operations.empty())apply_operations(model,operations);return operations;
+  return visual_sequence_operations(joints,model,feature);
 }
 Json sequence_shape(const Json& frame) {
   auto presentation=frame.at("presentation");presentation["explode"]["distance_mm"]=1;auto geometry=section_geometry(presentation);geometry["plane"]=presentation.at("clip").is_null()?Json(nullptr):Json{{"normal",presentation.at("clip").at("normal")},{"keep",presentation.at("clip").at("keep")}};
@@ -792,13 +781,7 @@ Json validate_sequence(const Json& value,const Json& state,const Json& record) {
   return value;
 }
 Json sequence_sample(const Json& sequence,double time) {
-  const auto& frames=sequence.at("frames");if(time<0||time>frames.back().at("time_s").get<double>())throw Error("invalid_argument","Seek time lies outside this sequence");
-  std::size_t upper=1;while(upper+1<frames.size()&&frames[upper].at("time_s").get<double>()<time)++upper;
-  const auto& a=frames[upper-1];const auto& b=frames[upper];const auto t=(time-a.at("time_s").get<double>())/(b.at("time_s").get<double>()-a.at("time_s").get<double>());auto sample=a;
-  sample["time_s"]=time;auto& presentation=sample["presentation"];presentation["explode"]["distance_mm"]=a.at("presentation").at("explode").at("distance_mm").get<double>()*(1-t)+b.at("presentation").at("explode").at("distance_mm").get<double>()*t;
-  if(!presentation.at("clip").is_null())presentation["clip"]["offset_mm"]=a.at("presentation").at("clip").at("offset_mm").get<double>()*(1-t)+b.at("presentation").at("clip").at("offset_mm").get<double>()*t;
-  std::map<std::string,double> ends;for(const auto& scope:b.at("joints"))for(const auto& v:scope.at("values"))ends[text_field(scope,"assembly_id")+"/"+text_field(v,"mate_id")+"/"+text_field(v,"coordinate")]=v.at("value").get<double>();
-  for(auto& scope:sample["joints"])for(auto& v:scope["values"]){const auto key=text_field(scope,"assembly_id")+"/"+text_field(v,"mate_id")+"/"+text_field(v,"coordinate");v["value"]=v.at("value").get<double>()*(1-t)+ends.at(key)*t;}return sample;
+  return visual_sequence_sample(sequence,time);
 }
 Json sequence_action(Service& service,Store& store,const Json& arguments) {
   const auto id=view_id(arguments),eid=text_field(arguments,"evaluation_id"),operation=text_field(arguments,"operation");identifier(eid);auto state=snapshot(store.root(),id);check_display(store,state,eid);
@@ -921,17 +904,17 @@ Json artifact_status(const Json& state,const Json& arguments) {
   const auto& display=state.at("display");
   Json result={{"view_id",state.at("view_id")},{"document_id",nullptr},{"revision",nullptr},{"feature_id",nullptr},
     {"state","ready"},{"changed",arguments.value("known_evaluation_id",std::string{})!=text_field(display,"evaluation_id")},
-    {"evaluation_id",display.at("evaluation_id")},{"summary",state.at("artifact").at("summary")},{"artifact",state.at("artifact")},
+    {"evaluation_id",display.at("evaluation_id")},{"summary",display.value("summary",state.at("artifact").at("summary"))},{"artifact",state.at("artifact")},{"artifact_pose",state.value("artifact_pose",Json::object())},
     {"read_only",true},{"draft",false},{"saving",false},{"hidden_part_ids",Json::array()},
-    {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
+    {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
   if(!state.at("context").is_null()&&state.at("context").contains("camera"))result["camera"]=state.at("context").at("camera");
   return result;
 }
 Json artifact_context(Store&,const Json& state) {
   Json result={{"view_id",state.at("view_id")},{"document_id",nullptr},{"revision",nullptr},{"feature_id",nullptr},
     {"evaluation_id",state.at("display").at("evaluation_id")},{"head_revision",nullptr},{"stale",false},{"selection",nullptr},
-    {"read_only",true},{"artifact",state.at("artifact")},{"hidden_part_ids",Json::array()},
-    {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
+    {"read_only",true},{"artifact",state.at("artifact")},{"artifact_pose",state.value("artifact_pose",Json::object())},{"hidden_part_ids",Json::array()},
+    {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
   if(!state.at("context").is_null())result.update(state.at("context"));return result;
 }
 void artifact_display(const Json& state,const std::string& eid) {
@@ -958,12 +941,22 @@ Json show_artifact(Store& store,const Json& arguments) {
   const auto eid="artifact_"+hash.substr(0,55);Json artifact={{"review_sha256",hash},{"source",verified.at("source")},{"summary",verified.at("summary")}};
   Json evaluation={{"schema_version",1},{"kind","artifact"},{"document_id",nullptr},{"revision",nullptr},{"feature_id",nullptr},{"evaluation_id",eid},{"draft",false},
     {"read_only",true},{"artifact",artifact},{"summary",review.at("summary")},{"artifact_geometry",review.at("geometry")},{"metadata",review.at("metadata")},
-    {"limitations",review.at("limitations")},{"selection_lifetime","review_sha256"}};
+    {"limitations",review.at("limitations")},{"artifact_pose",Json::object()},{"selection_lifetime","review_sha256"}};
   const auto path=view_path(store.root(),id,true);WorkspaceLock lock(path);auto state=empty_state(id);
-  state["read_only"]=true;state["artifact"]=artifact;state["display"]={{"evaluation_id",eid},{"build",AGENTCAD_CACHE_BUILD}};
+  state["read_only"]=true;state["artifact"]=artifact;state["artifact_pose"]=Json::object();state["display"]={{"evaluation_id",eid},{"summary",review.at("summary")},{"build",AGENTCAD_CACHE_BUILD}};
+  atomic_text(path/"artifact-review.json",raw,max_view_bytes);
   directory(path/"evaluations");write_frozen(path/"evaluations"/(eid+".json"),evaluation);save_state(path,state);prune_frozen(path,eid);
   return {{"view_id",id},{"document_id",nullptr},{"read_only",true},{"artifact",artifact},{"resource_uri",viewer_app_uri}};
 }
+Json artifact_pose_action(Store&store,const Json&arguments){
+  const auto id=view_id(arguments),expected=text_field(arguments,"evaluation_id");identifier(expected);const auto initial=snapshot(store.root(),id);artifact_display(initial,expected);const auto path=view_path(store.root(),id);const auto source_raw=read_text(path/"artifact-review.json",max_view_bytes);if(sha256(source_raw)!=text_field(initial.at("artifact"),"review_sha256"))throw Error("artifact_mismatch","Frozen artifact source review changed");const auto review=parse_json(source_raw,max_view_bytes);const auto configuration=arguments.at("configuration");auto geometry=pose_external_artifact(review,configuration);
+  std::unique_ptr<DocumentLock>source_lock;const auto&association=review.at("source").at("native_source_association");if(!association.is_null()){const auto&reference=association.at("reference");source_lock=std::make_unique<DocumentLock>(store.root(),text_field(reference,"document_id"),LockWait::publication);const auto record=store.read(text_field(reference,"document_id"),revision_number(reference.at("revision")));if(sha256(record.dump())!=text_field(association,"source_record_sha256"))throw Error("artifact_source_mismatch","Associated historical native source changed before artifact pose");}
+  auto summary=review.at("summary");std::array<double,3>low{INFINITY,INFINITY,INFINITY},high{-INFINITY,-INFINITY,-INFINITY};bool have=false;const auto add=[&](const Json&point){have=true;for(int axis=0;axis<3;++axis){low[axis]=std::min(low[axis],point[axis].get<double>());high[axis]=std::max(high[axis],point[axis].get<double>());}};for(const auto&p:geometry.at("positions"))add(p);for(const auto&line:geometry.at("polylines"))for(const auto&p:line.at("points"))add(p);summary["bounds"]=have?Json{{"min",low},{"max",high}}:Json(nullptr);
+  const auto eid="apose_"+sha256(initial.at("artifact").at("review_sha256").get<std::string>()+configuration.dump()+nonce()).substr(0,58);Json evaluation={{"schema_version",1},{"kind","artifact"},{"document_id",nullptr},{"revision",nullptr},{"feature_id",nullptr},{"evaluation_id",eid},{"draft",false},{"read_only",true},{"artifact",initial.at("artifact")},{"summary",summary},{"artifact_geometry",geometry},{"metadata",review.at("metadata")},{"limitations",review.at("limitations")},{"artifact_pose",configuration},{"selection_lifetime","review_sha256"}};
+  WorkspaceLock lock(path);auto current=read_state(path);if(!same_view(current,initial))throw Error("stale_selection","View changed before artifact pose publication");artifact_display(current,expected);if(read_text(path/"artifact-review.json",max_view_bytes)!=source_raw)throw Error("artifact_mismatch","Frozen artifact source review changed during pose evaluation");
+  write_frozen(path/"evaluations"/(eid+".json"),evaluation);current["artifact_pose"]=configuration;current["display"]={{"evaluation_id",eid},{"summary",summary},{"build",AGENTCAD_CACHE_BUILD}};if(!current.at("context").is_null()){current["context"]["evaluation_id"]=eid;current["context"]["selection"]=nullptr;current["context"].erase("resolved_selection");}save_state(path,current);prune_frozen(path,eid);return artifact_status(current,Json::object());
+}
+
 Json artifact_publish_context(Store& store,const Json& arguments) {
   const auto id=view_id(arguments),eid=text_field(arguments,"evaluation_id");identifier(eid);auto state=snapshot(store.root(),id);artifact_display(state,eid);
   Json context={{"evaluation_id",eid},{"selection",arguments.at("selection")}};
@@ -974,7 +967,7 @@ Json artifact_publish_context(Store& store,const Json& arguments) {
     const auto kind=text_field(selection,"kind"),entity=text_field(selection,"entity_id");if(kind!="mesh_group"&&kind!="curve")throw Error("invalid_argument","Artifact selection must be a mesh group or curve");
     const auto payload=parse_json(read_text(view_path(store.root(),id)/"evaluations"/(eid+".json"),max_view_bytes),max_view_bytes);
     bool found=false;for(auto geometry:payload.at("artifact_geometry").at(kind=="mesh_group"?"groups":"polylines"))if(geometry.at("id")==entity){
-      if(geometry.contains("points")){geometry["point_count"]=geometry.at("points").size();geometry.erase("points");}
+      if(geometry.contains("points")){geometry["point_count"]=geometry.at("points").size();geometry.erase("points");}for(const auto*key:{"texture_coordinates","vertex_colors","normals_mm","tangents","hatch_loops"})if(geometry.contains(key)){geometry[std::string(key)+"_count"]=geometry.at(key).size();geometry.erase(key);}if(geometry.contains("material"))for(auto&[key,item]:geometry["material"].items())if(key.ends_with("_texture")&&item.is_object())item.erase("image_data_uri");
       context["resolved_selection"]={{"reference",selection},{"geometry",geometry}};found=true;break;}
     if(!found)throw Error("selection_missing","Artifact label is absent from the displayed review");
   }
@@ -984,7 +977,7 @@ Json artifact_publish_context(Store& store,const Json& arguments) {
   const auto path=view_path(store.root(),id);WorkspaceLock lock(path);auto current=read_state(path);if(!same_view(current,state))throw Error("stale_selection","View changed before artifact context could be saved");artifact_display(current,eid);
   if(arguments.contains("hidden_part_ids")&&!arguments.at("hidden_part_ids").empty())throw Error("invalid_argument","Artifact labels are not native assembly occurrences");
   current["presentation"]=validate_presentation(arguments.value("presentation",current.value("presentation",default_presentation())),current);
-  current["appearance"]=validate_appearance(arguments.value("appearance",current.value("appearance",default_appearance())),current);current["context"]=context;save_state(path,current);return artifact_context(store,current);
+  current["render"]=normalize_render_settings(arguments.value("render",current.value("render",Json::object())));current["appearance"]=validate_appearance(arguments.value("appearance",current.value("appearance",default_appearance())),current);current["context"]=context;save_state(path,current);return artifact_context(store,current);
 }
 }
 
@@ -1039,14 +1032,18 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
   if (action == "sync") {
     fields(arguments,{"action","view_id"},{"known_evaluation_id"});
     if (arguments.contains("known_evaluation_id")) identifier(text_field(arguments,"known_evaluation_id"));
-    return synchronize(store,arguments);
+    auto result=synchronize(store,arguments);
+    if(result.at("state")=="ready")result["capture_requests"]=pending_view_screenshots(store,id);
+    return result;
   }
+  if(action=="capture")return submit_view_screenshot(store,arguments);
+  if(action=="artifact_pose"){fields(arguments,{"action","view_id","evaluation_id","configuration"});return artifact_pose_action(store,arguments);}
   if (action == "mesh") {
     fields(arguments,{"action","view_id","evaluation_id"},{"offset"}); return mesh_chunk(store,arguments);
   }
   if(snapshot(store.root(),id).value("read_only",false)&&action!="sync"&&action!="mesh"&&action!="context")throw Error("read_only_artifact","This operation requires a committed editable native document");
   if (action == "context") {
-    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids","presentation","appearance"});
+    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids","presentation","appearance","render"});
     if(snapshot(store.root(),id).value("read_only",false))return artifact_publish_context(store,arguments);
     return publish_context(service,store,arguments);
   }
@@ -1080,6 +1077,7 @@ Json live_tool_definitions() {
   const Json artifact_pick=object({{"review_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"kind",{{"enum",{"mesh_group","curve"}}}},{"entity_id",{{"type","string"},{"pattern","^(artifact|curve)-[1-9][0-9]*$"}}}},{"review_sha256","kind","entity_id"});
   const Json artifact=object({{"review_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"source",{{"$ref","#/$defs/artifact_review_source"}}},{"summary",{{"$ref","#/$defs/artifact_review_summary"}}}},{"review_sha256","source","summary"});
   const Json selection=nullable({{"oneOf",Json::array({pick,artifact_pick})}});
+  const Json artifact_pose=object({{"joints",{{"type","object"},{"maxProperties",1024},{"propertyNames",{{"minLength",1},{"maxLength",4096}}},{"additionalProperties",numeric}}},{"animation",{{"type","integer"},{"minimum",0},{"maximum",255}}},{"time_seconds",{{"type","number"},{"minimum",0},{"maximum",1e9}}}},Json::array());
   const Json camera = object({{"yaw",numeric},{"pitch",numeric},{"zoom",{{"type","number"},{"minimum",0.01},{"maximum",1000}}},
     {"pan",{{"type","array"},{"items",numeric},{"minItems",2},{"maxItems",2}}}}, {"yaw","pitch","zoom","pan"});
   const Json prompt = {{"type","string"},{"maxLength",8192}};
@@ -1091,10 +1089,10 @@ Json live_tool_definitions() {
       {"directions",{{"type","array"},{"maxItems",assembly_leaf_limit},{"items",object({{"part_id",occurrence_schema()},{"direction",unit_vector}},{"part_id","direction"})}}}},
       {"distance_mm","directions"})}},{"clip","explode"});
   const Json rgb={{"type","array"},{"items",{{"type","number"},{"minimum",0},{"maximum",1}}},{"minItems",3},{"maxItems",3}};
-  const Json appearance=object({{"default_color",rgb},{"parts",{{"type","array"},{"maxItems",assembly_leaf_limit},{"items",object({{"part_id",occurrence_schema()},{"color",rgb}},{"part_id","color"})}}}},{"default_color","parts"});
+  const Json appearance=object({{"default_color",rgb},{"material",render_material_schema()},{"parts",{{"type","array"},{"maxItems",assembly_leaf_limit},{"items",object({{"part_id",occurrence_schema()},{"color",rgb},{"material",render_material_schema()}},{"part_id","color"})}}}},{"default_color","parts"});
   const Json preset_name={{"type","string"},{"minLength",1},{"maxLength",64}};
-  const Json presets={{"type","array"},{"maxItems",16},{"items",object({{"name",preset_name},{"camera",camera},{"presentation",presentation},{"hidden_part_ids",hidden_parts},{"appearance",appearance}},
-    {"name","camera","presentation","hidden_part_ids","appearance"})}};
+  const Json presets={{"type","array"},{"maxItems",16},{"items",object({{"name",preset_name},{"camera",camera},{"presentation",presentation},{"hidden_part_ids",hidden_parts},{"appearance",appearance},{"render",render_settings_schema()}},
+    {"name","camera","presentation","hidden_part_ids","appearance","render"})}};
   const Json note_text={{"type","string"},{"minLength",1},{"maxLength",512},{"pattern",R"(^[^\u0000-\u0008\u000b-\u001f\u007f]+$)"}};
   const Json anchor_request={{"oneOf",Json::array({object({{"kind",{{"const","model"}}}},{"kind"}),
     object({{"kind",{{"const","part"}}},{"part_id",occurrence_schema()}},{"kind","part_id"}),
@@ -1135,10 +1133,10 @@ Json live_tool_definitions() {
     {"head_revision",nullable(revision)},{"stale",{{"type","boolean"}}},{"selection",selection},
     {"resolved_selection",object({{"reference",pick},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},
       {"selector",edit_selector}}, {"reference","geometry"})},
-    {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},{"updated_at_unix_ms",{{"type","integer"}}},
+    {"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},{"updated_at_unix_ms",{{"type","integer"}}},
     {"draft",{{"type","boolean"}}},{"preview_operations",operations}},
-    {"view_id","document_id","revision","evaluation_id","feature_id","head_revision","stale","selection","hidden_part_ids","presentation","appearance","presets","annotations"});
-  context["properties"]["read_only"]={{"const",true}};context["properties"]["artifact"]=artifact;
+    {"view_id","document_id","revision","evaluation_id","feature_id","head_revision","stale","selection","hidden_part_ids","presentation","appearance","render","presets","annotations"});
+  context["properties"]["read_only"]={{"const",true}};context["properties"]["artifact"]=artifact;context["properties"]["artifact_pose"]=artifact_pose;
   const auto native_resolved=context["properties"]["resolved_selection"];context["properties"]["resolved_selection"]={{"oneOf",Json::array({native_resolved,object({{"reference",artifact_pick},{"geometry",{{"type","object"}}}},{"reference","geometry"})})}};
   Json identity = object({{"view_id",id},{"document_id",nullable(id)},{"resource_uri",{{"const",viewer_app_uri}}}}, {"view_id","document_id","resource_uri"});
   identity["properties"]["read_only"]={{"const",true}};identity["properties"]["artifact"]=artifact;
@@ -1152,10 +1150,11 @@ Json live_tool_definitions() {
     {"valid","units","volume_mm3","area_mm2","center_of_mass_mm","bounds_mm","solid_count","face_count","edge_count"});
   Json sync = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},
     {"state",{{"enum",{"empty","loading","ready","error"}}}},{"changed",{{"type","boolean"}}},{"evaluation_id",id},{"feature_id",id},
-    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"camera",camera},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},
+    {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"camera",camera},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},
     {"draft",{{"type","boolean"}}},{"saving",{{"type","boolean"}}},{"preview_operations",operations}}, {"view_id","document_id","revision","state","changed"});
-  sync["properties"]["read_only"]={{"const",true}};sync["properties"]["artifact"]=artifact;sync["properties"]["feature_id"]=nullable(id);sync["properties"]["summary"]={{"oneOf",Json::array({summary,Json{{"$ref","#/$defs/artifact_review_summary"}}})}};
+  sync["properties"]["read_only"]={{"const",true}};sync["properties"]["artifact"]=artifact;sync["properties"]["artifact_pose"]=artifact_pose;sync["properties"]["feature_id"]=nullable(id);sync["properties"]["summary"]={{"oneOf",Json::array({summary,Json{{"$ref","#/$defs/artifact_review_summary"}}})}};
   const Json offset = {{"type","integer"},{"minimum",0},{"maximum",max_view_bytes}};
+  sync["properties"]["capture_requests"]={{"type","array"},{"maxItems",4},{"items",screenshot_request_schema()}};
   const Json chunk = object({{"data",{{"type","string"},{"maxLength",chunk_bytes}}},{"offset",offset},{"next_offset",nullable(offset)},{"total_bytes",offset}},
     {"data","offset","next_offset","total_bytes"});
   auto tool = [&](const char* name,const char* description,Json input,Json output,bool read_only) {
@@ -1170,6 +1169,7 @@ Json live_tool_definitions() {
   auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks, assembly visibility and validated context. Motion controls preview native poses, reset, or explicitly save through atomic revision-checked edits. Declarative sequences sample joints/presentation without source edits.",
     {{"type","object"},{"oneOf",Json::array({
       object({{"action",{{"const","sync"}}},{"view_id",id},{"known_evaluation_id",id}},{"action","view_id"}),
+      object({{"action",{{"const","artifact_pose"}}},{"view_id",id},{"evaluation_id",id},{"configuration",artifact_pose}},{"action","view_id","evaluation_id","configuration"}),
       object({{"action",{{"const","mesh"}}},{"view_id",id},{"evaluation_id",id},{"offset",offset}},{"action","view_id","evaluation_id"}),
       object({{"action",{{"const","measure"}}},{"view_id",id},{"evaluation_id",id},{"query",nullable({{"$ref","#/$defs/measurement_distance_query"}})}},{"action","view_id","evaluation_id"}),
       object({{"action",{{"const","section"}}},{"view_id",id},{"evaluation_id",id},{"query",nullable({{"$ref","#/$defs/section_query"}})}},{"action","view_id","evaluation_id"}),
@@ -1188,9 +1188,12 @@ Json live_tool_definitions() {
       object({{"action",{{"const","sequence"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"const","options"}}},{"name",preset_name},{"speed",{{"type","number"},{"minimum",0.1},{"maximum",4}}},{"loop",{{"type","boolean"}}}}, {"action","view_id","evaluation_id","operation","name"}),
       object({{"action",{{"const","preset"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"const","list"}}}},{"action","view_id","evaluation_id","operation"}),
       object({{"action",{{"const","preset"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"enum",{"save","apply","delete"}}}},{"name",preset_name}},{"action","view_id","evaluation_id","operation","name"}),
-      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",selection},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance}},
+      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",selection},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()}},
         {"action","view_id","evaluation_id","selection"})})}},
     {{"type","object"},{"oneOf",Json::array({sync,chunk,context,measure_status})}},false);
+  const auto capture_submit=screenshot_submit_schema();
+  for(const auto& branch:capture_submit.at("oneOf"))viewer["inputSchema"]["oneOf"].push_back(branch);
+  viewer["outputSchema"]["oneOf"].push_back(screenshot_reply_schema());
   viewer["_meta"] = {{"ui",{{"visibility",Json::array({"app"})}}}};
   auto artifact_show=tool("cad_artifact_show","Open a verified portable external review in the live viewer. Original artifact units/hashes and review-local mesh/curve labels remain explicit; native editing, measuring, notes and playback are unavailable.",
     object({{"view_id",id},{"review_path",{{"type","string"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}},{"review_path","expected_sha256"}),identity,false);
@@ -1202,6 +1205,6 @@ Json live_tool_definitions() {
       object({{"documents",{{"type","array"},{"maxItems",document_limit},{"items",object({{"document_id",id},{"revision",revision}},{"document_id","revision"})}}},
         {"truncated",{{"type","boolean"}}}}, {"documents","truncated"}),true),
     tool("cad_context","Read validated viewer selection, camera, prompt and current hidden assembly part IDs. stale reports a changed HEAD or displayed evaluation.",
-      object({{"view_id",id}},Json::array()),context,true),viewer});
+      object({{"view_id",id}},Json::array()),context,true),viewer,screenshot_tool_definition()});
 }
 }

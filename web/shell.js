@@ -59,7 +59,7 @@
   // Connects the floating chrome to the existing section elements. Panels keep
   // their IDs and are only moved; app.js still owns their content and `hidden`
   // state, and the shell reads that state on every refresh().
-  function mount({ $, bridge, renderer, onToolChange=()=>{},onMeasureToggle=()=>{} }) {
+  function mount({ $, bridge, renderer, onToolChange=()=>{},onMeasureToggle=()=>{},onDisplayChange=null }) {
     const doc = document, root = doc.documentElement, app = $('app');
     const cleanups = [];
     const on = (target, type, handler, options) => {
@@ -229,7 +229,7 @@
     for (const button of $('standard-views').querySelectorAll('[data-view]')) on(button, 'click', () => renderer?.setView(button.dataset.view, { animate: true }));
     for (const [id, key] of [['toggle-grid','grid'], ['toggle-axes','axes'], ['toggle-edges','edges']]) on($(id), 'click', () => {
       const enabled = $(id).getAttribute('aria-pressed') !== 'true';
-      $(id).setAttribute('aria-pressed', String(enabled)); renderer?.setDisplay({ [key]: enabled });
+      $(id).setAttribute('aria-pressed', String(enabled)); if(onDisplayChange)onDisplayChange({[key]:enabled});else renderer?.setDisplay({ [key]: enabled });
     });
     on($('open-measure'), 'click', () => {close(false);onMeasureToggle();});
 

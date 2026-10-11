@@ -15,4 +15,9 @@ Json review_external_artifact(const fs::path& workspace, const Json& arguments,
 // Reparse captured bytes to qualify persisted geometry and metadata. STEP uses
 // the bounded kernel worker. This establishes neither authenticity nor history.
 Json verify_external_artifact(const fs::path& package, const std::string& expected_review_sha256);
+// Evaluate a transient display pose from a previously verified, frozen review.
+// Units: robot angular joints in rad, prismatic in m; GLTF time in seconds.
+// Configuration: {joints?: {name: number}, animation?: integer, time_seconds?: number}.
+// The captured source, review bytes/hash and rest geometry are never changed.
+Json pose_external_artifact(const Json& review,const Json& configuration);
 }

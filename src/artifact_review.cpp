@@ -57,7 +57,7 @@ void review_contract(const Json& review) {
   require(source.at("path")=="original"+extension(path_from_utf8(text_field(source,"path"))),"Original source path is not canonical");
   const auto& refs=source.at("references");require(refs.is_array()&&refs.size()<=64,"Invalid captured reference list");std::size_t total=0;std::set<std::string> uris,paths;
   for(const auto& ref:refs){file_identity(ref,true);const auto path=text_field(ref,"path");require(path.starts_with("references/")&&paths.insert(path).second&&uris.insert(text_field(ref,"uri")).second,"Invalid captured reference path or duplicate URI");const auto bytes=ref.at("bytes").get<std::size_t>();require(bytes<=artifact_expansion_limit-total,"Captured reference budget exceeded");total+=bytes;}
-  require(refs.empty()||source.at("format")=="urdf"||source.at("format")=="sdf","Unexpected references for source format");
+  require(refs.empty()||source.at("format")=="urdf"||source.at("format")=="sdf"||source.at("format")=="srdf","Unexpected references for source format");
   const auto& association=source.at("native_source_association");if(!association.is_null()){fields(association,{"qualification","reference","authoritative_editable_source","source_record_sha256"});require(association.at("qualification")=="caller_declared"&&association.at("authoritative_editable_source")=="native_document","Invalid source association qualification");source_association(association.at("reference"));digest(text_field(association,"source_record_sha256"));}
   const auto& g=review.at("geometry");fields(g,{"positions","triangles","triangle_groups","groups","polylines"});
   for(const auto* key:{"positions","triangles","triangle_groups","groups","polylines"})require(g.at(key).is_array(),"Geometry collections must be arrays");
@@ -117,7 +117,7 @@ void validate_artifact_review_arguments(const Json&args){
   if(format=="step"||format=="3mf"){if(units!="file")throw Error("invalid_argument","STEP and 3MF review require units=file");}
   else if(format=="glb"||format=="urdf"||format=="sdf"||format=="srdf"){if(units!="m")throw Error("invalid_argument","GLB and robot descriptions require explicit intrinsic meter units");}
   else {if(!std::set<std::string>{"mm","cm","m","in","ft","um"}.contains(units))throw Error("invalid_argument","Artifact units must be mm/cm/m/in/ft/um");unit_scale(units);}
-  if(args.contains("native_source"))source_association(args.at("native_source"));if(args.contains("references")){const auto&refs=args.at("references");require(refs.is_array()&&refs.size()<=64,"Artifact reference budget exceeded");if(format!="urdf"&&format!="sdf"&&!refs.empty())unsupported("Explicit file references currently belong to URDF/SDF mesh review");std::set<std::string> uris;
+  if(args.contains("native_source"))source_association(args.at("native_source"));if(args.contains("references")){const auto&refs=args.at("references");require(refs.is_array()&&refs.size()<=64,"Artifact reference budget exceeded");if(format!="urdf"&&format!="sdf"&&format!="srdf"&&!refs.empty())unsupported("Explicit references belong to URDF/SDF meshes and paired URDF/SRDF snapshots");std::set<std::string> uris;
     for(const auto&r:refs){fields(r,{"uri","path","expected_sha256","units"});require(uris.insert(relative_uri(text_field(r,"uri"))).second,"Duplicate explicit artifact reference");require(path_from_utf8(text_field(r,"path")).is_absolute(),"Reference paths must be absolute");digest(text_field(r,"expected_sha256"));const auto ref_units=text_field(r,"units");if(!std::set<std::string>{"mm","cm","m","in","ft","um"}.contains(ref_units))throw Error("invalid_argument","Reference units must be mm/cm/m/in/ft/um");unit_scale(ref_units);}}
 }
 Json review_external_artifact(const fs::path&workspace,const Json&args,const std::string&build){
@@ -152,4 +152,11 @@ Json verify_external_artifact(const fs::path&package,const std::string&expected)
   catch(const Error& e){if(e.code=="invalid_json"||e.code=="invalid_argument"||e.code=="limit_exceeded")throw Error("artifact_invalid",e.what());if(e.code=="storage_error"||e.code=="not_found")throw Error("artifact_mismatch",e.what());throw;}
 
 }
+Json pose_external_artifact(const Json&review,const Json&configuration){
+  try{review_contract(review);fields(configuration,{}, {"joints","animation","time_seconds"});if(configuration.dump().size()>256*1024)throw Error("limit_exceeded","Artifact pose configuration exceeds 256 KiB");const auto format=review.at("source").at("format").get<std::string>();
+    if(format=="glb"){require(!configuration.contains("joints"),"GLTF pose uses animation/time coordinates");if(configuration.contains("animation"))require(configuration.at("animation").is_number_integer()&&configuration.at("animation")>=0,"GLTF animation index must be nonnegative integer");require(!configuration.contains("time_seconds")||configuration.contains("animation"),"GLTF time requires an animation index");if(configuration.contains("time_seconds"))require(configuration.at("time_seconds").is_number()&&std::isfinite(configuration.at("time_seconds").get<double>())&&configuration.at("time_seconds")>=0,"GLTF animation time must be nonnegative and finite");return glb_pose(review,configuration);}
+    if(format=="urdf"||format=="sdf"||(format=="srdf"&&review.at("metadata").contains("graph"))){require(!configuration.contains("animation")&&!configuration.contains("time_seconds"),"Robot pose uses named joint coordinates");return configuration.empty()?review.at("geometry"):robot_pose(review,configuration);}unsupported("This artifact has no supported pose coordinates");
+  }catch(const Json::exception&){throw Error("artifact_invalid","Artifact pose configuration or frozen review is malformed");}
+}
+
 }

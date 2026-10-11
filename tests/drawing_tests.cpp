@@ -2,6 +2,9 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/drawing.hpp"
+#include "agentcad/hash.hpp"
+#include <BRepPrimAPI_MakeCone.hxx>
+#include <STEPControl_Writer.hxx>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -12,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <tuple>
 
 using namespace agentcad;
 namespace {
@@ -516,4 +520,116 @@ void service_tests() {
     {"dimensions",Json::array({{{"view","top"},{"kind","horizontal"},{"from",{1.012,0}},{"to",{-1.03,0}}}})}}}});});
 }
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));geometry_tests();paint_order_tests();layout_hatch_tests();angular_tolerance_tests();angular_service_tests();service_tests();std::cout<<"drawing: "<<checks<<" checks passed\n";return 0;}catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}
+
+namespace {
+void sheet_set_tests() {
+  const std::vector<std::tuple<std::string,double,double>> sizes={{"A0",1189,841},{"A1",841,594},{"A2",594,420},{"A3",420,297},{"A4",297,210}};
+  for(const auto& [name,width,height]:sizes) for(const auto* orientation:{"landscape","portrait"}) {
+    const auto result=rendered(box(),{{"sheet",name},{"sheet_orientation",orientation},{"views",Json::array({{{"id","top"},{"orientation","top"}}})}});
+    const bool landscape=std::string(orientation)=="landscape";
+    near(result.at("sheet_mm")[0],landscape?width:height);near(result.at("sheet_mm")[1],landscape?height:width);
+    pdf_check(artifact(result,"drawing.pdf"));
+    require(artifact(result,"drawing.svg").find("width=\""+std::to_string(static_cast<int>(landscape?width:height))+"mm\"")!=std::string::npos,"SVG dimensions match ISO page orientation");
+  }
+  Json recipe={{"title","Two-page set"},{"pages",Json::array({
+    {{"sheet","A4"},{"views",Json::array({{{"id","p1top"},{"orientation","top"}},{{"id","p1front"},{"orientation","front"}},{{"id","p1right"},{"orientation","right"}},{{"id","p1iso"},{"orientation","isometric"}}})},
+      {"dimensions",Json::array({{{"view","p1top"},{"kind","width"}}})}},
+    {{"sheet","A3"},{"sheet_orientation","portrait"},{"views",Json::array({{{"id","p2top"},{"orientation","top"}},{{"id","p2front"},{"orientation","front"}},{{"id","p2right"},{"orientation","right"}},{{"id","p2iso"},{"orientation","isometric"}}})},
+      {"dimensions",Json::array({{{"view","p2front"},{"kind","height"}}})}}
+  })}};
+  const auto result=rendered(box(),recipe);
+  require(result.at("pages").size()==2&&result.at("view_layouts").size()==8,"page set retains eight independent qualified placements");
+  require(result.at("dimensions").size()==2,"page set retains page dimensions");near(result.at("pages")[1].at("sheet_mm")[0],297);near(result.at("pages")[1].at("sheet_mm")[1],420);
+  const auto pdf=artifact(result,"drawing.pdf");pdf_check(pdf);
+  require(pdf.find("/Count 2")!=std::string::npos,"PDF page tree contains both pages");
+  require(pdf.find("/Kids [4 0 R 6 0 R ]")!=std::string::npos,"PDF page tree references both actual page objects");
+  require(artifact(result,"drawing-1.svg").find("Sheet 1/2")!=std::string::npos&&artifact(result,"drawing-2.svg").find("Sheet 2/2")!=std::string::npos,"vector pages are numbered in title blocks");
+  require(result.at("files").size()==11,"set exports one PDF, two SVG and eight unique 1:1 DXF files");
+  auto invalid=recipe;invalid["pages"][1]["views"][0]["id"]="P1TOP";
+  fails("invalid_drawing",[&]{normalize_drawing(invalid,box());});
+  invalid=recipe;invalid["pages"][0]["formats"]={"svg"};fails("invalid_drawing",[&]{normalize_drawing(invalid,box());});
+  invalid=recipe;invalid["views"]=Json::array();fails("invalid_drawing",[&]{normalize_drawing(invalid,box());});
+  invalid=recipe;invalid["pages"]=Json::array();fails("invalid_drawing",[&]{normalize_drawing(invalid,box());});
+  Temporary temporary;Service service(temporary.path);call(service,"cad_create",{{"document_id","pages"},{"model",box()}});
+  const auto before=call(service,"cad_read",{{"document_id","pages"}});
+  const auto exported=call(service,"cad_drawing",{{"document_id","pages"},{"revision",1},{"drawing",recipe}});
+  require(exported.at("pages").size()==2&&exported.at("artifacts").size()==11,"service publishes complete page-set manifest");
+  require(call(service,"cad_read",{{"document_id","pages"}})==before,"page-set generation leaves source revision unchanged");
+  const auto saved=parse_json(read_text(path_from_utf8(exported.at("recipe_path")),1024*1024));require(saved.at("drawing")==recipe,"saved page-set recipe remains replayable");
+  Service restarted(temporary.path);const auto replay=call(restarted,"cad_drawing",{{"document_id","pages"},{"revision",1},{"drawing",saved.at("drawing")}});
+  require(replay.at("pages")==exported.at("pages"),"reopened page set retains exact scale/sheet/placement metadata");
+}
+void arbitrary_view_tests() {
+  const auto model=box();
+  const Json all=Json::array({{{"id","back"},{"orientation","back"}},{{"id","bottom"},{"orientation","bottom"}},{{"id","left"},{"orientation","left"}},
+    {{"id","custom"},{"orientation","custom"},{"direction",{1,-1,1}},{"up",{0,0,1}}}});
+  BuiltModel built(model);const auto projected=built.drawing({{"views",all}});
+  extent(view(projected,"back"),20,6);extent(view(projected,"bottom"),20,10);extent(view(projected,"left"),10,6);
+  near(view(projected,"back").at("bounds_mm")[0],-20);near(view(projected,"bottom").at("bounds_mm")[1],-10);near(view(projected,"left").at("bounds_mm")[0],-10);
+  const auto custom=view(projected,"custom").at("bounds_mm");require(custom[2].get<double>()>custom[0].get<double>()&&custom[3].get<double>()>custom[1].get<double>(),"custom orthographic camera produces bounded exact HLR");
+  Json recipe={{"layout","manual"},{"scale",2},{"views",Json::array({
+    {{"id","back"},{"orientation","back"},{"cell_mm",{10,10,120,120}}},
+    {{"id","custom"},{"orientation","custom"},{"direction",{1,-1,1}},{"up",{0,0,1}},{"cell_mm",{140,10,140,120}}}})}};
+  const auto result=rendered(model,recipe);require(placement(result,"back").at("cell_mm")==Json::array({10,10,120,120}),"manual view cell is placed at exact sheet coordinates");
+  require(artifact(result,"drawing.svg").find("Manual layout")!=std::string::npos,"sheet identifies arbitrary manual placement");
+  const auto spec=normalize_drawing(recipe,model);require(!spec.at("views")[0].contains("cell_mm"),"sheet placement is excluded from geometry projection/cache input");
+  auto bad=recipe;bad["views"][1]["cell_mm"]={100,10,140,120};fails("invalid_drawing",[&]{rendered(model,bad);});
+  bad=recipe;bad["views"][0]["cell_mm"]={10,175,120,30};fails("invalid_drawing",[&]{rendered(model,bad);});
+  bad=recipe;bad["views"][1]["up"]={2,-2,2};fails("invalid_drawing",[&]{normalize_drawing(bad,model);});
+  bad=recipe;bad["layout"]="grid";fails("invalid_drawing",[&]{normalize_drawing(bad,model);});
+}
+Json hole_recipe(std::string termination="through",double depth=0) {
+  Json hole={{"view","top"},{"centers",Json::array({Json::array({10,5})})},{"radius",2},{"termination",termination},{"label",{24,8}}};
+  if(depth)hole["depth"]=depth;
+  return {{"scale",2},{"views",Json::array({{{"id","top"},{"orientation","top"}}})},{"hole_callouts",Json::array({hole})}};
+}
+void exact_hole_callout_tests() {
+  auto recipe=hole_recipe();recipe["hole_callouts"][0]["thread"]="M4 x 0.7";recipe["hole_callouts"][0]["fit"]="H7";
+  auto result=rendered(bore(),recipe);const auto through=result.at("hole_callouts")[0];near(through.at("diameter_mm"),4);near(through.at("depth_mm"),6);
+  require(through.at("through")==true&&through.at("count")==1,"callout proves through termination from exact material");
+  require(through.at("label").get<std::string>().find("DIA 4 H7 THRU")!=std::string::npos&&through.at("thread")=="M4 x 0.7","explicit fit and thread designation retained beside measured hole geometry");
+  require(artifact(result,"top.dxf").find("HOLE_CALLOUTS")!=std::string::npos&&artifact(result,"drawing.svg").find("data-layer=\"HOLE_CALLOUTS\"")!=std::string::npos,"callouts exported on a dedicated vector annotation layer");
+  auto blind=bore();blind["features"][1]["origin"]={10,5,6};blind["features"][1]["axis"]={0,0,-1};blind["features"][1]["depth"]=4;
+  result=rendered(blind,hole_recipe("blind",4));near(result.at("hole_callouts")[0].at("depth_mm"),4);require(result.at("hole_callouts")[0].at("through")==false,"planar bottom proves exact blind hole depth");
+  auto counterbored=bore();counterbored["features"].push_back({{"id","entry"},{"type","hole"},{"input","bored"},{"origin",{10,5,6}},{"axis",{0,0,-1}},{"radius",4},{"depth",2}});counterbored["output"]="entry";
+  recipe=hole_recipe();recipe["hole_callouts"][0]["counterbore"]={{"radius",4},{"depth",2}};
+  result=rendered(counterbored,recipe);near(result.at("hole_callouts")[0].at("counterbore").at("diameter_mm"),8);near(result.at("hole_callouts")[0].at("counterbore").at("depth_mm"),2);near(result.at("hole_callouts")[0].at("depth_mm"),6);
+  Temporary temporary;const auto path=temporary.path/"cone.step";STEPControl_Writer writer;
+  require(writer.Transfer(BRepPrimAPI_MakeCone(gp_Ax2(gp_Pnt(10,5,4),gp_Dir(0,0,1)),2,4,2).Shape(),STEPControl_AsIs)==IFSelect_RetDone&&writer.Write(path_to_utf8(path).c_str())==IFSelect_RetDone,"independent analytic countersink cutter exports STEP");
+  const auto bytes=read_text(path,524288);auto countersunk=bore();countersunk["features"].push_back({{"id","cone"},{"type","import_step"},{"content",bytes},{"sha256",sha256(bytes)}});
+  countersunk["features"].push_back({{"id","entry"},{"type","cut"},{"left","bored"},{"right","cone"}});countersunk["output"]="entry";
+  recipe=hole_recipe();recipe["hole_callouts"][0]["countersink"]={{"radius",4},{"angle",90}};
+  result=rendered(countersunk,recipe);const auto sink=result.at("hole_callouts")[0].at("countersink");near(sink.at("diameter_mm"),8);near(sink.at("angle_deg"),90);near(sink.at("depth_mm"),2);
+  auto counted=bore();counted["features"][0]["size"][0]=40;counted["features"].push_back({{"id","second"},{"type","hole"},{"input","bored"},{"origin",{30,5,-1}},{"axis",{0,0,1}},{"radius",2},{"depth",20}});counted["output"]="second";
+  recipe=hole_recipe();recipe["hole_callouts"][0]["centers"].push_back({30,5});recipe["hole_callouts"][0]["label"]={44,8};
+  result=rendered(counted,recipe);require(result.at("hole_callouts")[0].at("count")==2&&result.at("hole_callouts")[0].at("label").get<std::string>().starts_with("2 x DIA 4"),"explicit exact centers determine count");
+  fails("drawing_reference_not_found",[&]{rendered(box(),hole_recipe());});
+  auto boss=box();boss["features"][0]={{"id","base"},{"type","cylinder"},{"radius",2},{"height",6},{"origin",{10,5,0}}};fails("drawing_reference_not_found",[&]{rendered(boss,hole_recipe());});
+  fails("drawing_reference_not_found",[&]{rendered(blind,hole_recipe());});
+  fails("drawing_reference_not_found",[&]{rendered(bore(),hole_recipe("blind",6));});
+  fails("drawing_reference_not_found",[&]{rendered(blind,hole_recipe("blind",3));});
+  recipe=hole_recipe();recipe["hole_callouts"][0]["counterbore"]={{"radius",4},{"depth",3}};fails("drawing_reference_not_found",[&]{rendered(counterbored,recipe);});
+  recipe=hole_recipe();recipe["hole_callouts"][0]["countersink"]={{"radius",4},{"angle",60}};fails("drawing_reference_not_found",[&]{rendered(countersunk,recipe);});
+  fails("invalid_drawing",[&]{rendered(counterbored,hole_recipe());});
+  auto cross=bore();cross["features"].push_back({{"id","cross"},{"type","hole"},{"input","bored"},{"origin",{-1,5,3}},{"axis",{1,0,0}},{"radius",1},{"depth",22}});cross["output"]="cross";
+  fails("drawing_reference_not_found",[&]{rendered(cross,hole_recipe());});
+  auto coaxial=bore();coaxial["features"].push_back({{"id","pair"},{"type","assembly"},{"parts",Json::array({{{"id","lower"},{"input","bored"}},{{"id","upper"},{"input","bored"},{"placement",{{"translation",{0,0,8}}}}}})}});coaxial["output"]="pair";
+  fails("drawing_reference_ambiguous",[&]{rendered(coaxial,hole_recipe());});
+  auto covered=bore();covered["features"].push_back({{"id","roof"},{"type","box"},{"size",{20,10,1}},{"origin",{0,0,8}}});
+  covered["features"].push_back({{"id","pair"},{"type","assembly"},{"parts",Json::array({{{"id","lower"},{"input","bored"}},{{"id","cover"},{"input","roof"}}})}});covered["output"]="pair";
+  fails("invalid_drawing",[&]{rendered(covered,hole_recipe());});
+  auto unequal=counted;unequal["features"][2]["origin"]={30,5,6};unequal["features"][2]["axis"]={0,0,-1};unequal["features"][2]["depth"]=3;
+  recipe=hole_recipe();recipe["hole_callouts"][0]["centers"].push_back({30,5});recipe["hole_callouts"][0]["label"]={44,8};
+  fails("drawing_reference_not_found",[&]{rendered(unequal,recipe);});
+  recipe=hole_recipe();recipe["hole_callouts"][0]["label"]={10,5};fails("invalid_drawing",[&]{rendered(bore(),recipe);});
+  recipe=hole_recipe();recipe["hole_callouts"][0]["centers"].push_back({10,5});fails("invalid_drawing",[&]{normalize_drawing(recipe,bore());});
+  recipe=hole_recipe("blind");fails("invalid_drawing",[&]{normalize_drawing(recipe,bore());});
+  Service service(temporary.path);call(service,"cad_create",{{"document_id","holes"},{"model",bore()}});const auto source=call(service,"cad_read",{{"document_id","holes"}});
+  const auto output=call(service,"cad_drawing",{{"document_id","holes"},{"revision",1},{"drawing",hole_recipe()}});require(output.at("hole_callouts").size()==1,"service publishes exact hole evidence");
+  require(call(service,"cad_read",{{"document_id","holes"}})==source,"hole callout generation preserves committed source");
+  const auto prior=exported_files(temporary.path);recipe=hole_recipe("blind",6);
+  fails("drawing_reference_not_found",[&]{call(service,"cad_drawing",{{"document_id","holes"},{"revision",1},{"drawing",recipe}});});
+  require(exported_files(temporary.path)==prior,"failed hole evidence publishes no partial files");
+}
+}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));geometry_tests();paint_order_tests();layout_hatch_tests();angular_tolerance_tests();angular_service_tests();service_tests();sheet_set_tests();arbitrary_view_tests();exact_hole_callout_tests();std::cout<<"drawing: "<<checks<<" checks passed\n";return 0;}catch(const std::exception& error){std::cerr<<"FAILED: "<<error.what()<<'\n';return 1;}}

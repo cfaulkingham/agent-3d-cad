@@ -10,6 +10,9 @@ std::string mime(const std::string& extension) {
   if(extension==".step"||extension==".stp")return "model/step";
   if(extension==".stl")return "model/stl";
   if(extension==".3mf")return "model/3mf";
+  if(extension==".glb")return "model/gltf-binary";
+  if(extension==".png")return "image/png";
+  if(extension==".gif")return "image/gif";
   if(extension==".pdf")return "application/pdf";
   if(extension==".svg")return "image/svg+xml";
   if(extension==".dxf")return "image/vnd.dxf";

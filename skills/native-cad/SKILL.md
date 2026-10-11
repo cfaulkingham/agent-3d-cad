@@ -1,6 +1,6 @@
 ---
 name: native-cad
-description: Create and edit saved parametric CAD with agent-3d-cad, inspect faces and edges, export STEP/STL/drawings, or review source-hashed external CAD, meshes, drawings and robot descriptions read-only.
+description: Create and edit saved parametric CAD with agent-3d-cad, inspect faces and edges, export STEP/STL/3MF/GLB, drawings and PNG/GIF images, or review source-hashed external CAD, meshes, drawings and robot descriptions read-only.
 ---
 
 # Native editable CAD
@@ -78,13 +78,31 @@ the requested reconstruction intent is clear; recognition itself creates no docu
 
 Show that package with `cad_artifact_show` and retain its `view_id`. Use `cad_job`
 for substantial review/verification; those jobs need no synthetic document ID.
+Read the source-qualified material, texture, text/hatch and robot metadata before
+interpreting an imported display. GLB review preserves authored normals, RGBA,
+base-color textures and material/alpha/culling factors; DXF review paints actual
+supported text and hatch loops. Unsupported semantics fail explicitly. See
+[ARTIFACT_REVIEW.md](ARTIFACT_REVIEW.md).
+
+For a supported imported robot pose or GLB animation, use `cad_viewer` with
+`action:"artifact_pose"`, the current `view_id` and `evaluation_id`, and
+`configuration:{joints?:{name:number},animation?:index,time_seconds?:number}`.
+Robot angles are radians and translations are meters; GLB times are seconds.
+Keep robot and animation coordinates separate. Inspect declared limits and
+animation ranges. Configuration `{}` restores captured rest geometry. Pose
+changes create a new evaluation and clear picks; `cad_context.artifact_pose`
+records the transient configuration. Source/review hashes and editable documents
+remain unchanged. Imported animation, skinning and morphs use a fixed captured
+camera frame, so whole-object motion remains visible. This is source review,
+without physics or recovered native motion history.
 
 Read `cad_context.read_only` before interpreting a pick. Artifact picks are
 exactly `{review_sha256,kind:"mesh_group"|"curve",entity_id}` and expire with the
 captured review. Never convert artifact labels into `face-N`/`edge-N`, call
 `cad_resolve_selection` on them, or claim editable history/exact mesh solids.
-Native measurement, sections, editing, notes, presets and playback are unavailable
-in that view. Discuss source references and declared limitations instead.
+Native exact measurement, sections, editing, notes, presets and native sequence
+playback are unavailable in that view. Supported imported pose controls remain
+separate. Discuss source references and declared limitations instead.
 An optional `native_source` association is caller-declared even when its real
 historical record is hash-qualified. Open that authoritative native document
 with `cad_show` for edits. Use `cad_import` when an opaque editable STEP source is needed for the requested
@@ -352,15 +370,50 @@ directions. Omitted input retains settings. See the bundled PRESENTATION.md for
 bounds and persistence. Clipping alone creates no exact section or new
 selectable edge; calculate a native section to inspect material surfaces.
 
-The Colors panel sets an opaque default RGB color and per-leaf overrides;
-`cad_context.appearance` and agent snapshots record them. These are view colors,
-not physical materials. Saved views store camera, clip/explosion, colors and
-hidden leaves. `cad_viewer action:"preset"` uses list/save/apply/delete, current
-view/evaluation and a name except for list. Save/apply require a saved pose.
-A changed plane or explosion retires sections; other view changes retain them.
-Export → PNG image captures the embedded viewer without a Python renderer.
-It saves a local image without sending it to chat. Read the
-bundled APPEARANCE.md for limits, revision pruning and stale-context rules.
+The Colors panel sets default RGB and per-leaf overrides. Optional
+`material:{opacity,finish}` on the default or a leaf controls visual transparency
+and matte/satin/glossy/metal finish. `cad_context.appearance` records these visual
+properties. `cad_context.render` records Solid/Render/X-ray/Hidden line/Wireframe,
+orthographic/perspective projection, lens, lighting, floor, background and guide
+settings. Global surface opacity multiplies authored material opacity. These
+settings describe review appearance, without physical material claims.
+
+Saved views store camera, clip/explosion, appearance, render settings and hidden
+leaves, and restore them after reopen. `cad_viewer action:"preset"` uses
+list/save/apply/delete, current view/evaluation and a name except for list.
+Save/apply require a saved pose. A changed plane or explosion retires sections;
+other view changes retain them. Omitted visual context fields retain current
+settings. See [RENDERING.md](RENDERING.md) and [APPEARANCE.md](APPEARANCE.md).
+
+Use `cad_screenshot({view_id?,timeout_ms?})` when the actual displayed frame is
+needed in chat. It defaults to `main` and a 15-second bounded wait. The viewer
+must be open and settled. The result includes PNG image content, path, byte/hash
+metadata and qualified `source` with evaluation, native model hash or external
+review hash, required nullable `pose_model_sha256` for the displayed candidate,
+nullable native fields, draft flag and `context_sha256`. Camera,
+visibility, clipping, notes, materials and current pose are captured. Changed
+context/source, unavailable viewers and timeouts fail explicitly; refresh the
+view/context before retrying. PNG capture is capped at 2 MiB and 4,096 pixels
+per axis. The viewer's Export → PNG saves a local image separately.
+
+Use `cad_render` for an image without an open viewer. Supply
+`source:{document_id,revision,feature_id?}` or a verified external
+`source:{review_path,expected_sha256,configuration?}`. Optional `settings` carries
+width/height, camera, render, appearance, presentation and hidden leaves. Default
+output is 1,024×768 PNG; dimensions are bounded to 16–2,048 per axis, four million
+pixels, and 16 MiB. Native CPU output paints bounded PNG textures, ASCII text and
+hatch holes; JPEG textures and unsupported glyphs fail explicitly. Inspect those
+errors instead of accepting substituted surfaces or missing labels.
+
+For native saved-sequence GIF, set `format:"gif"` and
+`animation:{view_id,sequence_name,sample_rate_hz?,max_frames?}`. The default rate
+is 15 Hz; limits are 1–60 Hz, 2–256 frames, 128 million total frame pixels and
+64 MiB. Optional `loop` defaults to false. GIF uses the saved sequence's
+presentation, so omit `settings.presentation`; source revision/model/feature must
+match. PNG/GIF results bind source and file hashes, dimensions and method. Image
+content is returned up to 2 MiB unless `inline_image:false`; larger output remains
+a file with an explicit omission reason. Use `cad_job` for substantial rendering.
+See [RENDERING.md](RENDERING.md) for format and presentation limits.
 
 Use `cad_measure` with a current committed document/revision/evaluation/feature
 identity and a closed query to measure two evaluated faces/edges or leaf parts.
@@ -454,8 +507,17 @@ terminal and surface concrete feature errors. Retry the same logical mutation
 with the same request ID when reconciling a lost response. Never claim a queued
 or running job has committed.
 
-Export named revisions using `cad_export` (`step`, `stl` or `3mf`). The saved document is
-the editable source; exports are independent manufacturing/review outputs.
+Export named revisions using `cad_export` (`step`, `stl`, `3mf` or `glb`). The
+saved document is the editable source; exports are independent outputs. GLB 2
+preserves native nested occurrence hierarchy, placement, normals and visual
+materials in meters/Y-up. Supply GLB-only `appearance` for explicit colors and
+finishes. Static GLB uses the saved pose. GLB-only
+`animation:{view_id,sequence_name,sample_rate_hz?,max_frames?}` captures a saved
+source-qualified sequence, with 1–60 Hz and at most 2,048 samples. Rigid motion
+and exploded placement become translation/quaternion channels; clipping fails
+explicitly. Check mesh/sample counts and source/sequence/file hashes. GLB is
+limited to 64 MiB and does not recover exact solids or editable history. See
+[RENDERING.md](RENDERING.md).
 Measurements use millimeters. Native geometry validity is not a DFM certificate.
 
 For an engineering drawing, call `cad_drawing` with the saved `document_id` and
@@ -468,7 +530,29 @@ using geometric center/radius rules. Use model parameter references for dimensio
 that should regenerate after edits. Front uses world X/Z, top uses X/Y and right
 uses Y/Z drawing coordinates. An optional `section` view is a true plane profile
 with material hatching that leaves holes empty; set the view's `hatch: false` for
-outline only. Check runtime schemas and the packaged DRAWINGS.md.
+outline only. ISO `sheet` accepts A0–A4 with landscape/portrait orientation.
+Back/bottom/left and `custom` direction/up views use grid or manual layouts.
+Manual views require clear `cell_mm:[x,y,width,height]` rectangles in sheet mm;
+geometry and annotations must fit a common page scale. Check runtime schemas and
+[DRAWINGS.md](DRAWINGS.md).
+
+For a drawing set, supply `pages` with 1–16 explicit page recipes, each with
+1–6 views and its own dimensions/balloons/hole callouts. View IDs must be unique
+across the set, including case-insensitive output names. Page headers, sheet and
+layout choices inherit top-level defaults; formats and hidden-line choice apply
+to the set. Output includes a multipage PDF, numbered SVGs, per-view 1:1 mm DXFs
+and per-page placements. Caps are 96 views, 512 dimensions, 64 balloons,
+32 hole callouts and 115 artifacts. Default single-sheet behavior stays intact.
+
+Use `hole_callouts` for explicitly matched bores: each item gives `view`,
+projected `centers`, `radius`, `termination:"through"|"blind"` and `label`.
+Blind holes require `depth`; optional `counterbore:{radius,depth}` and
+`countersink:{radius,angle}` are mutually exclusive. The native kernel verifies
+actual inward analytic walls, visible entry, termination/depth and every counted
+center. Circle appearance alone cannot prove a hole. Thread/fit labels are
+explicit caller designations and do not establish thread geometry or fit-class
+conformance. Check measured output and resolve ambiguity/overlaps. See
+[DRAWINGS.md](DRAWINGS.md) for supported geometry and matching rules.
 
 For an exploded drawing, keep the assembled document and mates unchanged and
 use the drawing view's part offsets documented in DRAWINGS.md. Dimensions measure

@@ -4284,9 +4284,159 @@ gp_Ax2 drawing_frame(const std::string& orientation, const std::string& section_
     return gp_Ax2(gp_Pnt(0,0,0), gp_Dir(0,0,1), gp_Dir(1,0,0));
   if (orientation == "right" || (orientation == "section" && section_axis == "x"))
     return gp_Ax2(gp_Pnt(0,0,0), gp_Dir(1,0,0), gp_Dir(0,1,0));
+  if (orientation == "back") return gp_Ax2(gp_Pnt(0,0,0),gp_Dir(0,1,0),gp_Dir(-1,0,0));
+  if (orientation == "bottom") return gp_Ax2(gp_Pnt(0,0,0),gp_Dir(0,0,-1),gp_Dir(1,0,0));
+  if (orientation == "left") return gp_Ax2(gp_Pnt(0,0,0),gp_Dir(-1,0,0),gp_Dir(0,-1,0));
   if (orientation == "isometric")
     return gp_Ax2(gp_Pnt(0,0,0), gp_Dir(1,-1,1), gp_Dir(1,1,0));
   throw Error("invalid_argument", "Unknown drawing orientation or section axis");
+}
+gp_Ax2 drawing_frame(const Json& view,const std::string& section_axis) {
+  if(view.at("orientation")!="custom") {
+    if(view.contains("direction")||view.contains("up")) throw Error("invalid_argument","Only custom views accept direction/up vectors");
+    return drawing_frame(text_field(view,"orientation"),section_axis);
+  }
+  const auto direction=parameter_direction(view.at("direction"),Json::object());
+  const auto up=parameter_direction(view.at("up"),Json::object());
+  const auto horizontal=gp_Vec(up).Crossed(gp_Vec(direction));
+  if(horizontal.SquareMagnitude()<1e-12) throw Error("invalid_drawing","Custom direction and up vectors must be nonparallel");
+  return gp_Ax2(gp_Pnt(0,0,0),direction,gp_Dir(horizontal));
+}
+
+// Hole callouts describe complete analytic inward walls, rather than arbitrary
+// projected circles. The periodic boundary/area check excludes cross-bores and
+// interrupted trims; exact face normals distinguish cavities from round bosses.
+struct DrawingHoleWall {
+  TopoDS_Face face; TopoDS_Solid solid;
+  double x,y,low,high,low_radius,high_radius,angle{};
+  bool cone{};
+};
+std::vector<DrawingHoleWall> drawing_hole_walls(const TopoDS_Shape& shape,const gp_Ax2& frame) {
+  std::vector<DrawingHoleWall> walls;ShapeMap solids;TopExp::MapShapes(shape,TopAbs_SOLID,solids);
+  const auto axis=gp_Vec(frame.Direction()),horizontal=gp_Vec(frame.XDirection()),vertical=gp_Vec(frame.YDirection());
+  std::size_t examined=0;
+  for(int i=1;i<=solids.Extent();++i) for(TopExp_Explorer it(solids(i),TopAbs_FACE);it.More();it.Next()) {
+    if(++examined>20000) throw Error("limit_exceeded","Hole recognition exceeds its 20000-face budget");
+    const auto face=TopoDS::Face(it.Current());BRepAdaptor_Surface surface(face);
+    const bool cone=surface.GetType()==GeomAbs_Cone;
+    if(surface.GetType()!=GeomAbs_Cylinder && !cone) continue;
+    const auto position=cone?surface.Cone().Position():surface.Cylinder().Position();
+    if(std::abs(position.Direction().Dot(frame.Direction()))<1-1e-10 || !periodic_rectangle(face)) continue;
+    double u0,u1,v0,v1;BRepTools::UVBounds(face,u0,u1,v0,v1);
+    gp_Pnt midpoint;gp_Vec du,dv;surface.D1((u0+u1)/2,(v0+v1)/2,midpoint,du,dv);
+    const gp_Vec from_axis(position.Location(),midpoint);const auto radial=from_axis-gp_Vec(position.Direction())*from_axis.Dot(gp_Vec(position.Direction()));
+    auto normal=du.Crossed(dv);if(face.Orientation()==TopAbs_REVERSED) normal.Reverse();
+    if(radial.SquareMagnitude()<1e-14 || normal.SquareMagnitude()<1e-14 || normal.Dot(radial)>=-1e-9) continue;
+    const gp_Vec center(frame.Location(),position.Location());
+    auto end=[&](double v){const auto p=surface.Value((u0+u1)/2,v);const gp_Vec delta(frame.Location(),p);const gp_Vec local(position.Location(),p);
+      return std::pair{delta.Dot(axis),(local-gp_Vec(position.Direction())*local.Dot(gp_Vec(position.Direction()))).Magnitude()};};
+    auto low=end(v0),high=end(v1);if(low.first>high.first)std::swap(low,high);
+    if(high.first-low.first<=1e-7 || low.second<=1e-7 || high.second<=1e-7) continue;
+    walls.push_back({face,TopoDS::Solid(solids(i)),center.Dot(horizontal),center.Dot(vertical),low.first,high.first,low.second,high.second,
+      cone?2*std::abs(surface.Cone().SemiAngle())*180/std::numbers::pi:0,cone});
+  }
+  return walls;
+}
+Json drawing_hole_evidence(const Json& requested,const TopoDS_Shape& shape,const gp_Ax2& frame) {
+  if(!requested.is_array()||requested.empty()||requested.size()>32) throw Error("invalid_argument","A view permits one to 32 hole callout requests");
+  const auto walls=drawing_hole_walls(shape,frame);Json results=Json::array();std::set<std::size_t> indices;
+  Bnd_Box bounds;BRepBndLib::AddOptimal(shape,bounds,false,false);const auto limits=bounds.Get();
+  const auto ray_length=std::hypot(limits.Xmax-limits.Xmin,limits.Ymax-limits.Ymin,limits.Zmax-limits.Zmin)+1;
+  const auto axis=gp_Vec(frame.Direction()),horizontal=gp_Vec(frame.XDirection()),vertical=gp_Vec(frame.YDirection());
+  auto at=[&](double x,double y,double z){return frame.Location().Translated(horizontal*x+vertical*y+axis*z);};
+  auto equal=[](double a,double b,double tolerance){return std::abs(a-b)<=tolerance;};
+  IntCurvesFace_ShapeIntersector ray;ray.Load(shape,1e-7);
+  std::size_t centers_total=0;
+  for(const auto& request:requested) {
+    fields(request,{"index","centers","radius","termination","tolerance"},{"depth","counterbore","countersink"});
+    if(!request.at("index").is_number_unsigned()&&!request.at("index").is_number_integer()) throw Error("invalid_argument","Hole index must be an integer");
+    const auto index=request.at("index").get<std::size_t>();if(index>=32||!indices.insert(index).second) throw Error("invalid_argument","Hole request indices must be unique and below 32");
+    const auto radius=number(request.at("radius")),tolerance=number(request.at("tolerance"));
+    const auto termination=text_field(request,"termination");
+    if(radius<=0||tolerance<=0||tolerance>0.1||(termination!="through"&&termination!="blind")) throw Error("invalid_argument","Invalid hole matching rules");
+    if(termination=="blind"&&!request.contains("depth"))throw Error("invalid_argument","Blind hole callouts require depth");
+    if(request.contains("counterbore")&&request.contains("countersink"))throw Error("invalid_argument","A hole entry cannot be both counterbored and countersunk");
+    if(!request.at("centers").is_array()||request.at("centers").empty()||request.at("centers").size()>64) throw Error("invalid_argument","Hole requests require one to 64 explicit centers");
+    centers_total+=request.at("centers").size();if(centers_total>2048)throw Error("limit_exceeded","Hole recognition exceeds its 2048-center budget");
+    Json aggregate;
+    for(const auto& center:request.at("centers")) {
+      if(!center.is_array()||center.size()!=2)throw Error("invalid_argument","Hole center requires two numeric coordinates");
+      const auto x=number(center[0]),y=number(center[1]);
+      auto aligned=[&](const DrawingHoleWall& wall){return std::hypot(wall.x-x,wall.y-y)<=tolerance;};
+      std::vector<const DrawingHoleWall*> matches;
+      for(const auto& wall:walls) if(!wall.cone&&aligned(wall)&&equal(wall.low_radius,radius,tolerance)) matches.push_back(&wall);
+      if(matches.empty())throw Error("drawing_reference_not_found","Hole center/radius does not match a complete inward cylindrical wall",{{"center",center},{"radius",radius}});
+      if(matches.size()!=1)throw Error("drawing_reference_ambiguous","Hole center/radius matches distinct inward cylindrical walls",{{"center",center},{"matches",matches.size()}});
+      const auto& main=*matches.front();double entry=main.high;Json secondary;
+      std::vector<const DrawingHoleWall*> entries;
+      for(const auto& wall:walls)if(aligned(wall)&&wall.solid.IsSame(main.solid)&&equal(wall.low,main.high,1e-6)&&wall.high>main.high+1e-6&&equal(wall.low_radius,main.low_radius,1e-6)==wall.cone)entries.push_back(&wall);
+      if(entries.size()>1)throw Error("drawing_reference_ambiguous","Hole has ambiguous adjoining entry walls",{{"center",center}});
+      const bool counterbore=request.contains("counterbore"),countersink=request.contains("countersink");
+      if(counterbore||countersink) {
+        const auto key=counterbore?"counterbore":"countersink";const auto& rule=request.at(key);
+        fields(rule,{"radius",counterbore?"depth":"angle"});
+        if(entries.empty())throw Error("drawing_reference_not_found","Hole lacks the requested entry geometry",{{"center",center},{"kind",key}});
+        const auto& wall=*entries.front();const auto requested_radius=number(rule.at("radius"));
+        if(wall.cone!=countersink||requested_radius<=radius||!equal(wall.high_radius,requested_radius,tolerance))throw Error("drawing_reference_not_found","Hole entry does not match its radius/type rule",{{"center",center},{"kind",key}});
+        const auto depth=wall.high-wall.low;
+        if(counterbore) {
+          if(number(rule.at("depth"))<=0||!equal(depth,number(rule.at("depth")),tolerance))throw Error("drawing_reference_not_found","Counterbore depth does not match exact geometry",{{"center",center},{"actual_depth_mm",depth}});
+          secondary={{"diameter_mm",2*wall.high_radius},{"depth_mm",depth}};
+        } else {
+          const auto angle=number(rule.at("angle"));if(angle<=0||angle>=180||!equal(wall.angle,angle,0.02))throw Error("drawing_reference_not_found","Countersink angle does not match exact geometry",{{"center",center},{"actual_angle_deg",wall.angle}});
+          secondary={{"diameter_mm",2*wall.high_radius},{"angle_deg",wall.angle},{"depth_mm",depth}};
+        }
+        entry=wall.high;
+        for(const auto& continuation:walls)if(aligned(continuation)&&continuation.solid.IsSame(main.solid)&&equal(continuation.low,entry,1e-6)&&continuation.high>entry+1e-6)
+          throw Error("invalid_drawing","Hole callouts currently support one enlarged entry stage",{{"center",center}});
+      } else if(!entries.empty()) throw Error("invalid_drawing","Hole has entry geometry that must be requested explicitly",{{"center",center}});
+      // Exit steps or drill points are not silently folded into a cylindrical
+      // depth; the caller receives an explicit unsupported-geometry failure.
+      for(const auto& wall:walls)if(aligned(wall)&&wall.solid.IsSame(main.solid)&&equal(wall.high,main.low,1e-6)&&wall.low<main.low-1e-6)
+        throw Error("invalid_drawing","Hole callouts currently require a flat blind bottom or an unstepped through exit",{{"center",center}});
+      const auto epsilon=std::min({1e-4,(main.high-main.low)*1e-4,main.low_radius*1e-4});
+      BRepClass3d_SolidClassifier middle(main.solid,at(main.x,main.y,(main.low+main.high)/2),1e-7);
+      BRepClass3d_SolidClassifier bottom(main.solid,at(main.x,main.y,main.low-epsilon),1e-7);
+      BRepClass3d_SolidClassifier above(main.solid,at(main.x,main.y,entry+epsilon),1e-7);
+      if(middle.State()!=TopAbs_OUT||above.State()!=TopAbs_OUT||(bottom.State()!=TopAbs_IN&&bottom.State()!=TopAbs_OUT))throw Error("invalid_drawing","Cannot prove cylindrical cavity and termination",{{"center",center}});
+      const bool through=bottom.State()==TopAbs_OUT;
+      if(through!=(termination=="through"))throw Error("drawing_reference_not_found","Hole termination does not match exact material geometry",{{"center",center},{"actual_through",through}});
+      if(through) {
+        IntCurvesFace_ShapeIntersector exit;exit.Load(main.solid,1e-7);
+        exit.Perform(gp_Lin(at(main.x,main.y,main.low-epsilon),frame.Direction().Reversed()),0,ray_length);
+        if(!exit.IsDone())throw Error("kernel_failure","Cannot verify an unobstructed through-hole exit");
+        if(exit.NbPnt()>0)throw Error("invalid_drawing","Hole exit has additional cavity geometry or a drill-point bottom",{{"center",center}});
+      }
+      if(!through) {
+        bool flat=false;
+        for(TopExp_Explorer face(main.solid,TopAbs_FACE);face.More();face.Next()) {
+          const auto cap=TopoDS::Face(face.Current());BRepAdaptor_Surface surface(cap);if(surface.GetType()!=GeomAbs_Plane)continue;
+          if(std::abs(surface.Plane().Axis().Direction().Dot(frame.Direction()))<1-1e-10||surface.Plane().Distance(at(main.x,main.y,main.low))>1e-6)continue;
+          BRepClass_FaceClassifier inside(cap,at(main.x,main.y,main.low),1e-7);if(inside.State()!=TopAbs_IN&&inside.State()!=TopAbs_ON)continue;
+          GProp_GProps properties;BRepGProp::SurfaceProperties(cap,properties);
+          if(std::abs(properties.Mass()-std::numbers::pi*main.low_radius*main.low_radius)<=1e-7*std::max(1.0,properties.Mass()))flat=true;
+        }
+        if(!flat)throw Error("invalid_drawing","Blind hole bottom is not one complete planar circular cap",{{"center",center}});
+      }
+      ray.Perform(gp_Lin(at(main.x,main.y,entry+epsilon),frame.Direction()),0,ray_length);
+      if(!ray.IsDone())throw Error("kernel_failure","Cannot verify hole entry visibility");
+      if(ray.NbPnt()>0)throw Error("invalid_drawing","Hole entry is occluded from the requested view",{{"center",center}});
+      const auto depth=entry-main.low;
+      if(request.contains("depth")&&(number(request.at("depth"))<=0||!equal(depth,number(request.at("depth")),tolerance)))throw Error("drawing_reference_not_found","Hole depth does not match exact geometry",{{"center",center},{"actual_depth_mm",depth}});
+      Json evidence={{"diameter_mm",2*main.low_radius},{"depth_mm",depth},{"through",through}};
+      if(counterbore||countersink)evidence[counterbore?"counterbore":"countersink"]=secondary;
+      if(aggregate.is_null()){aggregate=evidence;aggregate["index"]=index;aggregate["centers_mm"]=Json::array();}
+      else {
+        if(!equal(aggregate.at("diameter_mm"),evidence.at("diameter_mm"),1e-6)||!equal(aggregate.at("depth_mm"),depth,1e-6)||aggregate.at("through")!=through)
+          throw Error("invalid_drawing","Counted holes must have identical exact dimensions and termination",{{"center",center}});
+        if(counterbore||countersink) for(const auto& [field,value]:secondary.items())
+          if(!equal(aggregate.at(counterbore?"counterbore":"countersink").at(field),value,1e-6))throw Error("invalid_drawing","Counted hole entries must have identical exact dimensions",{{"center",center}});
+      }
+      aggregate["centers_mm"].push_back({main.x,main.y});
+    }
+    results.push_back(std::move(aggregate));
+  }
+  return results;
 }
 Json balloon_anchors(const Json& requested,const std::vector<AssemblyPart>& parts,
                      const TopoDS_Shape& shape,const gp_Ax2& frame,const std::string& feature_id) {
@@ -4561,8 +4711,8 @@ struct DrawingView {
 
 Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::string& feature_id) const {
   fields(spec,{"views"},{"hidden_lines"});
-  if (!spec.at("views").is_array() || spec.at("views").empty() || spec.at("views").size()>6)
-    throw Error("invalid_argument", "A drawing requires 1 to 6 views");
+  if (!spec.at("views").is_array() || spec.at("views").empty() || spec.at("views").size()>96)
+    throw Error("invalid_argument", "A drawing set requires 1 to 96 projected views");
   if (spec.contains("hidden_lines") && !spec.at("hidden_lines").is_boolean())
     throw Error("invalid_argument", "hidden_lines must be boolean");
   const bool hidden = spec.value("hidden_lines",true);
@@ -4575,9 +4725,10 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::s
   Json result = {{"views",Json::array()},{"tolerance_mm",drawing_tolerance},{"view_budgets",Json::array()}};
   std::set<std::string> ids;
   std::size_t anchor_count=0;
+  std::size_t hole_count=0,hole_centers=0;
   for (const auto& view : spec.at("views")) {
     const DrawingBudget usage_before=budget;
-    fields(view,{"id","orientation"},{"section","hatch","explode","balloon_anchors"});
+    fields(view,{"id","orientation"},{"section","hatch","explode","balloon_anchors","direction","up","hole_requests"});
     const auto id = text_field(view,"id"); identifier(id);
     if (!ids.insert(id).second) throw Error("invalid_argument", "Drawing view IDs must be unique", {{"view_id",id}});
     try {
@@ -4623,13 +4774,20 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::s
         fields(view.at("section"),{"axis","offset"});
         axis = text_field(view.at("section"),"axis"); offset = number(view.at("section").at("offset"));
       } else if (view.contains("section")) throw Error("invalid_argument", "Only section views accept a section plane");
-      const auto frame = drawing_frame(orientation,axis);
+      const auto frame = drawing_frame(view,axis);
       Json projected_anchors;
       if (view.contains("balloon_anchors")) {
         if (orientation=="section") throw Error("invalid_argument","Section balloons are not supported",{{"feature_id",selected}});
         anchor_count+=view.at("balloon_anchors").size();
         if (anchor_count>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",selected}});
         projected_anchors=balloon_anchors(view.at("balloon_anchors"),view_parts,view_shape,frame,selected);
+      }
+      Json hole_evidence;
+      if(view.contains("hole_requests")) {
+        if(orientation=="section")throw Error("invalid_argument","Section hole callouts are not supported");
+        hole_count+=view.at("hole_requests").size();for(const auto& request:view.at("hole_requests"))hole_centers+=request.at("centers").size();
+        if(hole_count>32||hole_centers>2048)throw Error("limit_exceeded","A drawing set permits at most 32 hole callouts and 2048 explicit centers");
+        hole_evidence=drawing_hole_evidence(view.at("hole_requests"),view_shape,frame);
       }
       DrawingView projected(budget);
       Json regions=Json::array();
@@ -4709,6 +4867,7 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::s
       Json output={{"id",id},{"orientation",orientation},{"bounds_mm",{b.Xmin,b.Ymin,b.Xmax,b.Ymax}},{"entities",std::move(projected.entities)}};
       if (view.contains("explode")) output["explode"]=view.at("explode");
       if (!projected_anchors.is_null()) output["balloon_anchors"]=std::move(projected_anchors);
+      if (!hole_evidence.is_null()) output["hole_evidence"]=std::move(hole_evidence);
       if (orientation=="section" && view.value("hatch",true)) output["section_regions"]=std::move(regions);
       result["views"].push_back(std::move(output));
       // What this view cost, so a cached view still counts toward the drawing-wide limits.
@@ -4723,10 +4882,15 @@ Json BuiltModel::drawing(const Json& spec, Json* exact_projections, const std::s
 }
 
 void check_drawing_totals(const Json& requested_views, const Json& view_budgets, const std::string& feature_id) {
-  std::size_t anchors=0, entities=0, points=0, examined_edges=0;
-  for (const auto& view : requested_views)
+  std::size_t anchors=0, entities=0, points=0, examined_edges=0,holes=0,hole_centers=0;
+  for (const auto& view : requested_views) {
     if (view.contains("balloon_anchors")) anchors+=view.at("balloon_anchors").size();
+    if(view.contains("hole_requests")) {
+      holes+=view.at("hole_requests").size();for(const auto& hole:view.at("hole_requests"))hole_centers+=hole.at("centers").size();
+    }
+  }
   if (anchors>64) throw Error("limit_exceeded","A drawing permits at most 64 balloon anchors",{{"feature_id",feature_id}});
+  if(holes>32||hole_centers>2048)throw Error("limit_exceeded","A drawing set permits at most 32 hole callouts and 2048 explicit centers",{{"feature_id",feature_id}});
   for (const auto& usage : view_budgets) {
     entities+=usage.at("entities").get<std::size_t>(); points+=usage.at("points").get<std::size_t>();
     examined_edges+=usage.at("examined_edges").get<std::size_t>();

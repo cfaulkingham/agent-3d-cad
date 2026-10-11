@@ -1,0 +1,1 @@
+<robot name="motion"><group name="arm"><chain base_link="base" tip_link="finger"/></group><group_state name="raised" group="arm"><joint name="hinge" value="1"/><joint name="follower" value="2"/></group_state><disable_collisions link1="arm" link2="finger" reason="Adjacent"/><passive_joint name="follower"/></robot>

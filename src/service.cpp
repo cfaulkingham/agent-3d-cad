@@ -8,6 +8,9 @@
 #include "agentcad/viewer.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/live.hpp"
+#include "agentcad/screenshot.hpp"
+#include "agentcad/visual.hpp"
+#include "agentcad/render_service.hpp"
 #include "agentcad/drawing.hpp"
 #include "agentcad/bom.hpp"
 #include "agentcad/robot.hpp"
@@ -58,7 +61,7 @@ void write_artifact(const fs::path& path, const std::string& content) {
     publish_file(temporary,path);
   } catch(...) { std::error_code ignored;fs::remove(temporary,ignored);throw; }
 }
-Json save_evaluation(const fs::path& root,const Json& record,Json result,bool draft,bool viewer) {
+Json save_evaluation(const fs::path& root,const Json& record,Json result,bool draft,bool viewer,const Json* candidate=nullptr) {
   result["schema_version"]=1;
   result["document_id"]=record.at("document_id"); result["revision"]=record.at("revision");
   result["kernel_version"]=kernel_version(); result["evaluation_id"]=evaluation_id();
@@ -67,6 +70,7 @@ Json save_evaluation(const fs::path& root,const Json& record,Json result,bool dr
   const auto dir=root/"evaluations";directory(dir);
   auto metadata=result;metadata.erase("mesh");
   metadata["_native_build"]=AGENTCAD_CACHE_BUILD;metadata["_model_sha256"]=sha256(record.at("model").dump());
+  metadata["_candidate_model_sha256"]=sha256(candidate?candidate->dump():record.at("model").dump());
   const auto eid=result.at("evaluation_id").get<std::string>();
   write_artifact(dir/(eid+".json"),metadata.dump());
   if(viewer) {
@@ -188,9 +192,12 @@ Json tool_definitions() {
     tool("cad_measure","Measure committed B-reps: face/edge/leaf pair distances, analytic angles, common material volume, or planar section curves and material caps. Clearance queries cover at most 23 leaves. Section queries use an explicit displayed-world plane and optional exploded leaf offsets; distance queries always use the saved source pose. Reject stale/draft/build-mismatched references and ambiguous recovery.",
       {{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},{"query",{{"$ref","#/$defs/measurement_query"}}}},
       {"document_id","revision","evaluation_id","feature_id","query"},definitions.at("measurement_result"),true),
-    tool("cad_export","Export a committed revision or feature as STEP, binary STL or separate-solid 3MF. Optional 3MF layout packs a rectangular bed across plates or reuses complete explicit placements. Geometry-only files retain mm units; no slicing or hardware actions.",
-      {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf"}}}},{"feature_id",id},{"layout",print_layout_schema()}},{"document_id","revision","format"},
-      object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"const","mm"}}},
+    tool("cad_export","Export a committed revision or feature as STEP, STL, separate-solid 3MF or visual GLB. GLB preserves leaf placement/materials and optionally animates a source-qualified saved view sequence in meters/Y-up. Clipping is explicitly rejected for GLB; rigid exploded poses are baked. Optional 3MF layout packs plates. No slicing or hardware actions.",
+      {{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf","glb"}}}},{"feature_id",id},{"layout",print_layout_schema()},{"appearance",visual_appearance_schema()},{"animation",visual_animation_schema()}},{"document_id","revision","format"},
+      object({{"document_id",id},{"revision",revision},{"format",{{"enum",{"step","stl","3mf","glb"}}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"units",{{"enum",{"mm","m"}}}},
+        {"source_units",{{"const","mm"}}},{"sha256",hash},{"model_sha256",hash},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},
+        {"mesh_count",{{"type","integer"},{"minimum",1},{"maximum",1024}}},{"sample_count",{{"type","integer"},{"minimum",0},{"maximum",2048}}},
+        {"sequence_sha256",hash},{"sequence_name",{{"type","string"},{"minLength",1},{"maxLength",64}}},{"sample_rate_hz",{{"type","number"},{"minimum",1},{"maximum",60}}},
         {"layout_path",text},{"plates",array(object({{"plate",{{"type","integer"},{"minimum",1},{"maximum",64}}},{"path",text},{"bytes",{{"type","integer"},{"minimum",1}}},{"sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"source_ids",array(text,4096)}},{"plate","path","bytes","sha256","source_ids"}),64)}},
         {"document_id","revision","format","path","bytes","units"}),false),
     tool("cad_manufacture","Export a revision-qualified manufacturing package with editable source, unique leaf STEP/STL/drawings, saved assembly placement, BOM/purchasing data, explicit process assumptions and a portable SHA-256 manifest. Defaults to both solid formats and native drawings. Does not perform process certification, slicing or physical printing.",
@@ -234,15 +241,17 @@ Json tool_definitions() {
       object({{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"units",{{"const","mm"}}},
         {"scale",{{"type","number"},{"exclusiveMinimum",0}}},
         {"sheet_mm",{{"type","array"},{"items",{{"type","number"},{"exclusiveMinimum",0}}},{"minItems",2},{"maxItems",2}}},
-        {"layout",{{"enum",{"grid","first_angle","third_angle"}}}},
+        {"layout",{{"enum",{"grid","first_angle","third_angle","manual"}}}},
         {"view_layouts",array(object({{"view",id},
           {"origin_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}},
           {"cell_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",4},{"maxItems",4}}}},
-          {"view","origin_mm","cell_mm"}),6)},
+          {"view","origin_mm","cell_mm"}),96)},
         {"path",text},{"recipe_path",text},{"projection_tolerance_mm",{{"const",0.02}}},
         {"artifacts",array(object({{"format",{{"enum",{"svg","pdf","dxf","json","csv"}}}},{"path",text},
-          {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),10)},
-        {"dimensions",array(drawing_dimension_result_schema(),32)},
+          {"bytes",{{"type","integer"},{"minimum",1}}},{"view_id",id}}, {"format","path","bytes"}),115)},
+        {"dimensions",array(drawing_dimension_result_schema(),512)},
+        {"pages",array(drawing_page_result_schema(),16)},
+        {"hole_callouts",array(drawing_hole_result_schema(),32)},
         {"bom",{{"$ref","#/$defs/bom"}}},
         {"balloons",array(object({{"view",id},{"part_id",occurrence_schema()},{"item_number",{{"type","integer"},{"minimum",1},{"maximum",999}}},
           {"anchor_mm",{{"type","array"},{"items",{{"type","number"}}},{"minItems",2},{"maxItems",2}}},
@@ -290,10 +299,16 @@ Json tool_definitions() {
       tool["outputSchema"]["properties"]["downloads"]={{"type","array"},{"items",download_link_schema()},{"maxItems",128}};
       tool["outputSchema"]["properties"]["download_errors"]={{"type","array"},{"maxItems",128},{"items",object({{"name",text},{"code",text},{"message",text}},{"name","code","message"})}};
     }
-    if(tool.at("name")=="cad_export")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"required",{"layout"}}}},{"then",{{"properties",{{"format",{{"const","3mf"}}}}}}}}});
+    if(tool.at("name")=="cad_export") {
+      auto& rules=tool["inputSchema"]["allOf"];rules=Json::array();
+      for(const auto& [field,format]:std::map<std::string,std::string>{{"layout","3mf"},{"appearance","glb"},{"animation","glb"}}) {
+        Json rule=Json::object();rule["if"]["required"]=Json::array({field});rule["then"]["properties"]["format"]["const"]=format;rules.push_back(rule);
+      }
+    }
   }
   for(auto& tool:tools)if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"].push_back({{"if",{{"required",{"fonts"}}}},{"then",{{"properties",{{"format",{{"const","dxf"}}}}}}}});
-  const std::set<std::string> job_tools={"cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  tools.insert(tools.end()-1,render_tool_definition());
+  const std::set<std::string> job_tools={"cad_render","cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   std::set<std::string> result_contracts;
   for(const auto& definition:tools) {
@@ -783,6 +798,7 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
+  if(tool=="cad_render"){validate_render_arguments(args);return;}
   if(tool=="cad_import_sketch") {
     fields(args,{"document_id","expected_revision","format","path","feature_id","workplane"},{"request_id","expected_sha256","text","height","spacing","scale","face_index","fonts"});if(args.contains("fonts")){if(args.at("format")!="dxf")throw Error("invalid_argument","Only DXF accepts fonts");validate_authoring_fonts(args.at("fonts"),true);}identifier(text_field(args,"document_id"));revision_number(args.at("expected_revision"));identifier(text_field(args,"feature_id"));text_field(args,"path");if(args.contains("request_id"))identifier(text_field(args,"request_id"));const auto format=text_field(args,"format");if(format!="text"&&format!="svg"&&format!="dxf")throw Error("invalid_argument","Import format must be text, svg or dxf");
     if(format=="text"){if(!args.contains("text")||!args.contains("height"))throw Error("invalid_argument","Text import requires text and height");text_field(args,"text");if(args.contains("scale"))throw Error("invalid_argument","Text import does not accept scale");if(args.contains("face_index")&&(!args.at("face_index").is_number_integer()||args.at("face_index")<0||args.at("face_index")>31))throw Error("invalid_argument","Font face_index requires 0..31");}else for(auto key:{"text","height","spacing","face_index"})if(args.contains(key))throw Error("invalid_argument","SVG/DXF import does not accept text/font options");
@@ -829,9 +845,11 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
       catch(const Error& error){throw Error("invalid_argument",error.what(),error.details);}
   }
   else if(tool=="cad_export") {
-    fields(args,{"document_id","revision","format"},{"feature_id","layout"});const auto format=text_field(args,"format");
-    if(format!="step"&&format!="stl"&&format!="3mf")throw Error("invalid_argument","Export format must be step, stl or 3mf");
+    fields(args,{"document_id","revision","format"},{"feature_id","layout","appearance","animation"});const auto format=text_field(args,"format");
+    if(format!="step"&&format!="stl"&&format!="3mf"&&format!="glb")throw Error("invalid_argument","Export format must be step, stl, 3mf or glb");
     if(args.contains("layout")){if(format!="3mf")throw Error("invalid_argument","Print layout requires 3mf format");validate_print_layout(args.at("layout"));}
+    if((args.contains("appearance")||args.contains("animation"))&&format!="glb")throw Error("invalid_argument","Appearance and animation require GLB format");
+    if(args.contains("animation"))validate_visual_animation(args.at("animation"));
   }
   else if(tool=="cad_manufacture") {fields(args,{"document_id","revision"},{"feature_id","options"});validate_manufacturing_options(args.value("options",Json::object()));}
   else if(tool=="cad_fabrication_review") {fields(args,{"document_id","revision","options"},{"feature_id"});validate_fabrication_options(args.at("options"));}
@@ -892,6 +910,8 @@ Json Service::read_resource(const std::string& uri) {
 }
 
 Json Service::execute(const std::string& tool,const Json& args) {
+  if(tool=="cad_screenshot")return capture_view_screenshot(store_,args);
+  if(tool=="cad_render")return render_visual_output(store_,args);
   if(tool=="cad_artifact_show"||tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
     return live_call(*this,store_,tool,args);
   if(tool=="cad_job") return dispatch_job(store_.root(),args);
@@ -1023,7 +1043,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     const auto kind=args.value("kind",std::string("view"));
     if(kind!="view" && kind!="mesh") throw Error("invalid_argument","Preview kind must be view or mesh");
     Json request={{"kind","view"}};if(args.contains("feature_id"))request["feature_id"]=args.at("feature_id");
-    return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,kind=="view");
+    return save_evaluation(store_.root(),record,evaluate_model(store_.root(),candidate,request),true,kind=="view",&candidate);
   }
   const auto revision=revision_number(args.at("revision"));const auto record=store_.read(id,revision);
   if(tool=="cad_measure") {
@@ -1175,7 +1195,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
       Json result=identity;result["units"]="mm";result["scale"]=evaluated.at("scale");
       result["sheet_mm"]=evaluated.at("sheet_mm");result["dimensions"]=evaluated.at("dimensions");
       result["layout"]=evaluated.at("layout");result["view_layouts"]=evaluated.at("view_layouts");
-      for(const auto* field:{"bom","balloons"}) if(evaluated.contains(field)) result[field]=evaluated.at(field);
+      for(const auto* field:{"bom","balloons","pages","hole_callouts"}) if(evaluated.contains(field)) result[field]=evaluated.at(field);
       result["projection_tolerance_mm"]=0.02;
       result["path"]=path_to_utf8(destination/"manifest.json");
       result["recipe_path"]=path_to_utf8(destination/"drawing.json");
@@ -1190,7 +1210,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
            ((format=="json"||format=="csv")&&name!="bom."+format))
           throw Error("internal_error","Invalid drawing artifact filename");
         total+=content.size();
-        if(content.empty()||total>64*1024*1024||names.size()>10)throw Error("limit_exceeded","Drawing artifacts exceed output limits");
+        if(content.empty()||total>64*1024*1024||names.size()>115)throw Error("limit_exceeded","Drawing artifacts exceed output limits");
         check_job_cancelled();write_artifact(destination/path,content);
         Json artifact={{"format",format},{"path",path_to_utf8(destination/path)},{"bytes",content.size()}};
         if(format=="dxf")artifact["view_id"]=path_to_utf8(path.stem());
@@ -1217,6 +1237,18 @@ Json Service::execute(const std::string& tool,const Json& args) {
   const auto format=text_field(args,"format");
 
   const auto exports=store_.root()/"exports";directory(exports);
+  if(format=="glb") {
+    const auto feature=args.value("feature_id",text_field(record.at("model"),"output"));
+    Json identity={{"document_id",id},{"revision",revision},{"feature_id",feature},{"kernel_version",kernel_version()},{"model_sha256",sha256(record.at("model").dump())},{"native_build",AGENTCAD_CACHE_BUILD},{"source_units","mm"}};
+    Json options={{"appearance",args.value("appearance",Json())}};
+    if(args.contains("animation")){options["animation"]=capture_visual_sequence(store_,args.at("animation"),record,feature);const auto& captured=options.at("animation");identity["sequence_name"]=captured.at("sequence").at("name");identity["sequence_sha256"]=captured.at("sequence_sha256");identity["sample_rate_hz"]=captured.at("sample_rate_hz");}
+    const auto stage=temporary_file(exports),target=exports/(id+"-r"+std::to_string(revision)+"-"+evaluation_id()+".glb");
+    try {
+      const auto generated=evaluate_model(store_.root(),record.at("model"),{{"kind","export"},{"format","glb"},{"feature_id",feature},{"path",path_to_utf8(stage)},{"identity",identity},{"options",options}}).at("glb");
+      auto result=identity;result.erase("native_build");result["format"]="glb";result["units"]="m";result["path"]=path_to_utf8(target);for(const auto* key:{"bytes","mesh_count","sample_count"})result[key]=generated.at(key);result["sha256"]=sha256_file(stage,64*1024*1024,check_job_cancelled);
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();publish_file(stage,target);return result;
+    }catch(...){std::error_code ignored;fs::remove(stage,ignored);throw;}
+  }
   if(format=="3mf") {
     const auto stage=temporary_directory(exports);
     try {

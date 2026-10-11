@@ -186,7 +186,7 @@ void discovery_contract(Service& service) {
   const auto bytes = listed.dump().size();
   // Preserve the 15 KiB-per-tool average as native source capture/import adds
   // two independently typed contracts to the discovery catalog.
-  require(listed.at("tools").size()==31,"Expected native discovery catalog");
+  require(listed.at("tools").size()==33,"Expected native discovery catalog");
   require(bytes < listed.at("tools").size() * 15 * 1024, "tools/list stays compact (" + std::to_string(bytes) + " bytes)");
   for (const auto& tool : listed.at("tools")) for (const auto* key : {"inputSchema", "outputSchema"}) {
     require(tool.at(key).value("type",std::string{})=="object","MCP discovery schemas explicitly declare object roots");

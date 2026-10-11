@@ -11,6 +11,7 @@
   const sectionGeometry=value=>CadRenderer.math.sectionGeometry(value);
   const sameSectionGeometry=(a,b)=>JSON.stringify(sectionGeometry(a))===JSON.stringify(sectionGeometry(b));
   const sectionQueryGeometry=query=>sectionGeometry({clip:{...query.plane,keep:'positive'},explode:query.explode||defaultPresentation().explode});
+  const renderFor=value=>CadRenderer.math.renderSettings(value||{});
   const appearanceFor=(value,payload,prune=false)=>CadRenderer.math.appearance(value||CadRenderer.math.defaultAppearance(),
     {partBounds:new Map((payload?.summary?.assembly?.parts||[]).map(part=>[part.id,true]))},{prune});
   const presetName=name=>{
@@ -37,8 +38,8 @@
       this.measurementVersion=0;this.measureBusy=false;
       this.pointMeasurementSource=null;
       this.sectionVersion=0;this.sectionBusy=false;
-      this.appearanceVersion=0;this.appearanceSaved=0;this.cameraVersion=0;this.cameraSaved=0;this.presetVersion=0;this.presetBusy=false;this.annotationVersion=0;this.annotationBusy=false;this.sequenceVersion=0;this.sequenceBusy=false;this.playbackTimer=null;this.playToken=0;
-      this.value = { read_only:false,artifact:null,view_id: null, status: 'connecting', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], visibility_unsaved: false, presentation:defaultPresentation(),presentation_unsaved:false,saving: false, motion_error: null, preview_operations: null,measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false,section:null,section_status:null,section_error:null,sectioning:false,appearance:CadRenderer.math.defaultAppearance(),appearance_unsaved:false,presets:[],preset_error:null,preset_busy:false,preset_message:null,annotations:[],annotation_error:null,annotating:false,sequences:[],playback:null,playing:false,sequence_busy:false,sequence_error:null };
+      this.renderVersion=0;this.renderSaved=0;this.appearanceVersion=0;this.appearanceSaved=0;this.cameraVersion=0;this.cameraSaved=0;this.presetVersion=0;this.presetBusy=false;this.annotationVersion=0;this.annotationBusy=false;this.sequenceVersion=0;this.sequenceBusy=false;this.playbackTimer=null;this.playToken=0;this.artifactBusy=false;this.artifactTimer=null;this.artifactPlayToken=0;
+      this.value = { read_only:false,artifact:null,artifact_pose:{},artifact_pose_busy:false,artifact_pose_error:null,artifact_playing:false,view_id: null, status: 'connecting', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], visibility_unsaved: false, presentation:defaultPresentation(),presentation_unsaved:false,saving: false, motion_error: null, preview_operations: null,measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false,section:null,section_status:null,section_error:null,sectioning:false,appearance:CadRenderer.math.defaultAppearance(),appearance_unsaved:false,render:renderFor(),render_unsaved:false,presets:[],preset_error:null,preset_busy:false,preset_message:null,annotations:[],annotation_error:null,annotating:false,sequences:[],playback:null,playing:false,sequence_busy:false,sequence_error:null };
       this.clearPointMeasurement();
     }
     requireNative() { if(this.value.payload?.read_only===true||this.value.read_only)throw Error('This is a read-only artifact review. Open the editable native source for this action.'); }
@@ -49,7 +50,7 @@
     }
     pointMeasurementKey() {
       const p=this.value.payload;
-      return this.value.status==='ready'&&p&&!p.draft?JSON.stringify([this.value.view_id,p.read_only?p.artifact.review_sha256:[p.document_id,p.revision,p.evaluation_id,p.feature_id],this.value.presentation,this.value.hidden_part_ids]):null;
+      return this.value.status==='ready'&&p&&!p.draft?JSON.stringify([this.value.view_id,p.read_only?[p.artifact.review_sha256,p.evaluation_id]:[p.document_id,p.revision,p.evaluation_id,p.feature_id],this.value.presentation,this.value.hidden_part_ids]):null;
     }
     clearPointMeasurement() { this.pointMeasurementSource=null;this.value.point_measurement={a:null,b:null,picking:null,active:false,error:null}; }
     requirePointMeasurement() {
@@ -80,13 +81,14 @@
     attach(view_id) {
       if (typeof view_id !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(view_id)) throw Error('Invalid CAD view identity.');
       if (this.value.view_id === view_id) return;
-      this.clearSequences();this.epoch++; this.clearVisibility();this.clearPresentation();this.clearMeasurement();this.clearSection();this.clearAppearance();this.clearPresets();this.clearAnnotations();this.cameraSaved=++this.cameraVersion; this.update({ read_only:false,artifact:null,view_id, status: 'loading', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], saving: false, motion_error: null, preview_operations: null });
+      this.pauseArtifact();this.clearSequences();this.epoch++; this.clearVisibility();this.clearPresentation();this.clearMeasurement();this.clearSection();this.clearAppearance();this.clearRender();this.clearPresets();this.clearAnnotations();this.cameraSaved=++this.cameraVersion; this.update({ read_only:false,artifact:null,artifact_pose:{},artifact_pose_error:null,artifact_pose_busy:false,view_id, status: 'loading', payload: null, selection: null, camera: null, model: null, error: null, hidden_part_ids: [], saving: false, motion_error: null, preview_operations: null });
     }
     clearVisibility() { this.visibilitySaved = ++this.visibilityVersion; this.value.visibility_unsaved = false; }
     clearPresentation(){this.presentationSaved=++this.presentationVersion;this.value.presentation=defaultPresentation();this.value.presentation_unsaved=false;}
     clearMeasurement(){this.clearPointMeasurement();++this.measurementVersion;Object.assign(this.value,{measurement:null,measurement_status:null,measurement_targets:{a:null,b:null},measurement_error:null,measuring:false});}
     clearSection(){++this.sectionVersion;Object.assign(this.value,{section:null,section_status:null,section_error:null,sectioning:this.sectionBusy});}
     clearAppearance(){this.appearanceSaved=++this.appearanceVersion;this.value.appearance=CadRenderer.math.defaultAppearance();this.value.appearance_unsaved=false;}
+    clearRender(){this.renderSaved=++this.renderVersion;this.value.render=renderFor();this.value.render_unsaved=false;}
     clearPresets(){++this.presetVersion;Object.assign(this.value,{presets:[],preset_error:null,preset_message:null,preset_busy:this.presetBusy});}
     clearAnnotations(){++this.annotationVersion;Object.assign(this.value,{annotations:[],annotation_error:null,annotating:this.annotationBusy});}
     clearSequences(){this.pausePlayback();++this.sequenceVersion;Object.assign(this.value,{sequences:[],playback:null,sequence_error:null,sequence_busy:this.sequenceBusy});}
@@ -128,15 +130,21 @@
       const active=this.snapshot(),epoch=this.epoch;
       return this.publishContext().catch(error=>{if(epoch!==this.epoch||!this.matches(active))return;this.update({context_error:error.message});throw error;});
     }
+    setRender(value){
+      if(this.value.status!=='ready'||!this.value.payload)throw Error('Wait for the current revision to finish loading.');
+      const settings=renderFor(value);if(JSON.stringify(settings)===JSON.stringify(this.value.render)&&this.renderSaved===this.renderVersion)return Promise.resolve();
+      ++this.renderVersion;this.update({render:settings,render_unsaved:true,context_error:null});const active=this.snapshot(),epoch=this.epoch;
+      return this.publishContext().catch(error=>{if(epoch!==this.epoch||!this.matches(active))return;this.update({context_error:error.message});throw error;});
+    }
     presetsFor(presets,payload=this.value.payload,prune=false){
       if(!Array.isArray(presets)||presets.length>16)throw Error('A view may contain up to 16 saved views.');
       const names=new Set(),parts=this.partIds(payload);
       return presets.map(preset=>{
-        if(!preset||Object.keys(preset).length!==5||!['name','camera','presentation','hidden_part_ids','appearance'].every(key=>Object.hasOwn(preset,key)))throw Error('Invalid saved view settings.');
+        if(!preset||Object.keys(preset).some(key=>!['name','camera','presentation','hidden_part_ids','appearance','render'].includes(key))||!['name','camera','presentation','hidden_part_ids','appearance'].every(key=>Object.hasOwn(preset,key)))throw Error('Invalid saved view settings.');
         const name=presetName(preset.name);if(names.has(name))throw Error('Saved view names must be unique.');names.add(name);
         const ids=preset.hidden_part_ids;
         if(!Array.isArray(ids)||ids.length>1024||new Set(ids).size!==ids.length||(!prune&&ids.some(id=>!parts.includes(id))))throw Error('Saved view visibility names an unknown leaf.');
-        return{name,camera:CadRenderer.math.camera(preset.camera),presentation:presentationFor(preset.presentation,payload,prune),hidden_part_ids:parts.filter(id=>ids.includes(id)),appearance:appearanceFor(preset.appearance,payload,prune)};
+        return{name,camera:CadRenderer.math.camera(preset.camera),presentation:presentationFor(preset.presentation,payload,prune),hidden_part_ids:parts.filter(id=>ids.includes(id)),appearance:appearanceFor(preset.appearance,payload,prune),render:renderFor(preset.render)};
       });
     }
     acceptPresets(presets,payload=this.value.payload,prune=false){
@@ -167,13 +175,13 @@
           if(response.view_id!==snapshot.view_id||response.document_id!==p.document_id||response.revision!==p.revision||response.evaluation_id!==p.evaluation_id||(response.feature_id!==undefined&&response.feature_id!==p.feature_id)||response.stale!==false||(response.head_revision!==undefined&&response.head_revision!==p.revision))throw Error('Saved view response belongs to another source evaluation.');
           const presets=this.presetsFor(response.presets);
           if(operation==='apply'){
-            const presentation=presentationFor(response.presentation,p),appearance=appearanceFor(response.appearance,p),camera=CadRenderer.math.camera(response.camera),parts=this.partIds(),ids=response.hidden_part_ids;
+            const presentation=presentationFor(response.presentation,p),appearance=appearanceFor(response.appearance,p),render=renderFor(response.render),camera=CadRenderer.math.camera(response.camera),parts=this.partIds(),ids=response.hidden_part_ids;
             if(!Array.isArray(ids)||ids.length>1024||new Set(ids).size!==ids.length||ids.some(id=>!parts.includes(id)))throw Error('Saved view contains invalid visibility.');
             if(!sameSectionGeometry(presentation,this.value.presentation))this.clearSection();
             if(JSON.stringify(presentation)!==JSON.stringify(this.value.presentation)&&this.value.playback){++this.sequenceVersion;this.value.playback=null;}
-            this.presentationSaved=++this.presentationVersion;this.appearanceSaved=++this.appearanceVersion;this.visibilitySaved=++this.visibilityVersion;this.cameraSaved=++this.cameraVersion;
+            this.renderSaved=++this.renderVersion;this.presentationSaved=++this.presentationVersion;this.appearanceSaved=++this.appearanceVersion;this.visibilitySaved=++this.visibilityVersion;this.cameraSaved=++this.cameraVersion;
             ++this.presetVersion;
-            this.update({presentation,appearance,camera,hidden_part_ids:parts.filter(id=>ids.includes(id)),selection:null,presentation_unsaved:false,appearance_unsaved:false,visibility_unsaved:false,presets,preset_error:null,preset_message:`Applied “${name}”.`});
+            this.update({presentation,appearance,render,render_unsaved:false,camera,hidden_part_ids:parts.filter(id=>ids.includes(id)),selection:null,presentation_unsaved:false,appearance_unsaved:false,visibility_unsaved:false,presets,preset_error:null,preset_message:`Applied “${name}”.`});
             await this.pollSection(response.section||null);
             this.publishSectionContext();
           }else{
@@ -478,6 +486,22 @@
         if (current()) await this.pollOnce();
       }
     }
+    pauseArtifact(){clearTimeout(this.artifactTimer);this.artifactTimer=null;this.artifactPlayToken++;if(this.value.artifact_playing)this.update({artifact_playing:false});}
+    async artifactPose(configuration={}){
+      const p=this.value.payload;if(this.value.status!=='ready'||p?.read_only!==true)throw Error('Wait for the current external review to load.');if(this.artifactBusy||this.motionBusy||this.busy)throw Error('Wait for the current review pose to finish.');
+      const epoch=this.epoch,view=this.value.view_id,evaluation=p.evaluation_id;this.artifactBusy=true;this.update({artifact_pose_busy:true,artifact_pose_error:null});
+      try{const response=await this.bridge.tool('cad_viewer',{action:'artifact_pose',view_id:view,evaluation_id:evaluation,configuration:copy(configuration)});
+        if(this.closed||epoch!==this.epoch||this.value.payload?.evaluation_id!==evaluation)return response;
+        this.clearPointMeasurement();this.update({selection:null,artifact_pose:copy(response.artifact_pose||configuration)});await this.pollOnce(true);return response;
+      }catch(error){if(!this.closed&&epoch===this.epoch)this.update({artifact_pose_error:error.message});throw error;}
+      finally{this.artifactBusy=false;if(!this.closed)this.update({artifact_pose_busy:false});}
+    }
+    playArtifact(animation){
+      this.pauseArtifact();const p=this.value.payload,a=p?.metadata?.animations?.[animation];if(p?.read_only!==true||!a||!Number.isFinite(a.duration_seconds)||a.duration_seconds<=0)throw Error('Choose an imported animation with a positive duration.');
+      const epoch=this.epoch,source=sourceKey(p),duration=a.duration_seconds,start=playbackNow(),initial=this.value.artifact_pose?.animation===animation?this.value.artifact_pose.time_seconds||0:0,token=++this.artifactPlayToken;this.update({artifact_playing:true,artifact_pose_error:null});
+      const tick=async()=>{if(this.closed||token!==this.artifactPlayToken||epoch!==this.epoch||sourceKey(this.value.payload)!==source){this.pauseArtifact();return;}try{const time=Math.min(duration,initial+(playbackNow()-start)/1000);if(this.busy||this.artifactBusy){this.artifactTimer=setTimeout(tick,100);return;}await this.artifactPose({animation,time_seconds:time});if(token!==this.artifactPlayToken)return;if(time>=duration){this.pauseArtifact();return;}this.artifactTimer=setTimeout(tick,100);}catch(error){this.pauseArtifact();this.update({artifact_pose_error:error.message});}};this.artifactTimer=setTimeout(tick,0);
+    }
+
     async motion(action, fields = {}) {
       this.requireNative();
       this.pausePlayback();
@@ -504,16 +528,18 @@
     previewPose(pose_id, assembly_id) { return this.motion('motion_preview', { pose_id, ...(assembly_id ? { assembly_id } : {}) }); }
     resetMotion() { return this.motion('motion_reset'); }
     saveMotion(pose_id = '', assembly_id) { return this.motion('motion_save', { ...(pose_id ? { pose_id } : {}), ...(assembly_id ? { assembly_id } : {}) }); }
-    invalidate() { this.pausePlayback();this.epoch++; this.contextVersion++;this.clearSection();this.clearAnnotations(); this.update({ status: 'loading', selection: null, error: null }); }
-    async pollOnce() {
-      if (this.busy || this.motionBusy || this.closed || !this.value.view_id) return;
+    invalidate() { this.pauseArtifact();this.pausePlayback();this.epoch++; this.contextVersion++;this.clearSection();this.clearAnnotations(); this.update({ status: 'loading', selection: null, error: null }); }
+    async pollOnce(artifactAdmission=false) {
+      if ((this.artifactBusy&&!artifactAdmission) || this.busy || this.motionBusy || this.closed || !this.value.view_id) return;
       this.busy = true;
-      const epoch = this.epoch, view = this.value.view_id, visibilityVersion = this.visibilityVersion,presentationVersion=this.presentationVersion,measurementVersion=this.measurementVersion,sectionVersion=this.sectionVersion,appearanceVersion=this.appearanceVersion,cameraVersion=this.cameraVersion,presetVersion=this.presetVersion,annotationVersion=this.annotationVersion;
+      let captureRequests=[];
+      const epoch = this.epoch, view = this.value.view_id, visibilityVersion = this.visibilityVersion,presentationVersion=this.presentationVersion,measurementVersion=this.measurementVersion,sectionVersion=this.sectionVersion,appearanceVersion=this.appearanceVersion,renderVersion=this.renderVersion,cameraVersion=this.cameraVersion,presetVersion=this.presetVersion,annotationVersion=this.annotationVersion;
       const pendingVisibility = this.visibilitySaved !== visibilityVersion;
       const current = () => !this.closed && epoch === this.epoch;
       const mayUseSavedVisibility = () => !this.presetBusy&&!pendingVisibility && visibilityVersion === this.visibilityVersion && this.visibilitySaved === this.visibilityVersion;
       const pendingPresentation=this.presentationSaved!==presentationVersion;
       const mayUseSavedPresentation=()=>!this.presetBusy&&!pendingPresentation&&presentationVersion===this.presentationVersion&&this.presentationSaved===this.presentationVersion;
+      const pendingRender=this.renderSaved!==renderVersion;const mayUseSavedRender=()=>!this.presetBusy&&!pendingRender&&renderVersion===this.renderVersion&&this.renderSaved===this.renderVersion;
       const pendingAppearance=this.appearanceSaved!==appearanceVersion,pendingCamera=this.cameraSaved!==cameraVersion;
       const mayUseSavedAppearance=()=>!this.presetBusy&&!pendingAppearance&&appearanceVersion===this.appearanceVersion&&this.appearanceSaved===this.appearanceVersion;
       const mayUseSavedCamera=()=>!this.presetBusy&&!pendingCamera&&cameraVersion===this.cameraVersion&&this.cameraSaved===this.cameraVersion;
@@ -525,18 +551,20 @@
           if(state.state==='empty'||state.state==='error'||(this.value.payload&&(sourceKey(state)!==sourceKey(this.value.payload)||state.revision!==this.value.payload.revision)))this.pausePlayback();
           this.clearSection();this.clearAnnotations();
           const retarget = state.state === 'empty' || (this.value.payload && sourceKey(this.value.payload) !== sourceKey(state));
-          if (retarget){this.clearSequences();this.clearVisibility();this.clearPresentation();this.clearMeasurement();this.clearAppearance();this.clearPresets();this.cameraSaved=++this.cameraVersion;}
+          if (retarget){this.pauseArtifact();this.clearSequences();this.clearVisibility();this.clearPresentation();this.clearMeasurement();this.clearAppearance();this.clearRender();this.clearPresets();this.cameraSaved=++this.cameraVersion;}
           // Keep the last solid visible while building, but disable interaction with its old references.
           this.update({ status: state.state, selection: null, error: state.state === 'loading' && retryablePoll(state.error?.code) ? null : state.error?.message || null,
             document_id: state.document_id, revision: state.revision, saving: !!state.saving,
-            ...(retarget ? { read_only:false,artifact:null,payload: null, model: null, camera: null, hidden_part_ids: [], preview_operations: null, motion_error: null } : {}) });
+            ...(retarget ? { read_only:false,artifact:null,artifact_pose:{},artifact_pose_error:null,payload: null, model: null, camera: null, hidden_part_ids: [], preview_operations: null, motion_error: null } : {}) });
           return;
         }
         if (state.evaluation_id === this.value.payload?.evaluation_id && sourceKey(state)===sourceKey(this.value.payload)) {
+          captureRequests=state.capture_requests||[];
           if(!this.sequenceBusy)this.acceptSequences(state.sequences||[],state.playback||null);
           const hidden = mayUseSavedVisibility() ? this.partIds().filter(id => (state.hidden_part_ids || []).includes(id)) : this.value.hidden_part_ids;
           const presentation=presentationFor(mayUseSavedPresentation()?(state.presentation||this.value.presentation):this.value.presentation,this.value.payload,true);
           const presentationChanged=JSON.stringify(presentation)!==JSON.stringify(this.value.presentation);
+          const render=renderFor(mayUseSavedRender()?(state.render||this.value.render):this.value.render);if(JSON.stringify(render)!==JSON.stringify(this.value.render)&&mayUseSavedRender()){this.renderSaved=++this.renderVersion;this.value.render_unsaved=false;}
           const appearance=appearanceFor(mayUseSavedAppearance()?(state.appearance||this.value.appearance):this.value.appearance,this.value.payload,true);
           if(JSON.stringify(appearance)!==JSON.stringify(this.value.appearance)&&mayUseSavedAppearance()){this.appearanceSaved=++this.appearanceVersion;this.value.appearance_unsaved=false;}
           let camera=this.value.camera;
@@ -546,13 +574,13 @@
           if(presentationChanged&&mayUseSavedPresentation()){this.presentationSaved=++this.presentationVersion;this.value.presentation_unsaved=false;}
           if (JSON.stringify(hidden) !== JSON.stringify(this.value.hidden_part_ids)) this.clearVisibility();
           if(annotationVersion===this.annotationVersion&&!this.annotationBusy)this.acceptAnnotations(state.annotations||[]);
-          this.update({ status: 'ready', error: null, saving: false, preview_operations: state.preview_operations || null,
-            hidden_part_ids: hidden,presentation,appearance,camera,selection: this.value.payload.draft||presentationChanged ? null : this.visibleSelection(this.value.selection, hidden) });if(!this.value.read_only){await this.pollMeasurement(state.measurement||null,measurementVersion);await this.pollSection(state.section||null,sectionVersion);} return;
+          this.update({ status: 'ready', error: null, saving: false, preview_operations: state.preview_operations || null,...(state.read_only?{artifact_pose:copy(state.artifact_pose||{})}:{}),
+            hidden_part_ids: hidden,presentation,appearance,render,camera,selection: this.value.payload.draft||presentationChanged ? null : this.visibleSelection(this.value.selection, hidden) });if(!this.value.read_only){await this.pollMeasurement(state.measurement||null,measurementVersion);await this.pollSection(state.section||null,sectionVersion);} return;
         }
         const retarget = this.value.payload && sourceKey(this.value.payload) !== sourceKey(state);
-        this.clearMeasurement();this.clearSection();this.clearAnnotations();if (retarget){this.clearSequences();this.clearVisibility();this.clearPresentation();this.clearAppearance();this.clearPresets();this.cameraSaved=++this.cameraVersion;}
+        this.clearMeasurement();this.clearSection();this.clearAnnotations();if (retarget){this.pauseArtifact();this.clearSequences();this.clearVisibility();this.clearPresentation();this.clearAppearance();this.clearRender();this.clearPresets();this.cameraSaved=++this.cameraVersion;}
         this.update({ status: 'loading', selection: null, error: null, document_id: state.document_id, revision: state.revision,
-          ...(retarget ? { read_only:false,artifact:null,payload: null, model: null, camera: null, hidden_part_ids: [] } : {}) });
+          ...(retarget ? { read_only:false,artifact:null,artifact_pose:{},artifact_pose_error:null,payload: null, model: null, camera: null, hidden_part_ids: [] } : {}) });
         let offset = 0, total = null; const chunks = [];
         while (true) {
           const part = await this.bridge.tool('cad_viewer', { action: 'mesh', view_id: view, evaluation_id: state.evaluation_id, offset });
@@ -572,6 +600,7 @@
         const confirmed = await this.bridge.tool('cad_viewer', { action: 'sync', view_id: view, known_evaluation_id: state.evaluation_id });
         if (!current()) return;
         if (confirmed.state !== 'ready' || confirmed.evaluation_id !== payload.evaluation_id) return;
+        captureRequests=confirmed.capture_requests||[];
         if(payload.read_only===true) {
           CadRenderer.math.validateArtifact(payload);
           if(confirmed.read_only!==true||confirmed.artifact?.review_sha256!==payload.artifact.review_sha256)throw Error('Artifact review changed during transfer.');
@@ -584,14 +613,15 @@
             if(geometry)selection={reference:ref,geometry};
           }
           const presentation=presentationFor(same&&!mayUseSavedPresentation()?this.value.presentation:(saved.presentation||confirmed.presentation),payload,true);
+          const render=renderFor(same&&!mayUseSavedRender()?this.value.render:(saved.render||confirmed.render));if(JSON.stringify(render)!==JSON.stringify(this.value.render)){this.renderSaved=++this.renderVersion;this.value.render_unsaved=false;}
           const appearance=appearanceFor(same&&!mayUseSavedAppearance()?this.value.appearance:(saved.appearance||confirmed.appearance),payload,true);
           const camera=same&&!mayUseSavedCamera()?this.value.camera:(saved.camera?CadRenderer.math.camera(saved.camera):null);
           this.clearSequences();this.clearAnnotations();this.clearMeasurement();this.clearSection();this.clearPresets();
-          this.update({status:'ready',read_only:true,artifact:payload.artifact,payload,model:null,selection,camera,presentation,appearance,hidden_part_ids:[],error:null,context_error:null,saving:false,preview_operations:null,document_id:null,revision:null});
+          this.update({status:'ready',read_only:true,artifact:payload.artifact,artifact_pose:copy(saved.artifact_pose||payload.artifact_pose||{}),payload,model:null,selection,camera,presentation,appearance,render,hidden_part_ids:[],error:null,context_error:null,saving:false,preview_operations:null,document_id:null,revision:null});
           const version=this.contextVersion+1;this.publishContext().catch(error=>{if(current()&&version===this.contextVersion)this.update({context_error:error.message});});return;
         }
         const sameDocument = this.value.payload?.document_id === payload.document_id;
-        let saved = null, savedHidden = null, savedCamera = null,savedPresentation=null,savedAppearance=null,savedPresets=null,selection = null;
+        let saved = null, savedHidden = null, savedCamera = null,savedPresentation=null,savedAppearance=null,savedRender=null,savedPresets=null,selection = null;
         if (!sameDocument) {
           saved = await this.bridge.tool('cad_context', { view_id: view });
           if (!current()) return;
@@ -603,7 +633,7 @@
           // Reopening after a build/revision change must still restore it.
           savedCamera = saved.camera || null;
           savedPresentation=saved.presentation||null;
-          savedAppearance=saved.appearance||null;savedPresets=saved.presets||null;
+          savedRender=saved.render||null;savedAppearance=saved.appearance||null;savedPresets=saved.presets||null;
           if (saved.stale || saved.document_id !== payload.document_id || saved.evaluation_id !== payload.evaluation_id) saved = null;
           if (saved?.selection && !payload.draft) {
             const ref = saved.selection, geometry = payload.topology[ref.kind === 'face' ? 'faces' : 'edges']?.find(item => item.id === ref.entity_id);
@@ -613,6 +643,7 @@
         }
         const hidden = this.partIds(payload).filter(id => (sameDocument && !mayUseSavedVisibility() ? this.value.hidden_part_ids : (savedHidden || confirmed.hidden_part_ids || [])).includes(id));
         const presentation=presentationFor(sameDocument&&!mayUseSavedPresentation()?this.value.presentation:(savedPresentation||confirmed.presentation||state.presentation||this.value.presentation),payload,true);
+        const render=renderFor(sameDocument&&!mayUseSavedRender()?this.value.render:(savedRender||confirmed.render||state.render||this.value.render));if(JSON.stringify(render)!==JSON.stringify(this.value.render)){this.renderSaved=++this.renderVersion;this.value.render_unsaved=false;}
         const appearance=appearanceFor(sameDocument&&!mayUseSavedAppearance()?this.value.appearance:(savedAppearance||confirmed.appearance||state.appearance||this.value.appearance),payload,true);
         const camera=sameDocument?(mayUseSavedCamera()&&confirmed.camera?CadRenderer.math.camera(confirmed.camera):this.value.camera):savedCamera;
         if(JSON.stringify(appearance)!==JSON.stringify(this.value.appearance)){this.appearanceSaved=++this.appearanceVersion;this.value.appearance_unsaved=false;}
@@ -622,7 +653,7 @@
         const restoredSectionVersion=this.sectionVersion;
         const annotations=this.annotationsFor(confirmed.annotations||[],payload);++this.annotationVersion;
         this.update({ read_only:false,artifact:null,status: 'ready', payload,annotations,annotation_error:null, selection: this.visibleSelection(selection, hidden), model: state.model, error: null, context_error: null, hidden_part_ids: hidden,
-          presentation,appearance,presets,saving: false, preview_operations: confirmed.preview_operations || state.preview_operations || null,
+          presentation,appearance,render,presets,saving: false, preview_operations: confirmed.preview_operations || state.preview_operations || null,
           document_id: payload.document_id, revision: payload.revision,
           camera });
         if(!this.sequenceBusy)this.acceptSequences(confirmed.sequences||[],confirmed.playback||null);
@@ -638,7 +669,7 @@
         // This does not retry context publication, mutations, or ui/message.
         if (current()){this.clearSection();this.clearAnnotations();this.update({ status: retryablePoll(error.code) ? 'loading' : 'error', selection: null,
           error: retryablePoll(error.code) ? null : error.message });}
-      } finally { this.busy = false; }
+      } finally { this.busy = false;if(current())this.update({capture_requests:captureRequests}); }
     }
     async start() {
       if (this.closed) return;
@@ -649,22 +680,23 @@
       const v = this.value, p = v.payload;
       if (v.status !== 'ready' || !p) throw Error('Wait for the current revision to finish loading.');
       const snapshot = copy({ view_id: v.view_id, document_id: p.document_id, revision: p.revision,
-        evaluation_id: p.evaluation_id, feature_id: p.feature_id,...(p.read_only?{read_only:true,artifact:p.artifact}:{}),selection: p.draft ? null : v.selection?.reference || null,
+        evaluation_id: p.evaluation_id, feature_id: p.feature_id,...(p.read_only?{read_only:true,artifact:p.artifact,artifact_pose:v.artifact_pose||{}}:{}),selection: p.draft ? null : v.selection?.reference || null,
         ...(p.draft ? { draft: true, preview_operations: v.preview_operations } : {}),
-        hidden_part_ids: v.hidden_part_ids,presentation:v.presentation,appearance:v.appearance,annotations:v.annotations,...(v.playback?{playback:v.playback}:{}),...(v.measurement?{measurement:v.measurement}:{}),...(v.section?{section:v.section}:{}),...(v.camera ? { camera: v.camera } : {}), prompt });
-      this.snapshotVersions.set(snapshot,[this.visibilityVersion,this.presentationVersion,this.measurementVersion,this.sectionVersion,this.appearanceVersion,this.cameraVersion,this.annotationVersion,this.sequenceVersion]); return snapshot;
+        hidden_part_ids: v.hidden_part_ids,presentation:v.presentation,appearance:v.appearance,render:v.render,annotations:v.annotations,...(v.playback?{playback:v.playback}:{}),...(v.measurement?{measurement:v.measurement}:{}),...(v.section?{section:v.section}:{}),...(v.camera ? { camera: v.camera } : {}), prompt });
+      this.snapshotVersions.set(snapshot,[this.visibilityVersion,this.presentationVersion,this.measurementVersion,this.sectionVersion,this.appearanceVersion,this.cameraVersion,this.annotationVersion,this.sequenceVersion,this.renderVersion]); return snapshot;
     }
-    matches(snapshot) { const versions=this.snapshotVersions.get(snapshot);return !this.closed && this.value.status === 'ready' && this.value.view_id === snapshot.view_id && this.value.payload?.evaluation_id === snapshot.evaluation_id && (!versions||(versions[0]===this.visibilityVersion&&versions[1]===this.presentationVersion&&versions[2]===this.measurementVersion&&versions[3]===this.sectionVersion&&versions[4]===this.appearanceVersion&&versions[5]===this.cameraVersion&&versions[6]===this.annotationVersion&&versions[7]===this.sequenceVersion)); }
+    matches(snapshot) { const versions=this.snapshotVersions.get(snapshot);return !this.closed && this.value.status === 'ready' && this.value.view_id === snapshot.view_id && this.value.payload?.evaluation_id === snapshot.evaluation_id && (!versions||(versions[0]===this.visibilityVersion&&versions[1]===this.presentationVersion&&versions[2]===this.measurementVersion&&versions[3]===this.sectionVersion&&versions[4]===this.appearanceVersion&&versions[5]===this.cameraVersion&&versions[6]===this.annotationVersion&&versions[7]===this.sequenceVersion&&versions[8]===this.renderVersion)); }
     saveContext(snapshot) {
       const action = this.contextQueue.then(async () => {
         if (!this.matches(snapshot)) throw Error('The model changed. Wait for the current revision before using this selection.');
-        const { view_id, evaluation_id, selection, camera, prompt, hidden_part_ids,presentation,appearance } = snapshot;
+        const { view_id, evaluation_id, selection, camera, prompt, hidden_part_ids,presentation,appearance,render } = snapshot;
         const result = await this.bridge.tool('cad_viewer', { action: 'context', view_id, evaluation_id, selection,
-          hidden_part_ids,presentation,appearance,...(camera ? { camera } : {}), prompt });
+          hidden_part_ids,presentation,appearance,render,...(camera ? { camera } : {}), prompt });
         if (!this.matches(snapshot)) throw Error('The model changed. Wait for the current revision before using this selection.');
         this.visibilitySaved = this.visibilityVersion;
         this.presentationSaved=this.presentationVersion;
-        this.appearanceSaved=this.appearanceVersion;this.cameraSaved=this.cameraVersion;
+        this.renderSaved=this.renderVersion;this.appearanceSaved=this.appearanceVersion;this.cameraSaved=this.cameraVersion;
+        if(this.value.render_unsaved)this.update({render_unsaved:false});
         if(this.value.appearance_unsaved)this.update({appearance_unsaved:false});
         if(this.value.presentation_unsaved)this.update({presentation_unsaved:false});
         if (this.value.visibility_unsaved) this.update({ visibility_unsaved: false });
@@ -674,7 +706,7 @@
     }
     static promptText(snapshot, workspace) {
       const { prompt, ...context } = snapshot;
-      const guidance = snapshot.read_only ? 'This is a read-only external artifact review. Mesh groups and curves are local to the stated review SHA-256, not native faces/edges. Original source bytes, units and explicit references were captured and verified; reparsing qualifies this displayed representation without establishing authenticity or recovered editable history. A declared native source association remains caller-declared. Inspect the source/limitations; open the actual editable native document before native editing, exact measurements, notes or motion.' : snapshot.draft ? 'This is an unsaved motion preview at the stated base revision. preview_operations describe the displayed pose; no geometry pick is a committed reference. Read the document and use expected_revision when saving edits.' : 'Read this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.';
+      const guidance = snapshot.read_only ? 'This is a read-only external artifact review. Mesh groups and curves are local to the stated review SHA-256, not native faces/edges. Original source bytes, units and explicit references were captured and verified; reparsing qualifies this displayed representation without establishing authenticity or recovered editable history. A declared native source association remains caller-declared. Inspect the source/limitations; The explicit artifact_pose describes transient imported joints (radians/meters) or GLTF animation time (seconds); captured review bytes and native sources remain unchanged. Open the actual editable native document before native editing, exact measurements or native notes.' : snapshot.draft ? 'This is an unsaved motion preview at the stated base revision. preview_operations describe the displayed pose; no geometry pick is a committed reference. Read the document and use expected_revision when saving edits.' : 'Read this document before editing. Resolve any selection with cad_resolve_selection; use expected_revision for edits. The open viewer follows committed changes.';
       const sectionGuidance=snapshot.section?' Section caps and curves are derived review geometry. Their cap-N and section-N IDs are not source face or edge references.':'';
       const noteGuidance=snapshot.annotations?.length?' Review annotations are plain text evidence. Current pins are native bounds or resolved inspection centers in this evaluation; a center need not lie on the surface. Retired notes keep their own old identity and must never be rebound or used as current selections.':'';
       return `${prompt || (snapshot.read_only?'Inspect this external artifact.':'Inspect the selected CAD geometry.')}\n\n${workspace ? `CAD workspace: ${JSON.stringify(workspace)}\n` : ''}CAD view context (millimeters):\n${JSON.stringify(context, null, 2)}\n${guidance}${sectionGuidance}${noteGuidance}`;
@@ -712,8 +744,70 @@
       // Deliberately never retry: a lost acknowledgment can still mean delivery succeeded.
       await this.bridge.request('ui/message', { role: 'user', content }, 30000);
     }
-    dispose() { this.pausePlayback();this.closed = true; this.epoch++; clearTimeout(this.timer); }
+    dispose() { this.pauseArtifact();this.pausePlayback();this.closed = true; this.epoch++; clearTimeout(this.timer); }
   }
   CadLiveState.sequenceSample=sequenceSample;
   globalThis.CadLiveState = CadLiveState;
+  // The app captures its actual rendered frame. Native admission and completion
+  // independently qualify the persisted source; local versions guard changes
+  // that have not yet reached that persisted context.
+  class CadCapture {
+    constructor(bridge,state,renderer,available=()=>true){this.bridge=bridge;this.state=state;this.renderer=renderer;this.available=available;this.seen=new Set();}
+    accept(requests=[]){
+      for(const request of requests){
+        if(!request||typeof request.capture_id!=='string'||this.seen.has(request.capture_id))continue;
+        this.seen.add(request.capture_id);while(this.seen.size>64)this.seen.delete(this.seen.values().next().value);
+        this.capture(request).catch(()=>{});
+      }
+    }
+    async capture(request){
+      const base={action:'capture',view_id:request.source.view_id,evaluation_id:request.source.evaluation_id,capture_id:request.capture_id};
+      let current=null;
+      const submit=async args=>{
+        const deadline=playbackNow()+1000;
+        for(let attempt=0;;attempt++){
+          if(attempt&&(!current||!current()))throw Error('The displayed frame changed during capture.');
+          try{return await this.bridge.tool('cad_viewer',args);}
+          catch(error){
+            // This explicit native lock rejection happens before any capture
+            // bytes are written. Uncertain acknowledgments are never replayed.
+            if(error.code!=='workspace_busy'||attempt===40||playbackNow()>=deadline)throw error;
+            await new Promise(resolve=>setTimeout(resolve,25));
+          }
+        }
+      };
+      try{
+        const s=this.state,r=this.renderer();
+        await s.contextQueue;
+        const v=s.value,p=v.payload;
+        let snapshot=null;
+        if(v.status==='ready'&&p&&v.view_id===base.view_id&&p.evaluation_id===base.evaluation_id&&!s.closed){
+          snapshot=s.snapshot();
+          const visible=this.available(),flags=()=>JSON.stringify([!!s.value.preset_busy,!!s.value.playing,!!s.value.artifact_playing,!!s.artifactBusy,!!s.motionBusy]),initialFlags=flags();
+          // A hidden but unchanged source can still report its unavailability.
+          // This guard permits retries of that failure, never image bytes.
+          current=()=>s.matches(snapshot)&&this.available()===visible&&flags()===initialFlags&&JSON.stringify(snapshot.selection)===JSON.stringify(s.value.payload?.draft?null:s.value.selection?.reference||null);
+        }
+        if(!r||!this.available()||v.status!=='ready'||!p||v.view_id!==base.view_id||p.evaluation_id!==base.evaluation_id||v.preset_busy||v.playing||v.artifact_playing||s.artifactBusy||s.motionBusy||s.closed)throw Error('The viewer is hidden, unavailable or still changing.');
+        if(s.visibilitySaved!==s.visibilityVersion||s.presentationSaved!==s.presentationVersion||s.appearanceSaved!==s.appearanceVersion||s.cameraSaved!==s.cameraVersion||(s.renderVersion!==undefined&&s.renderSaved!==s.renderVersion))throw Error('Viewer settings are still being saved. Retry capture after the view settles.');
+        current=()=>s.matches(snapshot)&&this.available()&&!s.value.preset_busy&&!s.value.playing&&!s.value.artifact_playing&&!s.artifactBusy&&!s.motionBusy&&JSON.stringify(snapshot.selection)===JSON.stringify(s.value.payload?.draft?null:s.value.selection?.reference||null);
+        await r.whenTexturesReady?.();
+        if(!current())throw Error('The displayed frame changed before capture.');
+        const url=r.capture();
+        if(typeof url!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(url))throw Error('The graphics renderer did not return a PNG frame.');
+        const data=url.slice(url.indexOf(',')+1),limit=Math.ceil(request.max_bytes/3)*4;
+        if(!Number.isSafeInteger(request.max_bytes)||request.max_bytes<1||data.length>limit)throw Error('The rendered PNG exceeds the capture image limit.');
+        for(let offset=0;offset<data.length;offset+=128*1024){
+          if(!current())throw Error('The displayed frame changed during capture.');
+          const part=data.slice(offset,offset+128*1024);
+          await submit({...base,offset,data:part,final:offset+part.length===data.length});
+        }
+      }catch(error){
+        // A superseded/expired native request may already be gone. Reporting
+        // that failure is best effort, and never retries completed image chunks.
+        await submit({...base,error:String(error.message||error).slice(0,512)}).catch(()=>{});
+      }
+    }
+  }
+  globalThis.CadCapture=CadCapture;
 })();

@@ -799,4 +799,25 @@ if(process.argv[2]) {
     });
   }finally{fs.rmSync(workspace,{recursive:true,force:true});}
 }
+test('perspective projection and source-space ray picking agree across lenses and orbit angles',()=>{
+  const model=prepare(base);for(const yaw of [-1,.2,1])for(const pitch of [.3,.8,1.2])for(const distance of [3,7]){
+    const c={yaw,pitch,zoom:1.2,pan:[.04,-.03],projection:'perspective',distance},world=[-.4,-.3,0],point=world.map((v,i)=>(v-model.center[i])/model.span),pixel=project(point,c,800,500),ray=screenRay(pixel[0],pixel[1],c,800,500);
+    for(let i=0;i<3;i++)assert.ok(Math.abs(ray.origin[i]+(pixel[2]+distance)*ray.direction[i]-point[i])<1e-10);
+    const selected=Renderer.math.pickPoint(model,c,800,500,...pixel.slice(0,2));for(let i=0;i<3;i++)assert.ok(Math.abs(selected[i]-world[i])<1e-9);
+  }
+});
+test('perspective edge interpolation retains the source point under the displayed line',()=>{
+  const c={yaw:.5,pitch:.8,zoom:1,pan:[0,0],projection:'perspective',distance:3},a=[-.4,-.3,-.2],b=[.4,.2,.4],p=a.map((v,i)=>v*.65+b[i]*.35),pa=project(a,c,800,500),pb=project(b,c,800,500),pp=project(p,c,800,500),q=Renderer.math.nearestSegment(pp,pa,pb);assert.ok(Math.abs(q.point[2]-pp[2])<1e-10);
+});
+test('preset render settings are bounded data and reject executable or unknown options',()=>{
+  const resolve=Renderer.math.renderSettings;assert.equal(resolve({mode:'render'}).projection,'perspective');assert.equal(resolve({mode:'xray'}).surfaces.opacity,.22);
+  for(const value of [{mode:'anything'},{shader:'code'},{lens_mm:0},{floor:{script:'code'}},{surfaces:{opacity:NaN}},{lighting:{exposure:20}}])assert.throws(()=>resolve(value));
+});
+test('authored native material changes opacity, roughness and metal response per leaf',()=>{
+  const model=prepare(assembly()),style={default_color:[.5,.5,.5],material:{opacity:.7,finish:'matte'},parts:[{part_id:'cover',color:[1,0,0],material:{opacity:.3,finish:'metal'}}]},settings=Renderer.math.renderSettings({mode:'xray'}),data=Renderer.math.materialData(model,style,settings);
+  assert.ok(Math.abs(data.materials[0]-.7*.22)<1e-7);assert.ok(Math.abs(data.materials[9]-.3*.22)<1e-7);assert.ok(Math.abs(data.materials[10]-.24)<1e-7);assert.equal(data.materials[11],1);
+});
+test('projected floor shadows obey the actual displayed clipping half-space',()=>{
+  const source=prepare(base),settings=Renderer.math.renderSettings({mode:'render'}),whole=Renderer.math.studioGeometry(source,settings),p=defaultPresentation();p.clip={normal:[1,0,0],offset_mm:0,keep:'positive'};const clipped=Renderer.math.studioGeometry(presentedModel(source,p),settings);assert.ok(whole.length>0&&clipped.length>0);assert.notDeepEqual([...whole],[...clipped]);
+});
 console.log(`webgl renderer: ${checks} checks passed (pure math and mocked GPU lifecycle)`);

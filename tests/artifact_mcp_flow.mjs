@@ -1,6 +1,6 @@
 // Real native MCP and actual shipped controller/renderer; no browser claim.
 import assert from 'node:assert/strict';
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {mkdtempSync,realpathSync,readFileSync,writeFileSync,cpSync,rmSync,mkdirSync,readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -27,7 +27,7 @@ async function ready(){for(let n=0;n<100;n++){await controller.pollOnce();if(con
 function forged(review,modify,label){const directory=join(temporary,label);cpSync(review.directory,directory,{recursive:true});const path=join(directory,'review.json'),value=JSON.parse(readFileSync(path));modify(value);const raw=JSON.stringify(value,null,2);writeFileSync(path,raw);const digest=hash(raw),manifest=JSON.parse(readFileSync(join(directory,'manifest.json')));manifest.review_sha256=digest;for(const item of manifest.artifacts)if(item.path==='review.json'){item.sha256=digest;item.bytes=Buffer.byteLength(raw);}writeFileSync(join(directory,'manifest.json'),JSON.stringify(manifest));return {action:'verify',review_path:path,expected_sha256:digest};}
 try{
  await rpc('initialize',{protocolVersion:'2025-11-25',capabilities:{extensions:{'io.modelcontextprotocol/ui':{mimeTypes:['text/html;profile=mcp-app']}}},clientInfo:{name:'artifact-live-flow',version:'1'}});child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
- evidence.discovery=(await rpc('tools/list')).tools;check(evidence.discovery.length===31,'native discovery catalog contains 31 tools');check(Buffer.byteLength(JSON.stringify(evidence.discovery))<=evidence.discovery.length*15*1024,'15 KiB per tool discovery byte gate');
+ evidence.discovery=(await rpc('tools/list')).tools;check(evidence.discovery.length===33,'native discovery catalog contains 33 tools');check(Buffer.byteLength(JSON.stringify(evidence.discovery))<=evidence.discovery.length*15*1024,'15 KiB per tool discovery byte gate');
  const resource=await rpc('resources/read',{uri:'ui://agent-3d-cad/viewer.html'});check(resource.contents[0].text.includes('artifact-review-panel')&&resource.contents[0].text.includes('validateArtifact'),'shipped native app contains artifact UI');
  const model={schema_version:1,units:'mm',parameters:{},features:[{id:'Part',type:'box',size:[10,20,30]}],output:'Part'};
  await tool('cad_create',{document_id:'Source',model});const native=await tool('cad_read',{document_id:'Source',revision:1});
@@ -54,6 +54,24 @@ try{
   if(format==='srdf')check(p.summary.bounds===null&&p.artifact_geometry.triangles.length===0,'SRDF semantic review invents no geometry');
  }
  args=input('robot.urdf','urdf','m');args.references=[{uri:'triangle.stl',path:join(source,'triangle.stl'),expected_sha256:hash(readFileSync(join(source,'triangle.stl'))),units:'cm'}];const robot=await tool('cad_artifact',args);check(robot.source.references.length===1,'explicit referenced bytes captured and qualified');
+ // Pose actual captured GLTF skin/morph sources through shipped controller + native stdio.
+ const animated=await tool('cad_artifact',input('deformation.glb','glb','m'));const preserved=readFileSync(animated.path),nativeBeforePose=JSON.stringify(await tool('cad_read',{document_id:'Source'}));
+ await tool('cad_artifact_show',{review_path:animated.path,expected_sha256:animated.sha256,view_id:'review'});await ready();const restEvaluation=controller.value.payload.evaluation_id,restGeometry=JSON.stringify(controller.value.payload.artifact_geometry);
+ await controller.artifactPose({animation:0,time_seconds:.5});await ready();const posed=controller.value.payload;
+ check(posed.evaluation_id!==restEvaluation&&posed.artifact.review_sha256===animated.sha256&&Math.abs(posed.artifact_geometry.positions[0][0]-500)<1e-6&&Math.abs(posed.artifact_geometry.positions[0][1]-250)<1e-6,'native artifact pose evaluates actual skin/morph source and retains review identity');
+ check(CadRenderer.math.prepareArtifact(posed).positions.length>0,'actual shipped renderer admits reposed source geometry');
+ evidence.poses={rest:JSON.parse(restGeometry),captured:controller.value.payload.artifact,posed:JSON.parse(JSON.stringify(posed))};
+ let posedContext=await tool('cad_context',{view_id:'review'});check(posedContext.artifact_pose.animation===0&&posedContext.artifact_pose.time_seconds===.5&&controller.snapshot().artifact_pose.time_seconds===.5,'MCP and copy context explicitly qualify imported animation time');
+ const frozenSource=join(workspace,'views','review','artifact-review.json'),originalFrozen=readFileSync(frozenSource);writeFileSync(frozenSource,Buffer.concat([originalFrozen,Buffer.from(' ')]));await fails('artifact_mismatch',()=>tool('cad_viewer',{action:'artifact_pose',view_id:'review',evaluation_id:posed.evaluation_id,configuration:{animation:0,time_seconds:.6}}));check((await tool('cad_viewer',{action:'sync',view_id:'review'})).evaluation_id===posed.evaluation_id,'Changed frozen source cannot replace prior displayed evaluation');writeFileSync(frozenSource,originalFrozen);
+ await fails('stale_selection',()=>tool('cad_viewer',{action:'artifact_pose',view_id:'review',evaluation_id:restEvaluation,configuration:{animation:0,time_seconds:.2}}));
+ await fails('artifact_invalid',()=>tool('cad_viewer',{action:'artifact_pose',view_id:'review',evaluation_id:posed.evaluation_id,configuration:{animation:99,time_seconds:.5}}));
+ const reopened=spawnSync(exe,['call','cad_viewer','--workspace',workspace,'--input','-'],{input:JSON.stringify({action:'sync',view_id:'review'}),encoding:'utf8',timeout:10000});check(reopened.status===0,'separate native CLI process reopens persisted artifact pose: '+reopened.stderr);const reopenedPose=JSON.parse(reopened.stdout);check(reopenedPose.evaluation_id===posed.evaluation_id&&reopenedPose.artifact_pose.time_seconds===.5,'pose configuration and frozen evaluation survive process reopen');
+ await controller.artifactPose({});await ready();check(JSON.stringify(controller.value.payload.artifact_geometry)===restGeometry,'restore captured pose returns exact original geometry');
+ check(readFileSync(animated.path).equals(preserved)&&JSON.stringify(await tool('cad_read',{document_id:'Source'}))===nativeBeforePose,'artifact motion changes neither portable package bytes nor native HEAD');
+ const framed=await tool('cad_artifact',input('frames.sdf','sdf','m'));await tool('cad_artifact_show',{review_path:framed.path,expected_sha256:framed.sha256,view_id:'review'});await ready();const robotRest=JSON.parse(JSON.stringify(controller.value.payload));await controller.artifactPose({joints:{hinge:Math.PI/2}});await ready();check(Math.abs(controller.value.payload.artifact_geometry.positions[0][0]-1600)<1e-6&&Math.abs(controller.value.payload.artifact_geometry.positions[0][1]-450)<1e-6,'controller/native SDF joint uses captured pivot relative frame');
+ evidence.robot_poses={rest:robotRest.artifact_geometry,captured:robotRest.artifact,posed:JSON.parse(JSON.stringify(controller.value.payload))};
+ await fails('artifact_invalid',()=>tool('cad_viewer',{action:'artifact_pose',view_id:'review',evaluation_id:controller.value.payload.evaluation_id,configuration:{joints:{hinge:3}}}));
+ await fails('artifact_invalid',()=>tool('cad_viewer',{action:'artifact_pose',view_id:'review',evaluation_id:controller.value.payload.evaluation_id,configuration:{joints:{unknown:1}}}));
  const step=await tool('cad_export',{document_id:'Source',revision:1,format:'step'});
  const stepReviewed=await tool('cad_artifact',{action:'review',path:step.path,format:'step',units:'file',expected_sha256:hash(readFileSync(step.path))});
  await tool('cad_artifact',{action:'verify',review_path:stepReviewed.path,expected_sha256:stepReviewed.sha256});await tool('cad_artifact_show',{review_path:stepReviewed.path,expected_sha256:stepReviewed.sha256,view_id:'review'});await ready();

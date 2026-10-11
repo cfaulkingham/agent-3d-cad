@@ -851,34 +851,62 @@ for(const corrupt of ['source','plane','coverage','ownership']){
 const reviewColor=()=>({default_color:[.2,.4,.6],parts:[{part_id:'left',color:[1,.2,0]}]});
 const reviewCamera=()=>({yaw:1,pitch:.25,zoom:2,pan:[.1,-.2]});
 function reviewMock(){
-  const m=sectionMock(),tool=m.bridge.tool;let appearance=CadRenderer.math.defaultAppearance(),camera=reviewCamera(),presets=[],rightRemoved=false;
-  const response=async()=>({...await tool('cad_context',{view_id:'main'}),appearance:structuredClone(appearance),camera:structuredClone(camera),presets:structuredClone(presets)});
+  const m=sectionMock(),tool=m.bridge.tool;let appearance=CadRenderer.math.defaultAppearance(),render=CadRenderer.math.renderSettings(),camera=reviewCamera(),presets=[],rightRemoved=false;
+  const response=async()=>({...await tool('cad_context',{view_id:'main'}),appearance:structuredClone(appearance),render:structuredClone(render),camera:structuredClone(camera),presets:structuredClone(presets)});
   m.bridge.tool=async(name,args)=>{
     if(args.action==='preset'){
       m.calls.push({name,args:structuredClone(args)});
       if(args.operation==='save'){
-        const native=await response(),saved={name:args.name,camera:structuredClone(camera),appearance:structuredClone(appearance),presentation:native.presentation,hidden_part_ids:native.hidden_part_ids};
+        const native=await response(),saved={name:args.name,camera:structuredClone(camera),appearance:structuredClone(appearance),render:structuredClone(render),presentation:native.presentation,hidden_part_ids:native.hidden_part_ids};
         if(!presets.some(p=>p.name===args.name)&&presets.length===16)throw Error('Preset capacity reached');
         presets=presets.filter(p=>p.name!==args.name);presets.push(saved);presets.sort((a,b)=>a.name.localeCompare(b.name));
       }else if(args.operation==='apply'){
         const saved=presets.find(p=>p.name===args.name);if(!saved)throw Error('Preset missing');
         await tool(name,{action:'context',view_id:args.view_id,evaluation_id:args.evaluation_id,selection:null,presentation:structuredClone(saved.presentation),hidden_part_ids:[...saved.hidden_part_ids]});
-        appearance=structuredClone(saved.appearance);camera=structuredClone(saved.camera);
+        appearance=structuredClone(saved.appearance);render=CadRenderer.math.renderSettings(saved.render || {});camera=structuredClone(saved.camera);
       }else if(args.operation==='delete')presets=presets.filter(p=>p.name!==args.name);
       return response();
     }
     const native=await tool(name,args);
     if(args.action==='mesh'&&rightRemoved){const current=JSON.parse(native.data);current.summary.bounds_mm.max=[1,1,2];current.summary.assembly.parts=current.summary.assembly.parts.filter(part=>part.id==='left');current.mesh.positions=current.mesh.positions.slice(0,4);current.mesh.triangles=current.mesh.triangles.slice(0,2);current.mesh.triangle_faces=current.mesh.triangle_faces.slice(0,2);current.topology.faces=current.topology.faces.filter(face=>face.part_id==='left');native.data=JSON.stringify(current);native.total_bytes=native.data.length;}
-    if(args.action==='context'){if(args.appearance)appearance=structuredClone(args.appearance);if(args.camera)camera=structuredClone(args.camera);}
-    if(args.action==='sync'||name==='cad_context')Object.assign(native,{appearance:structuredClone(appearance),camera:structuredClone(camera),presets:structuredClone(presets)});
+    if(args.action==='context'){if(args.appearance)appearance=structuredClone(args.appearance);if(args.render)render=structuredClone(args.render);if(args.camera)camera=structuredClone(args.camera);}
+    if(args.action==='sync'||name==='cad_context')Object.assign(native,{appearance:structuredClone(appearance),render:structuredClone(render),camera:structuredClone(camera),presets:structuredClone(presets)});
     return native;
   };
-  return {...m,nativeAppearance:()=>structuredClone(appearance),nativeCamera:()=>structuredClone(camera),nativePresets:()=>structuredClone(presets),
-    externalReview(settings){if(settings.appearance)appearance=structuredClone(settings.appearance);if(settings.camera)camera=structuredClone(settings.camera);if(settings.presets)presets=structuredClone(settings.presets);},
+  return {...m,nativeAppearance:()=>structuredClone(appearance),nativeRender:()=>structuredClone(render),nativeCamera:()=>structuredClone(camera),nativePresets:()=>structuredClone(presets),
+    externalReview(settings){if(settings.appearance)appearance=structuredClone(settings.appearance);if(settings.render)render=CadRenderer.math.renderSettings(settings.render);if(settings.camera)camera=structuredClone(settings.camera);if(settings.presets)presets=structuredClone(settings.presets);},
     removeRight(){rightRemoved=true;m.advance();},
-    retarget(){m.retarget();appearance=CadRenderer.math.defaultAppearance();camera=reviewCamera();presets=[];},
+    retarget(){m.retarget();appearance=CadRenderer.math.defaultAppearance();render=CadRenderer.math.renderSettings();camera=reviewCamera();presets=[];},
     seedReview(name='Overview'){m.seed();presets=[{name,camera:reviewCamera(),appearance:reviewColor(),presentation:sectionPresentation(),hidden_part_ids:['right']}];appearance=reviewColor();}
   };
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.deliveryQueue;
+  const old=m.state.snapshot(),render=CadRenderer.math.renderSettings({mode:'render',surfaces:{opacity:.6,finish:'glossy'},lighting:{rotation_deg:45},floor:{finish:'glossy'}});
+  await m.state.setRender(render);assert.deepEqual(m.nativeRender(),render);checks++;
+  await assert.rejects(m.state.saveContext(old),/changed/);checks++;
+  check(!m.state.value.render_unsaved&&m.state.snapshot().render.floor.finish==='glossy','Confirmed rendering is persisted and capture snapshots include the same floor material');
+  const material={...reviewColor(),material:{opacity:.7,finish:'matte'},parts:[{...reviewColor().parts[0],material:{opacity:.4,finish:'metal'}}]};
+  await m.state.setAppearance(material);await m.state.preset('save','Studio');await m.state.setRender({mode:'wireframe'});await m.state.setAppearance(reviewColor());await m.state.preset('apply','Studio');
+  assert.deepEqual(m.state.value.render,render);checks++;assert.deepEqual(m.state.value.appearance,material);checks++;
+  check(m.nativePresets()[0].render.projection==='perspective','Saved view presets restore perspective and native per-part finish together');
+  m.seedReview('Legacy');await m.state.pollOnce();await m.state.preset('apply','Legacy');
+  check(m.state.value.render.mode==='solid'&&m.state.value.render.projection==='orthographic','A saved preset without rendering migrates to the original solid display');
+  m.retarget();await m.state.pollOnce();check(m.state.value.render.mode==='solid'&&!m.state.value.appearance.material,'Retargeting resets source-scoped rendering and material overrides');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();const tool=m.bridge.tool;let fail=true;
+  m.bridge.tool=(name,args)=>args.action==='context'&&fail?Promise.reject(Error('Rendering write failed')):tool(name,args);
+  await assert.rejects(m.state.setRender({mode:'xray'}),/write/);checks++;
+  check(m.state.value.render_unsaved&&m.state.value.render.mode==='xray','A failed display write remains visibly unsaved');
+  await m.state.pollOnce();check(m.state.value.render.mode==='xray','A source poll cannot overwrite pending display settings');
+  fail=false;await m.state.setRender(m.state.value.render);check(!m.state.value.render_unsaved&&m.nativeRender().mode==='xray','Repeating an unsaved render choice persists it without needing a different value');m.state.dispose();
+}
+{
+  const m=reviewMock();await m.state.pollOnce();await m.state.deliveryQueue;const tool=m.bridge.tool;let release;
+  m.bridge.tool=async(name,args)=>{if(args.action==='sync'){const response=await tool(name,args);return new Promise(resolve=>{release=()=>resolve(response);});}return tool(name,args);};
+  const polling=m.state.pollOnce();await tick();await m.state.setRender({mode:'hidden_line'});release();await polling;
+  check(m.state.value.render.mode==='hidden_line'&&m.nativeRender().mode==='hidden_line','An earlier source poll cannot overwrite later confirmed rendering');m.state.dispose();
 }
 {
   const m=reviewMock();await m.state.pollOnce();await m.state.deliveryQueue;

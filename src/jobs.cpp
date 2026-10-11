@@ -9,6 +9,11 @@
 #include "agentcad/gcode.hpp"
 #include "agentcad/process.hpp"
 #include "agentcad/drawing.hpp"
+#include "agentcad/glb.hpp"
+#include "agentcad/visual.hpp"
+#include "agentcad/render.hpp"
+#include "agentcad/gif.hpp"
+#include "agentcad/artifact_review.hpp"
 #include "agentcad/cache.hpp"
 #include <set>
 #include "agentcad/model.hpp"
@@ -756,7 +761,7 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
     if (request.is_object() && request.value("kind", std::string()) == "drawing" && request.contains("drawing")) {
       drawing = &request.at("drawing");
       const auto& views = drawing->at("views");
-      if (views.is_array() && views.size() >= 2 && views.size() <= 6 && drawing->at("hidden_lines").is_boolean()) {
+      if (views.is_array() && views.size() >= 2 && views.size() <= 96 && drawing->at("hidden_lines").is_boolean()) {
         const auto output_key = feature_cache_keys(model).at(text_field(model,"output")).get<std::string>();
         for (std::size_t i = 0; i < views.size(); ++i) {
           if (!views.at(i).is_object()) { missing.clear(); break; }
@@ -891,6 +896,14 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
+    if(kind=="external_render") {
+      const auto& review=request.at("guides");const auto& identity=request.at("identity");auto mesh=pose_external_artifact(review,identity.at("configuration"));auto summary=review.at("summary");
+      Json bounds={{"min",{0,0,0}},{"max",{0,0,0}}};bool first=true;
+      const auto point=[&](const Json& p){if(first){bounds["min"]=p;bounds["max"]=p;first=false;}else for(int i=0;i<3;++i){bounds["min"][i]=std::min(number(bounds.at("min").at(i)),number(p.at(i)));bounds["max"][i]=std::max(number(bounds.at("max").at(i)),number(p.at(i)));}};
+      for(const auto& p:mesh.at("positions"))point(p);for(const auto& curve:mesh.at("polylines"))for(const auto& p:curve.at("points"))point(p);summary["bounds"]=first?Json(nullptr):bounds;
+      Json visual={{"read_only",true},{"artifact",{{"review_sha256",identity.at("review_sha256")},{"source",review.at("source")},{"summary",review.at("summary")}}},{"summary",summary},{"artifact_geometry",mesh}};
+      const auto rendered=render_png(visual,request.at("options"),path_from_utf8(text_field(request,"path")),check_job_cancelled);write_result(output,{{"result",{{"render",rendered}}},{"cache",Json::object()}});return 0;
+    }
     if(kind=="recognize_mesh") {
       write_result(output,{{"result",BuiltModel::recognize_mesh(request.at("mesh"),request.at("options"),request.at("guides"),text_field(request,"source_sha256"),text_field(request,"review_sha256"))},{"cache",Json::object()}});return 0;
     }
@@ -1006,12 +1019,28 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     }
     if (kind == "export") {
       if(request.at("format")=="3mf")result["print_export"]=export_3mf(geometry(),feature,request.value("options",Json()),request.at("identity"),path_from_utf8(text_field(request,"path")));
+      else if(request.at("format")=="glb") {
+        const auto summary=geometry().summary(feature),topology=geometry().topology(feature),mesh=geometry().mesh(feature);const auto& options=request.at("options");fields(options,{"appearance"},{"animation"});Json samples=nullptr;
+        if(options.contains("animation")){
+          const auto& captured=options.at("animation");const auto& sequence=captured.at("sequence");if(sha256(sequence.dump())!=text_field(captured,"sequence_sha256"))throw Error("artifact_mismatch","Animation recipe hash changed");samples=Json::array();
+          for(const auto& time:captured.at("times")){check_job_cancelled();const auto sampled=visual_sequence_sample(sequence,number(time)),operations=visual_sequence_operations(sampled.at("joints"),payload.at("model"),feature);auto candidate=operations.empty()?payload.at("model"):apply_operations(payload.at("model"),operations);BuiltModel pose(candidate);samples.push_back({{"time_s",time},{"parts",visual_pose_parts(pose.summary(feature),sampled.at("presentation"))}});}
+        }
+        result["glb"]=export_glb(mesh,topology,summary,request.at("identity"),options.at("appearance"),samples,path_from_utf8(text_field(request,"path")),check_job_cancelled);
+      }
       else geometry().export_file(path_from_utf8(text_field(request,"path")), text_field(request,"format"),feature);
     }
     else if(kind=="manufacturing") {
       result["manufacturing"]=manufacture(payload.at("model"),geometry(),request.at("options"),request.at("identity"),path_from_utf8(text_field(request,"path")));
     }
     else if(kind=="curve")result["curve"]=geometry().curve_samples(request.value("options",Json::object()),feature);
+    else if(kind=="render") {auto visual=request.at("identity");visual["mesh"]=geometry().mesh(feature);visual["topology"]=geometry().topology(feature);visual["summary"]=geometry().summary(feature);result["render"]=render_png(visual,request.at("options"),path_from_utf8(text_field(request,"path")),check_job_cancelled);}
+    else if(kind=="render_animation") {
+      const auto& options=request.at("options");fields(options,{"settings","animation","loop"});const auto& captured=options.at("animation");const auto& sequence=captured.at("sequence");if(sha256(sequence.dump())!=text_field(captured,"sequence_sha256"))throw Error("artifact_mismatch","Animated image sequence hash changed");
+      std::vector<double> boundaries;for(const auto& time:captured.at("times"))boundaries.push_back(number(time));
+      result["render"]=export_gif(boundaries,path_from_utf8(text_field(request,"path")),[&](std::size_t,double time){
+        check_job_cancelled();const auto sampled=visual_sequence_sample(sequence,time),operations=visual_sequence_operations(sampled.at("joints"),payload.at("model"),feature);const auto candidate=operations.empty()?payload.at("model"):apply_operations(payload.at("model"),operations);BuiltModel pose(candidate);auto visual=request.at("identity");visual["mesh"]=pose.mesh(feature);visual["topology"]=pose.topology(feature);visual["summary"]=pose.summary(feature);auto settings=options.at("settings");settings["presentation"]=sampled.at("presentation");return render_rgba(visual,settings,check_job_cancelled);
+      },options.at("loop").get<bool>(),check_job_cancelled);result["render"]["sha256"]=sha256_file(path_from_utf8(text_field(request,"path")),64*1024*1024,check_job_cancelled);
+    }
     else if(kind=="fabrication")result["fabrication"]=geometry().fabrication_review(request.at("options"),feature);
     else if(kind=="measure")result["measurement"]=geometry().measure(request.at("options"),request.at("topology"),feature);
     else if(kind=="robot") {
@@ -1087,7 +1116,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_render" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
   if (input.contains("request_id") && input.at("request_id") != id)

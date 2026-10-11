@@ -8,7 +8,7 @@
   const HOVER_SLOW_MS=8, HOVER_BACKOFF=4;
   const CLIP_EPS=1e-7;
   const DEFAULT_CAMERA={yaw:-.65,pitch:.6,zoom:1,pan:[0,0]};
-  const cloneCamera=c=>({yaw:c.yaw,pitch:c.pitch,zoom:c.zoom,pan:[...c.pan]});
+  const cloneCamera=c=>({yaw:c.yaw,pitch:c.pitch,zoom:c.zoom,pan:[...c.pan],...(c.projection?{projection:c.projection,lens_mm:c.lens_mm||50,distance:c.distance||3}: {})});
   const finitePoint=p=>Array.isArray(p)&&p.length===3&&p.every(n=>Number.isFinite(n)&&Math.abs(n)<=1e12);
   const fail=message=>{throw new Error(message);};
   function validate(d) {
@@ -119,7 +119,12 @@
   function validateArtifact(d) {
     if(!d||d.schema_version!==1||d.kind!=='artifact'||d.read_only!==true||d.document_id!==null||d.revision!==null||d.feature_id!==null||d.draft!==false||d.selection_lifetime!=='review_sha256'||d.mesh||d.topology)fail('Unsupported read-only artifact review.');
     const a=d.artifact,g=d.artifact_geometry,s=d.summary,hash=/^[0-9a-f]{64}$/;
-    if(!a||!hash.test(a.review_sha256)||!a.source||!hash.test(a.source.sha256)||d.evaluation_id!=='artifact_'+a.review_sha256.slice(0,55)||JSON.stringify(a.summary)!==JSON.stringify(s))fail('Invalid artifact source/review identity.');
+    const posed=/^apose_[0-9a-f]{58}$/.test(d.evaluation_id),pose=d.artifact_pose;
+    if(posed){if(!pose||typeof pose!=='object'||Array.isArray(pose)||Object.keys(pose).some(k=>!['joints','animation','time_seconds'].includes(k))||!['glb','urdf','sdf','srdf'].includes(a?.source?.format))fail('Invalid artifact pose qualification.');
+      if('joints'in pose&&(!pose.joints||typeof pose.joints!=='object'||Array.isArray(pose.joints)||Object.keys(pose.joints).length>1024||Object.entries(pose.joints).some(([k,v])=>!k.length||k.length>4096||!Number.isFinite(v)||Math.abs(v)>1e6)))fail('Invalid artifact joint coordinates.');
+      if('animation'in pose&&(!Number.isInteger(pose.animation)||pose.animation<0||pose.animation>255)||'time_seconds'in pose&&(!Number.isFinite(pose.time_seconds)||pose.time_seconds<0||pose.time_seconds>1e9))fail('Invalid artifact animation time.');
+      if(a.source.format==='glb'?('joints'in pose||('time_seconds'in pose&&!('animation'in pose))):('animation'in pose||'time_seconds'in pose))fail('Artifact pose does not match its source format.');}
+    if(!a||!hash.test(a.review_sha256)||!a.source||!hash.test(a.source.sha256)||(!posed&&d.evaluation_id!=='artifact_'+a.review_sha256.slice(0,55))||JSON.stringify(a.summary)!==JSON.stringify(posed?{...s,bounds:a.summary.bounds}:s))fail('Invalid artifact source/review identity.');
     const representations={step:'exact_brep_import',stl:'triangle_mesh','3mf':'triangle_mesh',glb:'triangle_mesh',dxf:'drawing_curves',urdf:'robot_description',sdf:'robot_description',srdf:'robot_semantics'};
     if(!s||s.editable!==false||s.units!=='mm'||s.representation!==representations[a.source.format]||!Array.isArray(d.limitations)||!d.metadata||typeof d.metadata!=='object')fail('Invalid artifact review qualification.');
     if(!g||!['positions','triangles','triangle_groups','groups','polylines'].every(k=>Array.isArray(g[k]))||g.positions.length>MAX_VERTICES||g.triangles.length>MAX_TRIANGLES||g.groups.length>MAX_ENTITIES||g.polylines.length>MAX_ENTITIES)fail('Invalid or oversized artifact geometry.');
@@ -136,16 +141,30 @@
     return d;
   }
   function prepareArtifact(d) {
-    validateArtifact(d);const g=d.artifact_geometry,b=d.summary.bounds;
-    const span=b?Math.max(1e-9,...b.max.map((v,i)=>v-b.min[i])):1,center=b?b.min.map((v,i)=>v+(b.max[i]-v)/2):[0,0,0],normalized=p=>p.map((v,i)=>(v-center[i])/span);
+    validateArtifact(d);const g=d.artifact_geometry,b=d.summary.bounds,frame=d.artifact.summary.bounds||b;
+    const span=frame?Math.max(1e-9,...frame.max.map((v,i)=>v-frame.min[i])):1,center=frame?frame.min.map((v,i)=>v+(frame.max[i]-v)/2):[0,0,0],normalized=p=>p.map((v,i)=>(v-center[i])/span);
     const positions=Float64Array.from(g.positions.flatMap(normalized)),indices=Uint32Array.from(g.triangles.flat()),faces=g.groups.map(v=>v.id),faceNumbers=new Map(faces.map((id,i)=>[id,i+1]));
-    const edges=g.polylines.map(v=>({id:v.id,points:Float64Array.from(v.points.flatMap(normalized))}));
+    const edges=g.polylines.filter(v=>!v.text).map(v=>({id:v.id,points:Float64Array.from(v.points.flatMap(normalized))}));
     return {read_only:true,identity:{review_sha256:d.artifact.review_sha256,evaluation_id:d.evaluation_id,read_only:true},positions,indices,faces,faceNumbers,triangleFaces:[...g.triangle_groups],edges,
       geometries:{face:new Map(g.groups.map(v=>[v.id,v])),edge:new Map(g.polylines.map(v=>[v.id,v]))},tree:indices.length?buildTree(positions,indices):{nodes:[],order:new Uint32Array()},partBounds:new Map(),center,span,bounds:b?{min:normalized(b.min),max:normalized(b.max)}:null,hiddenPartIds:[],edgeAllowance:0};
   }
+  function artifactOverlay(model,c,width,height) {
+    const texts=[],fills=[];if(!model?.read_only)return {texts,fills};const norm=p=>p.map((v,i)=>(v-model.center[i])/model.span),screen=p=>project(norm(p),c,width,height);
+    for(const line of model.geometries.edge.values()){
+      if(line.text){const origin=line.points[0],anchor=screen(origin),end=screen(line.points[1]),m=line.text_transform_mm,h=line.height_mm||1,up=m?.length===16?[m[1]*h,m[5]*h,m[9]*h]:[0,h,0],top=screen(origin.map((v,i)=>v+up[i]));
+        const align=line.attachment?['left','center','right'][(line.attachment-1)%3]:[0,3,5].includes(line.horizontal_alignment||0)?'left':[1,4].includes(line.horizontal_alignment)?'center':'right',baseline=line.attachment?['top','middle','bottom'][Math.floor((line.attachment-1)/3)]:['alphabetic','bottom','middle','top'][line.vertical_alignment||0];
+        texts.push({align,baseline,text:line.text,x:anchor[0],y:anchor[1],angle:Math.atan2(end[1]-anchor[1],end[0]-anchor[0]),font_px:Math.max(.2,Math.hypot(top[0]-anchor[0],top[1]-anchor[1])),width_factor:line.width_factor||1,color:line.color||[.2,.25,.3]});}
+      if(line.fill&&Array.isArray(line.hatch_loops))fills.push({loops:line.hatch_loops.map(loop=>(loop.points||loop).map(screen)),color:line.color||[.4,.5,.65]});
+    }return {texts,fills};
+  }
+  function paintArtifactOverlay(ctx,layout) {
+    const color=v=>'rgb('+v.slice(0,3).map(n=>Math.round(n*255)).join(',')+')';
+    for(const fill of layout.fills){ctx.beginPath();for(const loop of fill.loops){if(!loop.length)continue;ctx.moveTo(loop[0][0],loop[0][1]);for(const p of loop.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();}ctx.fillStyle=color(fill.color);ctx.globalAlpha=.65;ctx.fill('evenodd');ctx.globalAlpha=1;}
+    for(const text of layout.texts){ctx.save();ctx.translate(text.x,text.y);ctx.rotate(text.angle);ctx.scale(text.width_factor,1);ctx.font=text.font_px+'px sans-serif';ctx.fillStyle=color(text.color);ctx.textBaseline=text.baseline||'alphabetic';ctx.textAlign=text.align||'left';const lines=text.text.split('\n'),shift=text.baseline==='middle'?-(lines.length-1)*text.font_px*.6:text.baseline==='bottom'?-(lines.length-1)*text.font_px*1.2:0;lines.forEach((line,i)=>ctx.fillText(line,0,shift+i*text.font_px*1.2));ctx.restore();}
+  }
   function camera(value) {
     if(!value||!['yaw','pitch','zoom'].every(k=>Number.isFinite(value[k]))||!Array.isArray(value.pan)||value.pan.length!==2||!value.pan.every(Number.isFinite))fail('Invalid camera state.');
-    return {yaw:Math.atan2(Math.sin(value.yaw),Math.cos(value.yaw)),pitch:Math.max(-Math.PI/2,Math.min(Math.PI/2,value.pitch)),zoom:Math.max(.05,Math.min(50,value.zoom)),pan:value.pan.map(n=>Math.max(-20,Math.min(20,n)))};
+    return {yaw:Math.atan2(Math.sin(value.yaw),Math.cos(value.yaw)),pitch:Math.max(-Math.PI/2,Math.min(Math.PI/2,value.pitch)),zoom:Math.max(.05,Math.min(50,value.zoom)),pan:value.pan.map(n=>Math.max(-20,Math.min(20,n))),...(value.projection?{projection:value.projection,lens_mm:value.lens_mm||50,distance:value.distance||3}:{})};
   }
   function basis(c) {
     const cy=Math.cos(c.yaw),sy=Math.sin(c.yaw),cp=Math.cos(c.pitch),sp=Math.sin(c.pitch);
@@ -154,12 +173,14 @@
   const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
   function project(p,c,width,height) {
     const b=basis(c),size=Math.min(width,height),scale=size*.68*c.zoom;
-    return [width/2+dot(b[0],p)*scale+c.pan[0]*size,height/2-dot(b[1],p)*scale+c.pan[1]*size,dot(b[2],p)];
+    const z=dot(b[2],p),d=c.distance||3,f=c.projection==='perspective'?d/(d+z):1;
+    return [width/2+dot(b[0],p)*scale*f+c.pan[0]*size,height/2-dot(b[1],p)*scale*f+c.pan[1]*size,z,...(c.projection==='perspective'?[1/(d+z)]:[])];
   }
   function screenRay(x,y,c,width,height,extent=2) {
     const b=basis(c),size=Math.min(width,height),scale=size*.68*c.zoom;
     const u=(x-width/2-c.pan[0]*size)/scale,v=(height/2+c.pan[1]*size-y)/scale;
-    return {origin:b[0].map((n,i)=>n*u+b[1][i]*v-extent*b[2][i]),direction:b[2],far:extent*2};
+    if(c.projection==='perspective'){const d=c.distance||3;return {origin:b[2].map(n=>-d*n),direction:b[2].map((n,i)=>n+b[0][i]*u/d+b[1][i]*v/d),far:d+extent,offset:d};}
+    return {origin:b[0].map((n,i)=>n*u+b[1][i]*v-extent*b[2][i]),direction:b[2],far:extent*2,offset:extent};
   }
   const STANDARD_VIEWS=Object.freeze({iso:[-.65,.6],top:[0,Math.PI/2],bottom:[0,-Math.PI/2],front:[0,0],back:[Math.PI,0],right:[-Math.PI/2,0],left:[Math.PI/2,0]});
   const DIGIT_VIEWS=Object.freeze({1:'iso',2:'front',3:'back',4:'top',5:'bottom',6:'right',7:'left'});
@@ -203,7 +224,7 @@
     const left=insets?.left||0,right=insets?.right||0,top=insets?.top||0,bottom=insets?.bottom||0;
     const usableWidth=Math.max(1,width-left-right),usableHeight=Math.max(1,height-top-bottom);
     const b=basis(c),corners=[];
-    for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]])corners.push([dot(b[0],[x,y,z]),dot(b[1],[x,y,z])]);
+    for(const x of [bounds.min[0],bounds.max[0]])for(const y of [bounds.min[1],bounds.max[1]])for(const z of [bounds.min[2],bounds.max[2]]){const p=[x,y,z],d=c.distance||3,f=c.projection==='perspective'?d/(d+dot(b[2],p)):1;corners.push([dot(b[0],p)*f,dot(b[1],p)*f]);}
     const low=[0,1].map(a=>Math.min(...corners.map(p=>p[a]))),high=[0,1].map(a=>Math.max(...corners.map(p=>p[a]))),size=Math.min(width,height);
     const zoom=Math.max(.05,Math.min(50,Math.min(usableWidth*.86/(Math.max(1e-12,high[0]-low[0])*.68*size),usableHeight*.86/(Math.max(1e-12,high[1]-low[1])*.68*size))));
     return {yaw:c.yaw,pitch:c.pitch,zoom,pan:[-(low[0]+high[0])/2*.68*zoom+(left-right)/2/size,(low[1]+high[1])/2*.68*zoom+(top-bottom)/2/size]};
@@ -289,25 +310,64 @@
   }
   // Only geometry inputs qualify a native section: changing the kept side
   // changes its outward normal, while a zero explosion has no displacement.
+  const RENDER_MODES=['solid','render','xray','hidden_line','wireframe'];
+  const FINISHES=['matte','satin','glossy','metal'];
+  function material(value={}) {
+    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['opacity','finish'].includes(k))||('opacity'in value&&(!Number.isFinite(value.opacity)||value.opacity<0||value.opacity>1))||('finish'in value&&!FINISHES.includes(value.finish)))fail('Invalid CAD material.');
+    return {opacity:value.opacity??1,finish:value.finish??'satin'};
+  }
+  function renderSettings(value={}) {
+    const closed=(v,keys)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).every(k=>keys.includes(k));
+    if(!closed(value,['mode','projection','lens_mm','surfaces','lighting','background','floor','grid','axes','edges']))fail('Invalid CAD render settings.');
+    const mode=value.mode||'solid';if(!RENDER_MODES.includes(mode))fail('Unknown CAD render preset.');
+    const studio=mode==='render',out={mode,projection:studio?'perspective':'orthographic',lens_mm:50,surfaces:{opacity:mode==='xray'?.22:1,finish:'satin'},lighting:{enabled:true,exposure:1,rotation_deg:0,fill:.35},background:{color:studio?[.91,.93,.96]:[.941,.941,.941]},floor:{enabled:studio,color:[.8,.82,.85],opacity:1,finish:'matte'},grid:!studio,axes:!studio,edges:!studio};
+    for(const key of ['surfaces','lighting','background','floor'])if(key in value){if(!closed(value[key],Object.keys(out[key])))fail('Invalid '+key+' render settings.');Object.assign(out[key],value[key]);}
+    for(const key of ['projection','lens_mm','grid','axes','edges'])if(key in value)out[key]=value[key];
+    const unit=v=>Array.isArray(v)&&v.length===3&&v.every(n=>Number.isFinite(n)&&n>=0&&n<=1),range=(v,a,b)=>Number.isFinite(v)&&v>=a&&v<=b;
+    if(!['orthographic','perspective'].includes(out.projection)||!range(out.lens_mm,18,120)||!['grid','axes','edges'].every(k=>typeof out[k]==='boolean')||!range(out.surfaces.opacity,0,1)||!FINISHES.includes(out.surfaces.finish)||typeof out.lighting.enabled!=='boolean'||!range(out.lighting.exposure,.1,4)||!range(out.lighting.rotation_deg,-360,360)||!range(out.lighting.fill,0,1)||!unit(out.background.color)||typeof out.floor.enabled!=='boolean'||!unit(out.floor.color)||!range(out.floor.opacity,0,1)||!['matte','glossy'].includes(out.floor.finish))fail('Invalid CAD render setting value.');
+    return out;
+  }
   const defaultAppearance=()=>({default_color:[.66,.75,.80],parts:[]});
   function appearance(value,source,{prune=false}={}) {
-    const keys=(v,list)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).length===list.length&&list.every(k=>Object.hasOwn(v,k));
+    const keys=(v,list)=>v&&typeof v==='object'&&!Array.isArray(v)&&Object.keys(v).every(k=>list.includes(k)||k==='material')&&list.every(k=>Object.hasOwn(v,k));
     const rgb=v=>Array.isArray(v)&&v.length===3&&v.every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1);
     if(!keys(value,['default_color','parts'])||!rgb(value.default_color)||!Array.isArray(value.parts)||value.parts.length>1024)fail('Invalid CAD appearance.');
     const seen=new Set(),parts=[];
     for(const item of value.parts){
       if(!keys(item,['part_id','color'])||typeof item.part_id!=='string'||!rgb(item.color)||seen.has(item.part_id))fail('Invalid or duplicate occurrence appearance.');
       seen.add(item.part_id);if(!source?.partBounds.has(item.part_id)){if(prune)continue;fail('Appearance must name a current leaf occurrence.');}
-      parts.push({part_id:item.part_id,color:[...item.color]});
+      parts.push({part_id:item.part_id,color:[...item.color],...(item.material?{material:material(item.material)}:{})});
     }
-    return {default_color:[...value.default_color],parts};
+    return {default_color:[...value.default_color],parts,...(value.material?{material:material(value.material)}:{})};
   }
+  function surfaceStyle(model,value,owner,settings) {
+    const part=value.parts.find(p=>p.part_id===owner),group=model.read_only?model.geometries.face.get(owner):null,authored=group?.material;
+    const base=part?.color||authored?.base_color?.slice(0,3)||value.default_color,m=material(part?.material||value.material||{}),roughness={matte:.9,satin:.5,glossy:.15,metal:.24};
+    return {color:base,opacity:(authored?.alpha_mode==='OPAQUE'?1:(authored?.base_color?.[3]??m.opacity))*(settings?.surfaces.opacity??1),roughness:authored?.roughness??roughness[part?.material?.finish||value.material?.finish||settings?.surfaces.finish||'satin'],metallic:authored?.metallic??((part?.material?.finish||value.material?.finish||settings?.surfaces.finish||'satin')==='metal'?1:0),emissive:authored?.emissive||[0,0,0],alpha_mode:authored?.alpha_mode||'BLEND',alpha_cutoff:authored?.alpha_cutoff??.5};
+  }
+  function triangleOwner(model,index){const id=model.triangleFaces[index];return model.read_only?id:model.geometries.face.get(id)?.part_id;}
   function appearanceData(model,value) {
     const colors=new Map(value.parts.map(v=>[v.part_id,v.color]));
-    if(!colors.size)return new Float32Array();
+    if(!colors.size&&!model.read_only)return new Float32Array();
     const data=new Float32Array(model.indices.length*3);
-    for(let i=0;i<model.indices.length;i++){const part=model.geometries.face.get(model.triangleFaces[Math.floor(i/3)])?.part_id;data.set(colors.get(part)||value.default_color,i*3);}
+    for(let i=0;i<model.indices.length;i++){const owner=triangleOwner(model,Math.floor(i/3)),style=surfaceStyle(model,value,owner),group=model.read_only?model.geometries.face.get(owner):null,vertexColor=group?.vertex_colors?.[model.indices[i]-(group.vertex_start||0)];data.set(style.color.map((v,k)=>v*(vertexColor?.[k]??1)),i*3);}
     return data;
+  }
+  function materialData(model,value,settings) {
+    const data=new Float32Array(model.indices.length*3),uvs=new Float32Array(model.indices.length*2),groups=[];
+    for(let i=0;i<model.indices.length;i++){const owner=triangleOwner(model,Math.floor(i/3)),style=surfaceStyle(model,value,owner,settings);const g=model.read_only?model.geometries.face.get(owner):null,vertexAlpha=g?.vertex_colors?.[model.indices[i]-(g.vertex_start||0)]?.[3]??1;data.set([style.opacity*vertexAlpha,style.roughness,style.metallic],i*3);
+      const group=model.read_only?model.geometries.face.get(owner):null,uv=group?.texture_coordinates?.[model.indices[i]-(group?.vertex_start||0)];if(uv)uvs.set(uv,i*2);
+      if(i%3===0){const last=groups.at(-1);if(last&&last.owner===owner)last.count+=3;else groups.push({owner,start:i,count:3,style});}}
+    const varied=model.read_only||value.material||value.parts.some(p=>p.material)||settings.surfaces.opacity!==1||settings.surfaces.finish!=='satin';
+    return {materials:varied?data:new Float32Array(),uvs:model.read_only?uvs:new Float32Array(),groups};
+  }
+  function studioLight(settings) {const t=settings.lighting.rotation_deg*Math.PI/180,c=Math.cos(t),s=Math.sin(t);return [-.45*c+.55*s,-.45*s-.55*c,1];}
+  function studioGeometry(model,settings) {
+    if(!settings.floor.enabled||!model?.bounds)return new Float32Array();const light=studioLight(settings),floor=model.bounds.min[2]-.0002,values=[];
+    for(let i=0;i<model.indices.length;i+=3){let polygon=[0,1,2].map(k=>vertex(model.positions,model.indices[i+k]));
+      if(model.clip){const clipped=[];for(let k=0;k<polygon.length;k++){const a=polygon[k],b=polygon[(k+1)%polygon.length],da=clipDistance(model,a),db=clipDistance(model,b);if(da>=-CLIP_EPS)clipped.push(a);if((da<0)!==(db<0)){const t=da/(da-db);clipped.push(a.map((v,j)=>v+t*(b[j]-v)));}}polygon=clipped;}
+      for(let k=1;k+1<polygon.length;k++)for(const p of [polygon[0],polygon[k],polygon[k+1]]){const t=(p[2]-floor)/light[2];values.push(p[0]-light[0]*t,p[1]-light[1]*t,floor,0,0,1,0);}}
+    return Float32Array.from(values);
   }
   function sectionGeometry(value) {
     if(!value?.clip)return null;
@@ -474,7 +534,7 @@
   function facing(model,index,direction) {
     const a=vertex(model.positions,model.indices[3*index]),b=vertex(model.positions,model.indices[3*index+1]),c=vertex(model.positions,model.indices[3*index+2]);
     const e=b.map((v,i)=>v-a[i]),f=c.map((v,i)=>v-a[i]),n=[e[1]*f[2]-e[2]*f[1],e[2]*f[0]-e[0]*f[2],e[0]*f[1]-e[1]*f[0]],length=Math.hypot(...n);
-    return length>0?Math.abs(dot(n,direction))/length:1;
+    return length>0?Math.abs(dot(n,direction))/(length*Math.hypot(...direction)):1;
   }
   function traceTriangles(model,ray,budget) {
     if(!model.indices.length)return {depth:Infinity,ids:new Set(),facing:1};
@@ -504,7 +564,7 @@
   function nearestSegment(p,a,b) {
     const dx=b[0]-a[0],dy=b[1]-a[1],length=dx*dx+dy*dy;
     const t=length>1e-16?Math.max(0,Math.min(1,((p[0]-a[0])*dx+(p[1]-a[1])*dy)/length)):(a[2]<=b[2]?0:1);
-    const q=a.map((v,i)=>v+t*(b[i]-v));return {point:q,distance:Math.hypot(q[0]-p[0],q[1]-p[1])};
+    const q=a.map((v,i)=>v+t*(b[i]-v));if(a.length===4&&b.length===4)q[2]=((1-t)*a[2]*a[3]+t*b[2]*b[3])/((1-t)*a[3]+t*b[3]);return {point:q,distance:Math.hypot(q[0]-p[0],q[1]-p[1])};
   }
   function pickFace(model,c,width,height,x,y,budget) {
     const hit=trace(model,screenRay(x,y,c,width,height,model.depthExtent??2),budget);
@@ -522,7 +582,7 @@
     let best=Infinity,depth=Infinity;const ids=new Set();
     for(const candidate of candidates) {
       if(candidate.distance>best+.25)break;
-      const q=candidate.point,extent=model.depthExtent??2,hit=trace(model,screenRay(q[0],q[1],c,width,height,extent),budget),z=q[2]+extent;
+      const q=candidate.point,extent=model.depthExtent??2,hit=trace(model,screenRay(q[0],q[1],c,width,height,extent),budget),z=q[2]+(c.projection==='perspective'?(c.distance||3):extent);
       // The deflection offset is normal to the surface; along the ray it grows
       // as 1/cos against the occluding triangle, capped at 4x for grazing views.
       if(z>hit.depth+DEPTH_EPS*4+(hit.section?0:(model.edgeAllowance||0)/Math.max(hit.facing,.25)))continue;
@@ -568,7 +628,7 @@
     }
     candidates.sort((a,b)=>a.distance-b.distance||a.point[2]-b.point[2]);
     for(const q of candidates){
-      const ray=screenRay(q.point[0],q.point[1],c,width,height,extent),hit=trace(model,ray,budget),depth=q.point[2]+extent;
+      const ray=screenRay(q.point[0],q.point[1],c,width,height,extent),hit=trace(model,ray,budget),depth=q.point[2]+(c.projection==='perspective'?(c.distance||3):extent);
       if(depth>hit.depth+DEPTH_EPS*4+(hit.section?0:(model.edgeAllowance||0)/Math.max(hit.facing,.25)))continue;
       return {point_mm:ray.origin.map((v,i)=>model.center[i]+(v+depth*ray.direction[i])*model.span),input:'edge'};
     }
@@ -594,7 +654,7 @@
     }
     const faces=new Float32Array(model.indices.length*7);
     for(let i=0;i<model.indices.length;i++) {
-      const index=model.indices[i],normal=vertex(normals,index),length=Math.hypot(...normal)||1;
+      const index=model.indices[i],group=model.read_only?model.geometries.face.get(model.triangleFaces[Math.floor(i/3)]):null,authored=group?.normals_mm?.[index-(group.vertex_start||0)],normal=authored||vertex(normals,index),length=Math.hypot(...normal)||1;
       faces.set(vertex(model.positions,index),i*7);faces.set(normal.map(n=>n/length),i*7+3);faces[i*7+6]=model.faceNumbers.get(model.triangleFaces[Math.floor(i/3)]);
     }
     let segments=0;for(const edge of model.edges)segments+=Math.max(0,edge.points.length/3-1);
@@ -613,34 +673,38 @@
       ${webgl2?'in':'attribute'} vec3 aNormal;
       ${webgl2?'in':'attribute'} float aEntity;
       ${webgl2?'in':'attribute'} vec3 aColor;
-      uniform mat3 uBasis; uniform vec2 uScale; uniform vec2 uPan; uniform float uDepth; uniform vec2 uLineShift;
+      ${webgl2?'in':'attribute'} vec3 aMaterial;${webgl2?'in':'attribute'} vec2 aUV;
+      uniform mat3 uBasis; uniform vec2 uScale; uniform vec2 uPan; uniform float uDepth; uniform vec2 uLineShift;uniform float uDistance;uniform bool uPerspective;
       ${webgl2?'out':'varying'} vec3 vNormal;
       ${webgl2?'out':'varying'} float vEntity;
       ${webgl2?'out':'varying'} vec3 vPosition;
       ${webgl2?'out':'varying'} vec3 vColor;
-      void main(){vec3 p=uBasis*aPosition;gl_Position=vec4(p.xy*uScale+uPan+uLineShift,p.z/uDepth,1.);vNormal=uBasis*aNormal;vEntity=aEntity;vPosition=aPosition;vColor=aColor;}`;
+      ${webgl2?'out':'varying'} vec3 vMaterial;${webgl2?'out':'varying'} vec2 vUV;
+      void main(){vec3 p=uBasis*aPosition;float w=uPerspective?1.+p.z/uDistance:1.;float z=uPerspective?((uDistance/uDepth)*p.z+uDepth)/uDistance:p.z/uDepth;gl_Position=vec4(p.xy*uScale+(uPan+uLineShift)*w,z,w);vNormal=uBasis*aNormal;vEntity=aEntity;vPosition=aPosition;vColor=aColor;vMaterial=aMaterial;vUV=aUV;}`;
     const fragmentSource=(webgl2?'#version 300 es\n':'')+`
       precision highp float;
       ${webgl2?'in':'varying'} vec3 vNormal;
       ${webgl2?'in':'varying'} float vEntity;
       ${webgl2?'in':'varying'} vec3 vPosition;
       ${webgl2?'in':'varying'} vec3 vColor;
+      ${webgl2?'in':'varying'} vec3 vMaterial;${webgl2?'in':'varying'} vec2 vUV;
       uniform float uSelected;uniform float uHover;uniform bool uLines;uniform bool uSection;uniform vec3 uSectionNormal;uniform vec3 uLine;uniform vec3 uSelectColor;uniform vec3 uHoverColor;
-      uniform bool uClipping;uniform vec4 uClip;uniform float uClipSign;
+      uniform bool uClipping;uniform vec4 uClip;uniform float uClipSign;uniform bool uLighting;uniform vec3 uKey;uniform float uFill;uniform float uExposure;uniform bool uShadow;uniform float uAlpha;uniform bool uTexture;uniform sampler2D uSampler;uniform vec3 uEmissive;uniform float uAlphaCutoff;uniform bool uOpaque;
       ${webgl2?'out vec4 outColor;':''}
       void main(){
         if(uClipping&&uClipSign*(dot(uClip.xyz,vPosition)-uClip.w)<-0.0000001)discard;
         bool selected=!uSection&&abs(vEntity-uSelected)<.25;
         bool hovered=!uSection&&!selected&&abs(vEntity-uHover)<.25;
-        vec3 color;
+        vec3 color;float alpha=1.;vec4 tex=uTexture?texture${webgl2?'':'2D'}(uSampler,vUV):vec4(1.);
+        if(uShadow){${webgl2?'outColor':'gl_FragColor'}=vec4(.08,.10,.13,uAlpha);return;}
         if(uLines){color=uSection?vec3(.94,.65,.25):selected?uSelectColor:hovered?uHoverColor:uLine;}
         else {vec3 n=normalize(uSection?uSectionNormal:vNormal);if(!uSection&&!gl_FrontFacing)n=-n;
-          float diffuse=max(0.,dot(n,normalize(vec3(-.35,.65,-.85))));
+          vec3 key=normalize(uKey);float diffuse=max(0.,dot(n,key)),fill=max(0.,dot(n,normalize(vec3(.55,.3,-.4))));
           float rim=pow(1.-abs(n.z),3.);
-          float spec=pow(max(0.,dot(reflect(normalize(vec3(.35,-.65,.85)),n),vec3(0.,0.,-1.))),28.);
-          vec3 base=uSection?vec3(.94,.55,.18):selected?mix(vColor,uSelectColor,.55):hovered?mix(vColor,uHoverColor,.35):vColor;
-          color=base*(.62+.40*diffuse)+vec3(.015,.035,.06)+vec3(.08)*rim+vec3(.10)*spec;}
-        ${webgl2?'outColor':'gl_FragColor'}=vec4(color,1.);
+          float spec=pow(max(0.,dot(reflect(-key,n),vec3(0.,0.,-1.))),max(2.,128.*(1.-vMaterial.y)));spec*=.08+.5*vMaterial.z;
+          vec3 base=uSection?vec3(.94,.55,.18):selected?mix(vColor,uSelectColor,.55):hovered?mix(vColor,uHoverColor,.35):vColor;base*=tex.rgb;
+          color=uLighting?(base*(.35+uFill*fill+.65*diffuse)+vec3(.025)*rim+mix(vec3(spec),base*spec,vMaterial.z))*uExposure:base; color+=uEmissive;alpha=uSection?1.:vMaterial.x*(uOpaque?1.:tex.a);if(alpha<uAlphaCutoff)discard;if(uAlphaCutoff>0.)alpha=1.;}
+        ${webgl2?'outColor':'gl_FragColor'}=vec4(color,alpha);
       }`;
     const shaders=[];let linked=null;
     try {
@@ -665,9 +729,9 @@
       precision highp float;
       in float vT;in vec2 vScreen;uniform vec3 uTop;uniform vec3 uBottom;
       uniform mat3 uBasis;uniform vec2 uScale;uniform vec2 uPan;uniform vec2 uViewport;
-      uniform bool uGrid;uniform bool uAxes;uniform float uFloor;uniform float uStep;uniform vec2 uShift;uniform vec3 uOrigin;
+      uniform bool uGrid;uniform bool uAxes;uniform float uDistance;uniform bool uPerspective;uniform bool uStudioFloor;uniform vec3 uFloorColor;uniform float uFloorOpacity;uniform bool uGlossyFloor;uniform float uFloor;uniform float uStep;uniform vec2 uShift;uniform vec3 uOrigin;
       out vec4 outColor;
-      vec2 screen(vec3 p){return ((uBasis*p).xy*uScale+uPan)*uViewport*.5;}
+      vec2 screen(vec3 p){vec3 q=uBasis*p;float w=uPerspective?1.+q.z/uDistance:1.;return (q.xy*uScale/w+uPan)*uViewport*.5;}
       float axis(vec3 direction){
         vec2 a=screen(uOrigin),b=screen(uOrigin+direction*.24),p=vScreen*uViewport*.5;
         vec2 d=b-a;float length2=dot(d,d);if(length2<1.)return 0.;
@@ -675,22 +739,23 @@
       }
       void main(){
         vec3 color=mix(uBottom,uTop,vT);float dark=step(.5,dot(uTop,vec3(.2126,.7152,.0722)));
-        if(uGrid){
-          vec3 direction=transpose(uBasis)*vec3(0.,0.,1.);
+        if(uGrid||uStudioFloor){
+          vec2 screenPoint=(vScreen-uPan)/uScale;vec3 direction=transpose(uBasis)*(uPerspective?vec3(screenPoint/uDistance,1.):vec3(0.,0.,1.));
           if(abs(direction.z)>.005){
-            vec3 point=transpose(uBasis)*vec3((vScreen-uPan)/uScale,0.);
-            point+=direction*((uFloor-point.z)/direction.z);
+            vec3 point=transpose(uBasis)*(uPerspective?vec3(0.,0.,-uDistance):vec3(screenPoint,0.));
+            float distance=(uFloor-point.z)/direction.z;point+=direction*distance;
+            if(uStudioFloor&&(!uPerspective||distance>0.)){float horizon=1.-smoothstep(2.,8.,length(point.xy));vec3 floorColor=uFloorColor;if(uGlossyFloor)floorColor+=vec3(.12)*exp(-dot(point.xy-vec2(-.5,-.5),point.xy-vec2(-.5,-.5))*.3);color=mix(color,floorColor,horizon*uFloorOpacity);}
             vec2 coord=(point.xy-uShift)/uStep;
             vec2 minor=abs(fract(coord-.5)-.5)/max(fwidth(coord),vec2(.0001));
             vec2 major=abs(fract(coord/5.-.5)-.5)/max(fwidth(coord/5.),vec2(.0001));
             float fine=1.-smoothstep(.35,1.,min(minor.x,minor.y));
             float bold=1.-smoothstep(.5,1.5,min(major.x,major.y));
             float fade=1.-smoothstep(3.,7.,length(point.xy));
-            color=mix(color,mix(vec3(.48),vec3(.65),dark),max(fine*.30,bold*.65)*fade);
+            if(uGrid)color=mix(color,mix(vec3(.48),vec3(.65),dark),max(fine*.30,bold*.65)*fade);
           }
         }
         if(uAxes){color=mix(color,vec3(.95,.12,.15),axis(vec3(1.,0.,0.)));color=mix(color,vec3(.10,.71,.25),axis(vec3(0.,1.,0.)));color=mix(color,vec3(0.,.48,.95),axis(vec3(0.,0.,1.)));}
-        outColor=vec4(color,1.);
+        outColor=vec4(color,alpha);
       }`;
     const shaders=[];let linked=null;
     try {
@@ -701,7 +766,7 @@
       linked=gl.createProgram();if(!linked)fail('Unable to allocate the backdrop program.');for(const shader of shaders)gl.attachShader(linked,shader);gl.linkProgram(linked);
       if(!gl.getProgramParameter(linked,gl.LINK_STATUS))fail('Backdrop shader linking failed: '+gl.getProgramInfoLog(linked));
       const result={program:linked};
-      for(const name of ['uTop','uBottom','uBasis','uScale','uPan','uViewport','uGrid','uAxes','uFloor','uStep','uShift','uOrigin'])result[name]=gl.getUniformLocation(linked,name);
+      for(const name of ['uTop','uBottom','uBasis','uScale','uPan','uViewport','uGrid','uAxes','uFloor','uStep','uShift','uOrigin','uDistance','uPerspective','uStudioFloor','uFloorColor','uFloorOpacity','uGlossyFloor'])result[name]=gl.getUniformLocation(linked,name);
       return result;
     } catch(error){if(linked)gl.deleteProgram(linked);throw error;}
     finally {for(const shader of shaders)gl.deleteShader(shader);}
@@ -710,7 +775,7 @@
     constructor(canvas,{onPick=()=>{},onPointPick=()=>{},onPointMeasurement=()=>{},onHover=()=>{},onView=()=>{},onCamera=()=>{},onError=()=>{},onReady=()=>{},onAnnotations=()=>{},now=defaultNow,reducedMotion=defaultReducedMotion}={}) {
       if(!canvas||typeof canvas.getContext!=='function')fail('A canvas is required.');
       this.canvas=canvas;this.callbacks={onPick,onHover,onView,onCamera,onError,onReady,onAnnotations};this.annotations=[];this.camera=cloneCamera(DEFAULT_CAMERA);this.insets={top:0,right:0,bottom:0,left:0};this.view=null;this.theme=defaultTheme();this.anim=null;this.now=now;this.reducedMotion=reducedMotion;this.mode='auto';this.hover=null;this.hoverPending=null;this.hoverPoint=null;this.hoverResumeAt=0;this.model=null;this.fullModel=null;this.presentation=defaultPresentation();this.appearance=defaultAppearance();this.hiddenPartIds=[];this.sectionResult=null;this.selection=null;this.gl=null;this.resources=null;this.destroyed=false;this.lost=false;this.ready=false;this.pending=null;this.listeners=[];this.drag=null;
-      this.display={grid:true,axes:true,edges:false};
+      this.render=renderSettings();this.renderBackgroundExplicit=false;this.display={grid:true,axes:true,edges:false};
       Object.assign(this.callbacks,{onPointPick,onPointMeasurement});this.measurementPoints=null;this.pointPicking=false;this.measurementActive=false;this.lastPointPick=false;
       this._listen(canvas,'webglcontextlost',event=>{event.preventDefault();this.lost=true;this.resources=null;this.callbacks.onAnnotations([]);this.callbacks.onPointMeasurement(null);this._error(new Error('WebGL context was lost. Waiting for graphics recovery.'));});
       this._listen(canvas,'webglcontextrestored',()=>{this.lost=false;try{this._init();if(this.model)this._upload();this._schedule();}catch(error){this._error(error);}});
@@ -727,13 +792,13 @@
       if(!this.gl)this.gl=this.canvas.getContext('webgl',options);
       if(!this.gl)fail('WebGL is unavailable. Enable browser hardware acceleration or use a browser with WebGL support.');
       const gl=this.gl,shader=program(gl,this.webgl2),uniforms={},attributes={};
-      for(const name of ['uBasis','uScale','uPan','uSelected','uLines','uHover','uLine','uSelectColor','uHoverColor','uLineShift','uDepth','uClipping','uClip','uClipSign','uSection','uSectionNormal'])uniforms[name]=gl.getUniformLocation(shader,name);
-      for(const name of ['aPosition','aNormal','aEntity','aColor'])attributes[name]=gl.getAttribLocation(shader,name);
-      this.resources={program:shader,uniforms,attributes,faces:null,edges:null,ranges:new Map(),faceCount:0,edgeCount:0,capFaces:null,capEdges:null,colors:null,capFaceCount:0,capEdgeCount:0,backdrop:null};
+      for(const name of ['uBasis','uScale','uPan','uSelected','uLines','uHover','uLine','uSelectColor','uHoverColor','uLineShift','uDepth','uClipping','uClip','uClipSign','uSection','uSectionNormal','uDistance','uPerspective','uLighting','uKey','uFill','uExposure','uShadow','uAlpha','uTexture','uSampler','uEmissive','uAlphaCutoff','uOpaque'])uniforms[name]=gl.getUniformLocation(shader,name);
+      for(const name of ['aPosition','aNormal','aEntity','aColor','aMaterial','aUV'])attributes[name]=gl.getAttribLocation(shader,name);
+      this.resources={program:shader,uniforms,attributes,faces:null,edges:null,ranges:new Map(),faceCount:0,edgeCount:0,capFaces:null,capEdges:null,colors:null,materials:null,uvs:null,shadow:null,textures:new Map(),texturePixels:0,groups:[],capFaceCount:0,capEdgeCount:0,backdrop:null};
       if(this.webgl2){try{this.resources.backdrop=backdropProgram(gl);}catch{this.resources.backdrop=null;}}
       this.maxDimension=Math.min(4096,gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)||4096,gl.getParameter(gl.MAX_VIEWPORT_DIMS)?.[0]||4096,gl.getParameter(gl.MAX_VIEWPORT_DIMS)?.[1]||4096);
     }
-    _deleteBuffers(keys=['faces','edges','capFaces','capEdges','colors']){if(!this.resources||!this.gl)return;for(const key of keys)if(this.resources[key]){this.gl.deleteBuffer(this.resources[key]);this.resources[key]=null;}}
+    _deleteBuffers(keys=['faces','edges','capFaces','capEdges','colors','materials','uvs','shadow']){if(!this.resources||!this.gl)return;for(const key of keys)if(this.resources[key]){this.gl.deleteBuffer(this.resources[key]);this.resources[key]=null;}}
     _upload() {
       if(!this.gl||!this.resources||this.lost)return;
       const data=gpuData(this.model),gl=this.gl,r=this.resources;this._deleteBuffers(['faces','edges']);
@@ -742,15 +807,23 @@
         if(gl.getError()!==gl.NO_ERROR)fail('The graphics device could not load this mesh. Inspect a smaller feature.');
         r.faceCount=data.faces.length/7;r.edgeCount=data.edges.length/4;r.ranges=data.ranges;
       } catch(error){this._deleteBuffers(['faces','edges']);throw error;}
-      this._uploadAppearance();this._uploadSection();
+      this._uploadAppearance();this._uploadSection();this._uploadStudio();
     }
     _uploadAppearance() {
       if(!this.gl||!this.resources||this.lost)return;
-      const gl=this.gl,r=this.resources;this._deleteBuffers(['colors']);const colors=appearanceData(this.model,this.appearance);
-      if(!colors.length)return;
-      try{const buffer=gl.createBuffer();if(!buffer)fail('Unable to allocate appearance buffers.');r.colors=buffer;gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,colors,gl.STATIC_DRAW);if(gl.getError()!==gl.NO_ERROR)fail('The graphics device could not load occurrence colors.');}
-      catch(error){this._deleteBuffers(['colors']);throw error;}
+      const gl=this.gl,r=this.resources;this._deleteBuffers(['colors','materials','uvs']);const colors=appearanceData(this.model,this.appearance),data=materialData(this.model,this.appearance,this.render);r.groups=data.groups;
+      for(const [key,values] of [['colors',colors],['materials',data.materials],['uvs',data.uvs]])if(values.length){const buffer=gl.createBuffer();if(!buffer)fail('Unable to allocate appearance buffers.');r[key]=buffer;gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,values,gl.STATIC_DRAW);}
+      if(gl.getError()!==gl.NO_ERROR)fail('The graphics device could not load surface appearance.');this._loadTextures();
     }
+    _uploadStudio(){if(!this.gl||!this.resources||!this.model)return;this._deleteBuffers(['shadow']);const data=studioGeometry(this.model,this.render);if(!data.length)return;const gl=this.gl,r=this.resources;r.shadow=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,r.shadow);gl.bufferData(gl.ARRAY_BUFFER,data,gl.STATIC_DRAW);r.shadowCount=data.length/7;}
+    _loadTextures(){
+      if(typeof Image==='undefined')return;const gl=this.gl,r=this.resources,active=new Set(r.groups.map(group=>this.model.geometries.face.get(group.owner)?.material?.base_color_texture?.sha256).filter(Boolean));for(const [key,entry] of r.textures)if(!active.has(key)){if(entry.texture)gl.deleteTexture(entry.texture);r.texturePixels-=entry.pixels||0;r.textures.delete(key);}
+      for(const group of r.groups){const tex=this.model.geometries.face.get(group.owner)?.material?.base_color_texture;if(!tex||r.textures.has(tex.sha256))continue;
+        if(typeof tex.image_data_uri!=='string'||tex.image_data_uri.length>24*1024*1024||!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(tex.image_data_uri))fail('Unsupported embedded surface texture.');
+        const entry={texture:null,pending:true},img=new Image();r.textures.set(tex.sha256,entry);entry.promise=new Promise(resolve=>{img.onload=()=>{if(this.resources!==r||this.destroyed||r.textures.get(tex.sha256)!==entry){resolve();return;}if(img.width>4096||img.height>4096||r.texturePixels+img.width*img.height>16*1024*1024){entry.pending=false;entry.error='Texture exceeds the 4096 dimension or 16 megapixel scene budget';resolve();this._error(new Error(entry.error));return;}const texture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,texture);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);const pot=n=>(n&(n-1))===0,repeat=this.webgl2||(pot(img.width)&&pot(img.height));const min=tex.sampler?.min_filter||gl.LINEAR,mag=tex.sampler?.mag_filter||gl.LINEAR;if(repeat&&min>=9984)gl.generateMipmap(gl.TEXTURE_2D);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,repeat?min:(min===gl.NEAREST?gl.NEAREST:gl.LINEAR));gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,mag);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,repeat?(tex.sampler?.wrap_s||gl.REPEAT):gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,repeat?(tex.sampler?.wrap_t||gl.REPEAT):gl.CLAMP_TO_EDGE);entry.texture=texture;entry.pixels=img.width*img.height;r.texturePixels+=entry.pixels;entry.pending=false;resolve();this._schedule();};img.onerror=()=>{if(r.textures.get(tex.sha256)!==entry){resolve();return;}entry.pending=false;entry.error='Embedded texture could not decode';resolve();this._error(new Error(entry.error));};img.src=tex.image_data_uri;});
+      }
+    }
+    async whenTexturesReady(){await Promise.all([...this.resources?.textures?.values()||[]].map(t=>t.promise));const error=[...this.resources?.textures?.values()||[]].find(t=>t.error);if(error)fail(error.error);}
     _uploadSection() {
       if(!this.gl||!this.resources||this.lost)return;
       const gl=this.gl,r=this.resources;this._deleteBuffers(['capFaces','capEdges']);r.capFaceCount=0;r.capEdgeCount=0;
@@ -762,7 +835,7 @@
         r.capFaceCount=data.faces.length/7;r.capEdgeCount=data.edges.length/4;
       }catch(error){this._deleteBuffers(['capFaces','capEdges']);throw error;}
     }
-    _schedule(){if(this.destroyed||this.pending!==null)return;this.pending=requestAnimationFrame(()=>{this.pending=null;try{this._stepAnimation();this._draw();}catch(error){this._error(error);}});}
+    _schedule(){if(this.destroyed||this.pending!==null)return;this.pending=requestAnimationFrame(()=>{this.pending=null;try{this._stepAnimation();this._projection();this._draw();}catch(error){this._error(error);}});}
     _size(){const rect=this.canvas.getBoundingClientRect();return {width:Math.max(1,rect.width),height:Math.max(1,rect.height)};}
     _draw() {
       if(this.destroyed||this.lost||!this.gl||!this.resources)return;
@@ -771,30 +844,38 @@
       const {width,height}=this._size(),ratio=Math.min(globalThis.devicePixelRatio||1,2,this.maxDimension/width,this.maxDimension/height,Math.sqrt(MAX_PIXELS/(width*height)));
       const w=Math.max(1,Math.floor(width*ratio)),h=Math.max(1,Math.floor(height*ratio)),gl=this.gl,r=this.resources;
       if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}
-      const theme=this.theme,mean=theme.background.top.map((v,i)=>(v+theme.background.bottom[i])/2);
+      const theme=this.renderBackgroundExplicit?{...this.theme,background:{top:this.render.background.color,bottom:this.render.background.color}}:this.theme,mean=theme.background.top.map((v,i)=>(v+theme.background.bottom[i])/2);
       gl.viewport(0,0,w,h);gl.clearColor(mean[0],mean[1],mean[2],1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
       this._drawBackdrop();
       this._annotationLayout();
-      this._pointMeasurementLayout();
+      this._pointMeasurementLayout();this._drawArtifactOverlay();
       if(!this.model||!r.faces)return;
       gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL);gl.disable(gl.CULL_FACE);gl.disable(gl.BLEND);gl.useProgram(r.program);
       const b=basis(this.camera),size=Math.min(width,height),scale=size*.68*this.camera.zoom,u=r.uniforms,a=r.attributes;
       gl.uniformMatrix3fv(u.uBasis,false,new Float32Array([b[0][0],b[1][0],b[2][0],b[0][1],b[1][1],b[2][1],b[0][2],b[1][2],b[2][2]]));
       gl.uniform2f(u.uScale,2*scale/width,2*scale/height);gl.uniform2f(u.uPan,2*this.camera.pan[0]*size/width,-2*this.camera.pan[1]*size/height);
-      gl.uniform1f(u.uDepth,this.model.depthExtent??2);gl.uniform1i(u.uClipping,!!this.model.clip);
+      gl.uniform1f(u.uDepth,this.model.depthExtent??2);gl.uniform1f(u.uDistance,this.camera.distance||3);gl.uniform1i(u.uPerspective,this.render.projection==='perspective');gl.uniform1i(u.uLighting,this.render.lighting.enabled);gl.uniform1f(u.uFill,this.render.lighting.fill);gl.uniform1f(u.uExposure,this.render.lighting.exposure);const key=studioLight(this.render);gl.uniform3f(u.uKey,...b.map(row=>dot(row,key)));gl.uniform1i(u.uShadow,false);gl.uniform1i(u.uTexture,false);gl.uniform1f(u.uAlphaCutoff,0);gl.uniform1i(u.uOpaque,false);gl.uniform3f(u.uEmissive,0,0,0);gl.uniform1i(u.uSampler,0);gl.uniform1i(u.uClipping,!!this.model.clip);
       const clip=this.model.clip;gl.uniform4f(u.uClip,...(clip?.normal||[0,0,1]),clip?.offset||0);gl.uniform1f(u.uClipSign,clip?.sign||1);
       gl.uniform3f(u.uLine,...theme.line);gl.uniform3f(u.uSelectColor,...theme.select);gl.uniform3f(u.uHoverColor,...theme.hover);gl.uniform2f(u.uLineShift,0,0);gl.uniform1i(u.uSection,false);
       const outward=(clip?.normal||[0,0,1]).map(v=>-v*(clip?.sign||1));gl.uniform3f(u.uSectionNormal,...b.map(row=>dot(row,outward)));
       if(r.colors){gl.bindBuffer(gl.ARRAY_BUFFER,r.colors);gl.enableVertexAttribArray(a.aColor);gl.vertexAttribPointer(a.aColor,3,gl.FLOAT,false,12,0);}
       else{gl.disableVertexAttribArray(a.aColor);gl.vertexAttrib3f(a.aColor,...this.appearance.default_color);}
+      if(r.materials){gl.bindBuffer(gl.ARRAY_BUFFER,r.materials);gl.enableVertexAttribArray(a.aMaterial);gl.vertexAttribPointer(a.aMaterial,3,gl.FLOAT,false,12,0);}else{gl.disableVertexAttribArray(a.aMaterial);gl.vertexAttrib3f(a.aMaterial,1,.5,0);}
+      if(r.uvs){gl.bindBuffer(gl.ARRAY_BUFFER,r.uvs);gl.enableVertexAttribArray(a.aUV);gl.vertexAttribPointer(a.aUV,2,gl.FLOAT,false,8,0);}else{gl.disableVertexAttribArray(a.aUV);gl.vertexAttrib2f(a.aUV,0,0);}
       gl.bindBuffer(gl.ARRAY_BUFFER,r.faces);
       gl.enableVertexAttribArray(a.aPosition);gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,28,0);
       gl.enableVertexAttribArray(a.aNormal);gl.vertexAttribPointer(a.aNormal,3,gl.FLOAT,false,28,12);
       gl.enableVertexAttribArray(a.aEntity);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,28,24);
       gl.uniform1i(u.uLines,false);gl.uniform1f(u.uSelected,this.selection?.kind==='face'?this.model.faceNumbers.get(this.selection.entity_id):-1);gl.uniform1f(u.uHover,this.hover?.kind==='face'?(this.model.faceNumbers.get(this.hover.entity_id)??-1):-1);
-      gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1,1);gl.drawArrays(gl.TRIANGLES,0,r.faceCount);gl.disable(gl.POLYGON_OFFSET_FILL);
+      if(r.shadow&&this.render.floor.enabled){gl.bindBuffer(gl.ARRAY_BUFFER,r.shadow);gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,28,0);gl.vertexAttribPointer(a.aNormal,3,gl.FLOAT,false,28,12);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,28,24);gl.uniform1i(u.uShadow,true);gl.uniform1i(u.uClipping,false);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);gl.uniform1f(u.uAlpha,.055*this.render.floor.opacity);for(const [dx,dy] of [[0,0],[2,0],[-2,0],[0,2],[0,-2],[3,3],[-3,3],[3,-3],[-3,-3]]){gl.uniform2f(u.uLineShift,dx*2/w,dy*2/h);gl.drawArrays(gl.TRIANGLES,0,r.shadowCount);}gl.uniform2f(u.uLineShift,0,0);gl.uniform1i(u.uShadow,false);gl.uniform1i(u.uClipping,!!clip);gl.depthMask(true);gl.disable(gl.BLEND);gl.bindBuffer(gl.ARRAY_BUFFER,r.faces);gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,28,0);gl.vertexAttribPointer(a.aNormal,3,gl.FLOAT,false,28,12);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,28,24);}
+      gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1,1);
+      const depthOnly=this.render.mode==='hidden_line',off=this.render.mode==='wireframe';if(depthOnly)gl.colorMask(false,false,false,false);
+      if(!off){const opaque=[],transparent=[];for(const group of r.groups){(group.style.opacity<1||this.model.geometries.face.get(group.owner)?.material?.alpha_mode==='BLEND'?transparent:opaque).push(group);}const depth=g=>{let z=0;for(let i=g.start;i<g.start+g.count;i++)z+=dot(b[2],vertex(this.model.positions,this.model.indices[i]));return z/g.count;};transparent.sort((a,b)=>depth(b)-depth(a));
+        for(const [groups,alpha] of [[opaque,false],[transparent,true]]){if(alpha){gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);gl.depthMask(false);}for(const group of groups){const authored=this.model.geometries.face.get(group.owner)?.material;if(authored&&authored.double_sided===false){gl.enable(gl.CULL_FACE);gl.cullFace(gl.BACK);}else gl.disable(gl.CULL_FACE);const tex=authored?.base_color_texture,texture=tex?r.textures.get(tex.sha256)?.texture:null;gl.uniform1i(u.uTexture,!!texture);if(texture){gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,texture);}gl.uniform1i(u.uOpaque,group.style.alpha_mode==='OPAQUE');gl.uniform3f(u.uEmissive,...group.style.emissive);gl.uniform1f(u.uAlphaCutoff,group.style.alpha_mode==='MASK'?group.style.alpha_cutoff:0);gl.drawArrays(gl.TRIANGLES,group.start,group.count);}if(alpha){gl.depthMask(true);gl.disable(gl.BLEND);}}}
+      gl.colorMask(true,true,true,true);gl.uniform1i(u.uTexture,false);gl.uniform3f(u.uEmissive,0,0,0);gl.uniform1f(u.uAlphaCutoff,0);gl.disable(gl.POLYGON_OFFSET_FILL);
       gl.disableVertexAttribArray(a.aColor);gl.vertexAttrib3f(a.aColor,...this.appearance.default_color);
-      if(r.capFaces){
+      if(r.capFaces&&this.render.mode!=='wireframe'){
+        gl.disableVertexAttribArray(a.aMaterial);gl.vertexAttrib3f(a.aMaterial,1,.5,0);
         gl.uniform1i(u.uSection,true);gl.uniform1i(u.uClipping,false);gl.uniform1f(u.uSelected,-1);gl.bindBuffer(gl.ARRAY_BUFFER,r.capFaces);
         gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,28,0);gl.vertexAttribPointer(a.aNormal,3,gl.FLOAT,false,28,12);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,28,24);
         gl.drawArrays(gl.TRIANGLES,0,r.capFaceCount);gl.uniform1i(u.uSection,false);gl.uniform1i(u.uClipping,!!clip);
@@ -802,6 +883,7 @@
       gl.bindBuffer(gl.ARRAY_BUFFER,r.edges);gl.vertexAttribPointer(a.aPosition,3,gl.FLOAT,false,16,0);gl.vertexAttribPointer(a.aEntity,1,gl.FLOAT,false,16,12);gl.disableVertexAttribArray(a.aNormal);gl.vertexAttrib3f(a.aNormal,0,0,1);
       const selected=this.selection?.kind==='edge'?r.ranges.get(this.selection.entity_id):null;
       const hovered=this.hover?.kind==='edge'&&!(selected&&this.selection.entity_id===this.hover.entity_id)?r.ranges.get(this.hover.entity_id):null;
+      gl.disableVertexAttribArray(a.aMaterial);gl.vertexAttrib3f(a.aMaterial,1,.5,0);if(['xray','wireframe'].includes(this.render.mode))gl.disable(gl.DEPTH_TEST);
       gl.uniform1i(u.uLines,true);gl.uniform1f(u.uSelected,selected?.number??-1);gl.uniform1f(u.uHover,hovered?.number??-1);gl.lineWidth(1);if(this.display.edges)gl.drawArrays(gl.LINES,0,r.edgeCount);
       // Most GPUs cap wide lines at 1px, so highlighted edges are re-drawn at small
       // screen-space offsets (px is device pixels per CSS pixel) to read as thicker.
@@ -814,6 +896,12 @@
         gl.uniform1i(u.uSection,false);gl.uniform1i(u.uClipping,!!clip);
       }
       if(!this.ready){this.ready=true;this.callbacks.onReady({...this.model.identity});}
+    }
+    _drawArtifactOverlay(){
+      const layout=artifactOverlay(this.model,this.camera,...Object.values(this._size()));this.artifactOverlayLayout=layout;
+      if(!layout.texts.length&&!layout.fills.length&&!this.overlayCanvas)return;
+      if(!this.overlayCanvas){const document=this.canvas.ownerDocument;if(!document||!this.canvas.parentElement)return;const overlay=document.createElement('canvas');Object.assign(overlay.style,{position:'absolute',pointerEvents:'none',zIndex:'1'});overlay.setAttribute('aria-hidden','true');this.canvas.parentElement.append(overlay);this.overlayCanvas=overlay;}
+      const overlay=this.overlayCanvas,{width,height}=this._size();overlay.width=this.canvas.width;overlay.height=this.canvas.height;Object.assign(overlay.style,{left:this.canvas.offsetLeft+'px',top:this.canvas.offsetTop+'px',width:width+'px',height:height+'px'});const ctx=overlay.getContext('2d');ctx.clearRect(0,0,overlay.width,overlay.height);ctx.scale(overlay.width/width,overlay.height/height);paintArtifactOverlay(ctx,layout);
     }
     _annotationLayout(){const {width,height}=this._size();const layout=this.destroyed||this.lost||!this.gl||!this.resources?[]:annotationLayout(this.annotations,this.fullModel,this.presentation,this.camera,width,height,this.hiddenPartIds);this.callbacks.onAnnotations(layout);return layout;}
     _pointMeasurementLayout(){const {width,height}=this._size();const layout=this.destroyed||this.lost||!this.gl||!this.resources?null:pointMeasurementLayout(this.measurementPoints,this.fullModel,this.camera,width,height);this.callbacks.onPointMeasurement(layout);return layout;}
@@ -914,7 +1002,7 @@
       const sectionChanged=JSON.stringify(sectionGeometry(settings))!==JSON.stringify(sectionGeometry(this.presentation));
       const model=geometryChanged?presentedModel(visibleModel(this.fullModel,this.hiddenPartIds),settings):{...this.model,clip:clipPlane(this.fullModel,settings.clip),presentation:settings};
       if(sectionChanged){this.sectionResult=null;delete model.section;}else if(this.sectionResult&&geometryChanged)model.section=sectionModel(this.sectionResult,this.fullModel,this.hiddenPartIds);
-      this._clearPointMeasurement();this.presentation=settings;this.model=model;this.selection=null;this._setHover(null);if(geometryChanged)this._upload();else if(sectionChanged)this._uploadSection();this._schedule();
+      this._clearPointMeasurement();this.presentation=settings;this.model=model;this.selection=null;this._setHover(null);if(geometryChanged)this._upload();else if(sectionChanged)this._uploadSection();if(!geometryChanged)this._uploadStudio();this._schedule();
     });}
     setHiddenParts(ids){return this._checked(()=>{
       if(!Array.isArray(ids))fail('Visibility must be an array of part IDs.');
@@ -948,13 +1036,16 @@
       gl.uniformMatrix3fv(backdrop.uBasis,false,new Float32Array([b[0][0],b[1][0],b[2][0],b[0][1],b[1][1],b[2][1],b[0][2],b[1][2],b[2][2]]));
       gl.uniform2f(backdrop.uScale,2*scale/width,2*scale/height);gl.uniform2f(backdrop.uPan,2*this.camera.pan[0]*Math.min(width,height)/width,-2*this.camera.pan[1]*Math.min(width,height)/height);
       gl.uniform2f(backdrop.uViewport,width,height);gl.uniform1i(backdrop.uGrid,!!this.model&&this.display.grid);gl.uniform1i(backdrop.uAxes,!!this.model&&this.display.axes);
-      gl.uniform1f(backdrop.uFloor,stage.floor);gl.uniform1f(backdrop.uStep,stage.step);gl.uniform2f(backdrop.uShift,...stage.shift);gl.uniform3f(backdrop.uOrigin,...stage.origin);
-      gl.uniform3f(backdrop.uTop,...this.theme.background.top);gl.uniform3f(backdrop.uBottom,...this.theme.background.bottom);gl.drawArrays(gl.TRIANGLES,0,3);
+      gl.uniform1f(backdrop.uDistance,this.camera.distance||3);gl.uniform1i(backdrop.uPerspective,this.render.projection==='perspective');gl.uniform1i(backdrop.uStudioFloor,this.render.floor.enabled);gl.uniform3f(backdrop.uFloorColor,...this.render.floor.color);gl.uniform1f(backdrop.uFloorOpacity,this.render.floor.opacity);gl.uniform1i(backdrop.uGlossyFloor,this.render.floor.finish==='glossy');gl.uniform1f(backdrop.uFloor,stage.floor);gl.uniform1f(backdrop.uStep,stage.step);gl.uniform2f(backdrop.uShift,...stage.shift);gl.uniform3f(backdrop.uOrigin,...stage.origin);
+      gl.uniform3f(backdrop.uTop,...(this.renderBackgroundExplicit?this.render.background.color:this.theme.background.top));gl.uniform3f(backdrop.uBottom,...(this.renderBackgroundExplicit?this.render.background.color:this.theme.background.bottom));gl.drawArrays(gl.TRIANGLES,0,3);
     }
     setDisplay(settings){return this._checked(()=>{
       if(!settings||Object.keys(settings).some(key=>!['grid','axes','edges'].includes(key)||typeof settings[key]!=='boolean'))fail('Display settings must be grid, axes or edges booleans.');
       Object.assign(this.display,settings);this._schedule();
     });}
+    setRender(value){return this._checked(()=>{const settings=renderSettings(value);if(JSON.stringify(settings)===JSON.stringify(this.render))return;this.render=settings;this.renderBackgroundExplicit=this.render.mode==='render'||JSON.stringify(this.render.background.color)!==JSON.stringify(renderSettings({mode:this.render.mode}).background.color);Object.assign(this.display,{grid:this.render.grid,axes:this.render.axes,edges:this.render.edges});this._projection();if(this.model){this._uploadAppearance();this._uploadStudio();}this._schedule();});}
+    getRender(){return JSON.parse(JSON.stringify(this.render));}
+    _projection(){this.camera.projection=this.render.projection;this.camera.lens_mm=this.render.lens_mm;this.camera.distance=Math.max(3,(this.model?.depthExtent||2)+1)*(this.render.lens_mm/50);this.camera.distance=Math.max((this.model?.depthExtent||2)+.25,this.camera.distance);}
     setTheme(value){return this._checked(()=>{this.theme=themeValue(value);this._schedule();});}
     getTheme(){return themeValue(this.theme);}
     // CSS pixels covered by floating chrome on each side; used by fit, reset and frame.
@@ -979,9 +1070,9 @@
     _frame(kind,id){const bounds=entityBounds(this.model,kind,id);if(!bounds)return;const {width,height}=this._size();this.animateTo(fitCamera(this.camera,bounds,width,height,this.insets));}
     frameSelection(){const target=this.hover||this.selection;if(target)this._frame(target.kind,target.entity_id);}
     setCamera(value){return this._checked(()=>{this.anim=null;this.camera=camera(value);this._cameraChanged();});}
-    getCamera(){return cloneCamera(this.camera);}
+    getCamera(){return {yaw:this.camera.yaw,pitch:this.camera.pitch,zoom:this.camera.zoom,pan:[...this.camera.pan]};}
     reset(){return this._checked(()=>{
-      this.anim=null;const bounds=this.model?.bounds,home=cloneCamera(DEFAULT_CAMERA);
+      this.anim=null;const bounds=this.model?.bounds,home={...cloneCamera(DEFAULT_CAMERA),projection:this.render.projection,lens_mm:this.render.lens_mm,distance:this.camera.distance};
       if(bounds){const {width,height}=this._size();this.camera=camera(fitCamera(home,bounds,width,height,this.insets));}else this.camera=home;
       this._cameraChanged();
     });}
@@ -1006,11 +1097,11 @@
     });}
     capture(){return this._checked(()=>{
       if(!this.gl||this.lost||!this.resources)fail('WebGL is unavailable for capture.');this._draw();
-      const pins=this._annotationLayout(),measure=this._pointMeasurementLayout();if(!pins.length&&!measure)return this.canvas.toDataURL('image/png');
+      const pins=this._annotationLayout(),measure=this._pointMeasurementLayout();if(!pins.length&&!measure&&!this.artifactOverlayLayout?.texts.length&&!this.artifactOverlayLayout?.fills.length)return this.canvas.toDataURL('image/png');
       const image=this.canvas.ownerDocument?.createElement('canvas');if(!image)fail('Image composition is unavailable for review pins.');
       image.width=this.canvas.width;image.height=this.canvas.height;const ctx=image.getContext('2d');if(!ctx)fail('Image composition is unavailable for review pins.');
       ctx.drawImage(this.canvas,0,0);const size=this._size(),sx=image.width/size.width,sy=image.height/size.height;ctx.scale(sx,sy);
-      ctx.font='12px sans-serif';ctx.textBaseline='middle';
+      paintArtifactOverlay(ctx,this.artifactOverlayLayout||{texts:[],fills:[]});ctx.font='12px sans-serif';ctx.textBaseline='middle';
       for(const pin of pins){
         ctx.fillStyle='#ffdb68';ctx.strokeStyle='#1d2b38';ctx.lineWidth=2;ctx.beginPath();ctx.arc(pin.x,pin.y,11,0,Math.PI*2);ctx.fill();ctx.stroke();ctx.fillStyle='#162431';ctx.textAlign='center';ctx.fillText(String(pin.number),pin.x,pin.y);
         const label=pin.text.replace(/\s+/g,' ').slice(0,80),box=annotationLabelBounds(pin,ctx.measureText(label).width,size.width,size.height);
@@ -1024,8 +1115,8 @@
       }
       return image.toDataURL('image/png');
     });}
-    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;this._clearPointMeasurement();if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;if(this.hoverPending!==null)cancelAnimationFrame(this.hoverPending);this.hoverPending=null;this.hover=null;this.hoverPoint=null;this.observer?.disconnect();for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources){this.gl.deleteProgram(this.resources.program);if(this.resources.backdrop)this.gl.deleteProgram(this.resources.backdrop.program);}this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
+    destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;this._clearPointMeasurement();if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;if(this.hoverPending!==null)cancelAnimationFrame(this.hoverPending);this.hoverPending=null;this.hover=null;this.hoverPoint=null;this.observer?.disconnect();this.overlayCanvas?.remove();this.overlayCanvas=null;for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources){for(const texture of this.resources.textures.values())if(texture.texture)this.gl.deleteTexture(texture.texture);this.gl.deleteProgram(this.resources.program);if(this.resources.backdrop)this.gl.deleteProgram(this.resources.backdrop.program);}this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
   }
-  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,pickPoint,pickMeasurementPoint,pointDistance,pointMeasurementLayout,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme,stageSettings});
+  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,pickPoint,pickMeasurementPoint,pointDistance,pointMeasurementLayout,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme,stageSettings,material,renderSettings,RENDER_MODES,surfaceStyle,materialData,studioLight,studioGeometry,artifactOverlay,paintArtifactOverlay});
   globalThis.CadRenderer=CadRenderer;
 })();

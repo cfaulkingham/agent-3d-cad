@@ -46,6 +46,8 @@ using References = std::map<std::string, Reference>;
 struct Parsed { Geometry geometry; Json metadata=Json::object(), limitations=Json::array(); std::string representation; };
 Parsed stl(const std::string& bytes, double scale);
 Parsed glb(const std::string& bytes);
+Json glb_pose(const Json& review,const Json& configuration);
+Json robot_pose(const Json& review,const Json& configuration);
 Parsed dxf(const std::string& bytes, const std::string& units);
 std::map<std::string,std::string> zip(const std::string& bytes);
 Parsed three_mf(const std::string& bytes);

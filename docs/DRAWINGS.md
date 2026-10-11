@@ -51,7 +51,8 @@ Dimensions are explicitly requested. `examples/plate.drawing.json` and
 ## Views and coordinates
 
 Views have unique `id` values and `orientation` values `front`, `top`, `right`,
-`isometric` or `section`. Supply one to six views. Directions below describe
+`back`, `bottom`, `left`, `isometric`, `custom` or `section`. Supply one to six
+views per page. Directions below describe
 the camera position relative to the part, not a world transformation:
 
 | View | Camera direction | Drawing horizontal | Drawing vertical |
@@ -59,16 +60,20 @@ the camera position relative to the part, not a world transformation:
 | front | -Y | +X | +Z |
 | top | +Z | +X | +Y |
 | right | +X | +Y | +Z |
+| back | +Y | -X | +Z |
+| bottom | -Z | +X | -Y |
+| left | -X | -Y | +Z |
 | isometric | +X, -Y, +Z | Projected horizontal | Projected vertical |
 | section, axis x | plane X = offset | +Y | +Z |
 | section, axis y | plane Y = offset | +X | +Z |
 | section, axis z | plane Z = offset | +X | +Y |
 
-`layout` selects `third_angle`, `first_angle`, or `grid`:
+`layout` selects `third_angle`, `first_angle`, `grid`, or `manual`:
 
 - Third angle: top above front, right to the right of front, isometric above right.
 - First angle: top below front, right to the left of front, isometric below right.
 - Grid: labeled cells in recipe order, without implying a projection convention.
+- Manual: caller places each view in an explicit sheet rectangle.
 
 Standard arrangements align front/top world X coordinates and front/right world
 Z coordinates at one common scale, including when dimension lanes differ. They
@@ -82,6 +87,27 @@ before sheet scale is applied; negative coordinates are valid.
 For compatibility, a recipe with explicit `views` and no `layout` retains the
 original grid arrangement. A recipe without `views` defaults to third angle.
 Set `layout` explicitly in new reusable recipes.
+
+`custom` takes numeric three-component `direction` and `up` vectors. Direction
+points from the model toward the orthographic camera; `up` chooses the vertical
+orientation and may have a component along direction. Both must be nonzero and
+nonparallel. The frame uses `up cross direction` as horizontal, then
+`direction cross horizontal` as vertical. Projection remains exact B-rep HLR.
+Opposite and custom orientations require `grid` or `manual` layout.
+
+For `manual`, every view requires `cell_mm: [x,y,width,height]` in sheet
+millimeters, measured right/down from the upper-left corner. Cells must clear
+the 8 mm sheet margin, title block, optional BOM and each other by at least
+1 mm. Views retain a common scale per page; geometry and annotations must fit.
+Placement changes rerender cached geometry without reprojecting it.
+
+```json
+{"layout":"manual","scale":2,"views":[
+  {"id":"rear","orientation":"back","cell_mm":[10,10,120,120]},
+  {"id":"oblique","orientation":"custom","direction":[1,-1,1],
+   "up":[0,0,1],"cell_mm":[140,10,140,120]}
+]}
+```
 
 A section view also requires `section: {"axis":"z","offset":3}`. This is the
 actual planar cross-section profile, not a cutaway view of everything behind
@@ -316,18 +342,73 @@ The allowances are explicit demonstration values, not inferred production fits.
 printable ASCII text for consistent native PDF/font and DXF interoperability.
 Do not infer material, fit class, tolerances, finish, or certification from the
 model. Threads remain projected geometry; thread conventions and GD&T are not
-automatically authored.
+automatically authored. Explicit hole thread/fit designations are supported below.
+
+## Exact hole callouts
+
+`hole_callouts` attaches a measured bore designation to explicit projected
+centers. Each callout requires `view`, one to 64 `centers`, `radius`,
+`termination` (`through` or `blind`) and a projected `label` position. These are
+geometric matching rules. The kernel supplies the measured diameter and depth;
+the count comes from the individually verified centers. A blind request requires
+`depth`; a through request may include it as an additional matching rule.
+Coordinates, radii and depths support model parameters and bounded expressions.
+The default matching tolerance is 0.02 mm, configurable up to 0.1 mm.
+
+```json
+{"views":[{"id":"top","orientation":"top"}],"hole_callouts":[
+  {"view":"top","centers":[[10,5],[30,5]],"radius":2,
+   "termination":"through","counterbore":{"radius":4,"depth":2},
+   "fit":"H7","thread":"M4 x 0.7","label":[44,8]}
+]}
+```
+
+For matching source geometry, this prints `2 x DIA 4 H7 THRU; CBORE DIA 8 DEPTH 2;
+THREAD M4 x 0.7`, wrapped into readable lines. `counterbore` specifies larger
+entry `radius` and `depth`; `countersink` specifies larger entry `radius` and
+included `angle` in degrees. They are mutually exclusive. Countersink angle
+matching uses 0.02 degrees. Depth spans the full axial cavity from entry to the
+flat bottom or through exit, including an enlarged entry stage. Counterbore and
+countersink depths are also reported separately from exact geometry.
+
+The selected view must look along the bore axis and see its entry. Recognition
+requires a complete inward analytic cylindrical wall; surface normals and exact
+periodic boundaries exclude round bosses, interrupted walls and cross-bores.
+Exact material classification proves through/blind termination, and blind holes
+require one complete planar circular bottom. An enlarged entry is accepted only
+when its complete cylindrical/conical wall joins the primary bore and matches
+the requested geometry. Every counted center must have identical actual
+dimensions and termination. Coaxial distinct walls are ambiguous, and missing,
+occluded or mismatched geometry fails explicitly. Drill-point bottoms,
+multistage enlarged entries, enlarged exits and section callouts are unsupported
+and do not receive guessed dimensions.
+
+`thread` and `fit` are bounded printable caller-supplied manufacturing
+designations. They are retained beside measured geometry; neither establishes
+verified thread geometry or fit-class conformance. No designation or allowance
+is inferred. Put `label` outside the view's geometry with room for its text and
+other annotations; overlaps and unfittable labels fail. Leaders attach to exact
+opening edges. PDF/SVG and 1:1 DXF use the `HOLE_CALLOUTS` annotation layer.
+
+Responses include `hole_callouts` with resolved `centers_mm`, `diameter_mm`,
+`depth_mm`, `through`, `count`, `label`, `label_mm`, optional measured
+`counterbore`/`countersink`, and supplied `thread`/`fit`. Recipes preserve the
+original matching rules for revision-qualified regeneration. At most 32 callouts
+and 2,048 center verifications are accepted per drawing set.
 
 ## Sheets and exports
 
-`sheet` is `A4` or `A3`, both landscape. Omit `scale` to fit the views and their
+`sheet` accepts ISO `A0` through `A4`. `sheet_orientation` defaults to `landscape`
+and also accepts `portrait`. Landscape dimensions are 1189×841, 841×594, 594×420,
+420×297 and 297×210 mm respectively. Omit `scale` to fit the views and their
 dimension lanes; an explicit numeric scale must fit. The title block records
 document ID, model revision, kernel version, units and scale. Requested formats
 are a unique nonempty subset of `svg`, `pdf`, and `dxf`.
 
 - SVG and PDF contain the drawing sheet, annotations, center marks and dimensions.
 - Each view gets a separate DXF in **1:1 model millimeters**, independent of
-  sheet scale. Layers `VISIBLE`, `HIDDEN`, `CENTER`, `DIMENSIONS` and `HATCH`
+  sheet scale. Layers `VISIBLE`, `HIDDEN`, `CENTER`, `DIMENSIONS`, `HATCH`,
+  `BALLOONS` and `HOLE_CALLOUTS`
   separate geometry and annotations. Hatching is clipped LINE entities on its
   own layer, not a CAD editor's associative HATCH object. These are view
   projections, not automatically approved laser-cut or manufacturing profiles.
@@ -336,7 +417,37 @@ When `bom: true`, the complete table must fit the selected sheet with its views;
 long metadata wraps and an oversized table fails explicitly. Rows are never
 truncated or silently split across pages. JSON/CSV sidecars are included in
 addition to the requested `svg`/`pdf`/`dxf` geometry formats, for at most ten
-artifacts (six DXFs, two sheets and two BOM tables).
+artifacts for a single sheet (six DXFs, two sheet files and two BOM tables).
+
+`pages` generates one to 16 explicit sheets in one atomic drawing set. Each page
+requires its own `views` (one to six). Page recipes inherit the top-level title,
+sheet, orientation, layout, scale, material, notes, general tolerances and BOM
+choice, and may override those fields. Formats and hidden-line choice apply to
+the complete set. Put dimensions, balloons and callouts in their respective page.
+View IDs must be unique across all pages, including case-insensitive filenames.
+
+```json
+{"title":"Housing drawing set","formats":["pdf","svg","dxf"],"pages":[
+  {"sheet":"A3","views":[{"id":"main_front","orientation":"front"},
+                           {"id":"main_top","orientation":"top"}]},
+  {"sheet":"A4","sheet_orientation":"portrait",
+   "views":[{"id":"cut","orientation":"section",
+             "section":{"axis":"z","offset":3}}]}
+]}
+```
+
+The native PDF contains every page with its own MediaBox and vector contents.
+SVG exports are `drawing-1.svg`, `drawing-2.svg`, etc.; each view retains its
+own 1:1 DXF. Title blocks number sheets `1/N`, `2/N`, etc. BOM sidecars are
+published once; a page requesting a BOM must fit the complete table. Tables are
+never silently split. The original single-sheet request and `drawing.svg` /
+`drawing.pdf` filenames remain the default.
+
+Drawing-set responses add `pages`, each with `page`, `sheet_mm`, `scale`, `layout`
+and its `view_layouts`; top-level sheet/scale/layout describe the first page,
+while `view_layouts`, dimensions and other annotations combine the set. Limits
+are 96 views, 512 dimensions, 64 balloons, 32 callouts and 115 artifacts. Geometry,
+hatch and byte budgets remain drawing-wide rather than multiplying per page.
 
 The response contains artifact paths and byte counts, measured dimensions,
 sheet dimensions, scale, `layout`, `view_layouts`, a recipe path, and a manifest
@@ -381,6 +492,6 @@ timeout and cancellation rules apply. Invalid recipes, unresolved dimensions,
 empty sections, unfittable layouts and geometry failures do not modify HEAD.
 
 This is a native drawing preview, not an ISO/ASME drawing certification or a
-general drafting editor. Multi-sheet layouts, arbitrary camera views, GD&T,
+general drafting editor. GD&T,
 automatic tolerance assignment and automatic revision-following are outside
 this increment. Platform evidence and exact checks are recorded in HANDOFF.md.

@@ -28,13 +28,43 @@ source authorship, physical readiness or recovered editable history. Malformed
 stored fields fail as `artifact_invalid`; source/review changes or a fabricated
 parsed result fail as `artifact_mismatch`, without leaking JSON exceptions.
 
+`pose_external_artifact(review, configuration)` evaluates a previously verified,
+frozen review without changing its source or captured rest geometry. The closed
+configuration is `{joints?: {name: number}, animation?: integer,
+time_seconds?: number}`. Robot angular coordinates use radians and prismatic
+coordinates use meters; GLB animation times use seconds. Robot and animation
+fields cannot be mixed. Unknown, fixed or mimic-driven robot coordinates,
+out-of-limit positions, missing animation indices, negative or beyond-duration
+times, and extra fields fail explicitly. Configuration bytes are capped at
+256 KiB; the public live schema caps joints at 1024, scalar magnitudes at 1e6,
+animation indices at 255 and time at 1e9 seconds. Source animation duration and
+declared joint limits apply within those admission bounds.
+
+`cad_viewer` action `artifact_pose` requires the current `view_id`,
+`evaluation_id` and configuration. The view retains the exact verified original
+review bytes, checks their hash before evaluation and publication, and creates
+a fresh frozen `apose_` evaluation. A stale evaluation cannot publish. Sync,
+context, screenshots and copied viewer context explicitly carry `artifact_pose`;
+selection and local measured coordinates retire when the pose changes. The
+saved pose and frozen geometry survive process reopen. `{}` restores captured
+geometry exactly, including the raw zero-coordinate geometry of a URDF with a
+nonzero mimic offset; an explicit `{joints: {}}` instead evaluates zero independent
+coordinates and their authored mimic offsets. Captured package hashes, original files and native HEAD stay
+unchanged; declared historical native associations are rechecked at publication.
+The viewer Source panel provides robot joint inputs and GLB animation seek,
+play, pause and restore controls. Playback awaits each native evaluation before
+scheduling another seek and stops on retarget or error. This is source animation
+review, with no physics or native motion-history claim. Posed geometry uses the
+captured review bounds as a stable camera frame, so whole-mesh translations and
+scales remain visible; displayed bounds still describe the actual posed geometry.
+
 Review arguments require `action: "review"`, an absolute regular non-symlink
 `path`, lowercase `expected_sha256`, explicit `format`, and explicit `units`.
 Source parent paths must also be free of symlinks; resolve macOS `/tmp` and
 `/var` aliases to their `/private` paths before admission.
 
 Optional `references` are at most 64 `{uri,path,expected_sha256,units}` records
-for URDF/SDF STL meshes. A URI must be a plain relative portable path without
+for URDF/SDF STL meshes and explicitly paired URDF/SRDF snapshots. Paired XML references use `units: "m"`. A URDF review may capture one SRDF; an SRDF review may capture one URDF plus its contained mesh snapshots. A URI must be a plain relative portable path without
 parent traversal, schemes, escapes, or query/fragment suffixes. Its absolute
 path must match that URI beneath the original source's parent. Every reference
 is explicitly captured and hashed; the module never fetches network resources
@@ -74,12 +104,12 @@ Identical review bytes reuse an existing verified package.
 | --- | --- | --- |
 | STEP/STP | Existing isolated native `import_step` and `BuiltModel` view worker; exact summary and tessellated display | `file`; no fixed STEP source byte cap (worker memory/time budgets apply). No OCCT pointers outside `kernel.cpp`. Opaque import is not recovered feature history. Current fixture is a native round trip, not cross-vendor qualification. |
 | STL | Binary or ASCII triangles, including finite coordinates and degenerate-triangle rejection | Explicit mm/cm/m/in/ft/um; no intrinsic units, watertightness or exact-solid claim. Binary attribute/color payloads are unsupported. |
-| GLB | GLB 2 JSON/BIN, selected scene, indexed/unindexed triangle primitives, float positions, byte/ushort/uint indices, hierarchy and matrix/TRS transforms | Intrinsic meters, Y up. Mirror winding is handled. External buffers/images, extensions, skins, animation, morph targets, sparse accessors and non-triangle modes are unsupported. Materials/textures/cameras/lights and inactive scenes are not rendered. |
+| GLB | GLB 2 JSON/BIN, selected triangle scene, matrix/TRS hierarchy, embedded base-color PNG/JPEG textures, UV0, vertex RGBA, material/alpha/culling factors, authored normal vectors, skin/morph deformation, and named animation | Intrinsic meters, Y up. Mirror winding is handled. STEP/LINEAR/CUBICSPLINE translation, rotation, scale and weight channels evaluate in native C++; rotation uses normalized quaternion interpolation. Sparse accessors, extra influence/UV sets, nontriangle modes, extensions, external resources and other PBR texture channels fail explicitly. Cameras, lights, inactive scenes and tangent shading are not rendered. |
 | 3MF | OPC content types/relationships, stored/deflated ZIP, core build meshes, nested component placements and unit conversion | `file`; core units/default millimeters. Only the default core XML namespace is supported. Required extensions, extension attributes, ZIP64, encryption, multi-disk ZIP and noncontained relationships are unsupported. Instances remain separate meshes; overlapping parts are not unioned or manufacturing certified. |
-| DXF | ASCII LINE, straight LWPOLYLINE, sampled ARC/CIRCLE with retained analytic metadata | Explicit units must agree with supported `$INSUNITS`. Widths, bulges, thickness, non-default OCS, INSERT/blocks, splines and text are unsupported in the entity stream. Administrative tables/blocks are not rendered. No cutting certification. |
-| URDF | URDF 1.0 connected link/joint tree, origin transforms, box/cylinder/sphere geometry and explicit contained STL references; visual and collision roles retained | Intrinsic meters, zero joint coordinates. Floating/planar joints, mimic coordinates, newer quaternion/capsule syntax, macros/plugins and simulator extensions are unsupported. Dynamics/controllers and physical adequacy are not validated. |
-| SDF | One model, declared model/link/visual/collision poses, tree graph and primitive or explicit STL geometry | Intrinsic meters. Worlds, nested models/includes/plugins, named `relative_to` frames, quaternion/degree poses and unsupported joints require another backend. Joint axes/physics are not fully validated; this is not simulation acceptance. |
-| SRDF | Groups/subgroups/chains, state values, end effectors, virtual/passive joints and disabled-collision declarations | Semantic graph only; no standalone geometry. Group references/cycles are checked. Link/joint names remain unqualified without the intended URDF; planning/collision-exemption feasibility is unknown. |
+| DXF | ASCII LINE, bulged LWPOLYLINE, sampled ARC/CIRCLE/ELLIPSE and rational control-point SPLINE, nested blocks and insert arrays, TEXT/MTEXT/constant attributes, block-backed dimension pictures, SOLID/TRACE and solid/pattern hatches | Explicit units agree with `$INSUNITS`. Normal hatches preserve hole loops with evenodd filling and clip original dashed pattern lines against all boundaries. Default OCS and zero thickness only. Widths, periodic/fit-point splines, rich/wrapped/column/background MTEXT, nondefault MTEXT line spacing/direction, oblique/mirrored/aligned/fit text, gradients, dot patterns, non-normal hatch island styles, ellipse/spline hatch edges and external/dependent blocks fail explicitly. Text retains source whitespace; MTEXT respects source radian rotation/direction-vector order. Text uses a system font fallback; exact source glyphs/extents are not established. No cutting certification. |
+| URDF | URDF 1.0 connected link/joint tree, transforms, box/cylinder/sphere geometry, explicit contained STL references, named color materials and paired SRDF semantics | Intrinsic meters. Rest geometry is captured at zero joint coordinates. Transient revolute/continuous/prismatic poses enforce declared position limits and resolve bounded mimic dependencies. Floating/planar joints, quaternion/capsule syntax, texture materials, macros/plugins and simulator extensions fail explicitly. Dynamics/controllers and physical adequacy are not validated. |
+| SDF | One model, named local `relative_to`/`attached_to` frames, link/joint/visual/collision poses, `expressed_in` joint axes, tree graph and primitive/explicit STL geometry | Intrinsic meters. Euler poses support radians or explicit `degrees="true"`. Revolute/prismatic coordinates use authored joint frames and declared position bounds. Worlds, nested models/includes/plugins, scoped or missing frames, frame cycles, quaternion poses, second axes and unsupported joints fail explicitly. Physics/contact readiness is not validated. |
+| SRDF | Groups/subgroups/chains, state values, end effectors, virtual/passive joints and disabled-collision declarations; optional captured URDF geometry | Without a captured URDF, names remain unqualified and no shape is invented. A paired URDF must share the robot name; every link/joint/chain/group/state/collision declaration is checked against that exact tree. Directed chains, subgroup membership, scalar state cardinality and declared joint limits are verified. Planning feasibility and physical collision exemptions remain unknown. |
 
 The readers are deliberately bounded subsets. They do not claim full glTF,
 OPC/3MF, XML, DXF, URDF, SDF or SRDF conformance. Unsupported geometry-bearing
@@ -153,7 +183,8 @@ mesh transfer retain their existing bounded chunk protocol. Artifact sync and
 payload use `read_only: true`, `document_id/revision/feature_id: null`, and
 `artifact: {review_sha256,source,summary}`. Sync/context explicitly return
 `annotations: []`, `sequences: []` and `playback: null`; native review state is
-cleared when the view changes to an artifact. Their evaluation token belongs to the
+cleared when the view changes to an artifact. Imported animation and robot
+configuration metadata belongs to the frozen artifact and its review hash. Their evaluation token belongs to the
 viewer only; it is never registered as an editable native evaluation.
 
 Renderer admission is separate from the exact native mesh/topology validator.
@@ -170,8 +201,59 @@ and review identities, mesh/curve counts, source-format references, robot graph
 or semantic metadata and parser limitations. DXF displays sampled curves;
 SRDF displays semantic data with no invented shape/bounds. Clipping is visual
 and remains uncapped. Native exact measurements/sections, presets, edits,
-source export, notes and playback are unavailable in an artifact session.
+source export and native notes/sequence playback are unavailable in an artifact session. Imported GLTF animations and robot joint coordinates have a separate transient review pose.
 `cad_show` of a real native document restores the ordinary editable workflow.
+
+## Transient poses and appearance
+
+`pose_external_artifact(review, configuration)` evaluates JSON-only display
+geometry from a previously verified frozen review. The closed configuration is
+`{joints?: {name: number}, animation?: integer, time_seconds?: number}`. Robot
+revolute/continuous coordinates use radians; prismatic coordinates use meters.
+Unknown, fixed and mimic-driven joint requests fail. Mimic coordinates are
+derived and bounded; movable non-continuous coordinates respect declared lower
+and upper limits. An empty configuration restores the exact captured robot rest
+geometry; an explicit `joints: {}` evaluates zero independent coordinates and
+their mimic offsets. GLTF uses an animation index and a nonnegative time in
+seconds up to that animation's declared duration; later times fail explicitly.
+Before a channel's first key, its first key value is used. Default configuration
+reproduces rest geometry. Source bytes, captured review geometry, review SHA-256, portable
+verification output and native source revisions are never mutated by posing.
+
+GLTF skin positions use world joint transforms and inverse bind matrices;
+mesh-node transforms are excluded from skin evaluation as specified by glTF.
+Morph positions and normal deltas apply before skinning. Normal morphs require
+authored base normals; tangent morph targets fail explicitly. Normal vectors use the
+inverse transpose of world or blended skin transforms and are renormalized.
+A singular pose or degenerate triangle fails explicitly. All accepted animation
+sampler outputs, times, quaternion norms, index/weight ranges, accessor strides
+and byte ranges are validated at admission; unknown channels fail explicitly.
+Skin/morph/channel data and authored rest geometry reproduce from captured bytes
+on package verification. No file-supplied program or callback is invoked.
+
+Mesh groups retain source material factors, alpha mode/cutoff, double-sided
+state, original vertex RGBA, transformed normals and UV0 in primitive vertex
+order. Embedded texture bytes remain data URIs with an independent image hash;
+sampler filtering and wrapping remain explicit. Images are limited to 64,
+8 MiB each, 32 MiB total, 4096×4096 and 16 million pixels. PNG receives the native
+bounded CRC/DEFLATE/filter/checksum decoder (noninterlaced 8-bit supported modes);
+JPEG header dimensions are bounded and browser decoding supplies display.
+Additional PBR texture channels require another renderer and fail explicitly.
+
+DXF label geometry carries source text, style name, alignment/attachment and a
+row-major millimeter transform. Baseline and estimated height corners qualify
+framing bounds; the viewer displays text with a system-font fallback. Solid
+hatch loop arrays retain each closed sampled contour and fill by evenodd parity,
+including holes. Pattern geometry contains actual clipped/dashed source lines.
+Dimensions expand their captured anonymous block pictures instead of inventing
+replacement dimension formatting or recalculating the source measurement.
+
+The independent developer fixture generator
+`tests/artifact_fidelity_fixtures.py` authors original-format appearance,
+translation/quaternion/scale/interpolation, skin/morph, block/dimension/text,
+hatch-hole/dash and framed robot sources. `artifact_review` checks their actual
+parser outputs, transient analytic coordinates, rest reproduction, immutable
+review bytes, paired-name qualification and unsupported-feature failures.
 
 ## Remaining release validation
 

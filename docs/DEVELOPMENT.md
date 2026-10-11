@@ -302,6 +302,57 @@ independent Draft 2020-12 validation of actual artifact calls and results.
 
 ## Bundle
 
+The visual workflow adds native `image`, `screenshot`, `render`, `gif`, `glb`
+and `visual_service` suites, plus the `image_oracle` and `screenshot_mcp_flow`
+developer-runtime CTests. These use the same production service and bounded
+workers. The screenshot flow uses a fixture image; actual WebGL pixels have a
+separate optional browser check.
+
+For independent GIF frame decoding and Draft 2020-12 validation, install the
+SDK requirements above and `Pillow==12.0.0` in a development environment, then
+run `python tests/visual_export_oracle.py /absolute/path/to/agent-3d-cad`.
+It decodes all frames, compares static PNG bytes, checks an analytic moving
+clipping boundary, duration/loop/source identities, native jobs and schemas.
+Set `AGENTCAD_ORACLE_EMPTY_PATH=1` to remove PATH and loader/SDK overrides from
+every native child; the Python verifier remains outside the product runtime.
+
+For an independent multipage drawing check, use a developer Python with `pypdf`
+and `Pillow`, plus Poppler (`pdftoppm` on PATH) or `pypdfium2`:
+
+```sh
+python3 tests/drawing_oracle.py build/agent-3d-cad --evidence .local/evidence/visual-workflow/drawings
+```
+
+This creates a native bored solid in an isolated workspace, checks two ISO PDF
+pages and SVG view placement, independently rasterizes the measured hole callout,
+and checks 1:1 DXF geometry (`ezdxf` is optional). The evidence report records the
+executable SHA-256, committed model SHA-256 and source revision, with artifact
+hashes and rendered pages for layout inspection. These remain developer tools;
+the native product has no Python or Poppler dependency.
+
+With developer Playwright and a local Chromium executable available:
+
+```sh
+node tests/browser_visual_mcp.cjs /absolute/path/to/agent-3d-cad /absolute/path/to/chrome .local/evidence/visual-workflow/browser-native
+node tests/artifact_pose_browser_smoke.cjs /absolute/path/to/chrome build/artifact-flow-evidence.json .local/evidence/visual-workflow/artifact-poses
+```
+
+With the pinned official MCP SDK environment described above:
+
+```sh
+python tests/visual_mcp_sdk_smoke.py /absolute/path/to/agent-3d-cad .local/evidence/visual-workflow/visual-sdk.json
+```
+
+This bounded session independently validates typed PNG/GIF image content, saved
+native-sequence GLB export, file/resource hashes and MIME types, and responsive
+ping while a screenshot waits for app fixture PNG chunks. It saves the delivered
+images and GLB alongside optional JSON evidence; browser tests supply actual
+renderer pixels.
+
+These checks use the shipped renderer and native MCP results. They do not
+establish target-host installation, reload or hardware GPU readiness. Renderer
+limits and exact comparison tolerances are in [RENDERING.md](RENDERING.md).
+
 ```sh
 cmake --install build --prefix "$PWD/build/bundle"
 ```

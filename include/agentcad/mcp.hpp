@@ -9,6 +9,7 @@ class McpSession {
 public:
   explicit McpSession(Service& service) : service_(service) {}
   std::optional<Json> handle(const Json& request);
+  bool ready() const { return state_ == State::ready; }
 private:
   Service& service_;
   enum class State { fresh, initializing, ready } state_ = State::fresh;

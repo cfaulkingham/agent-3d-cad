@@ -39,8 +39,27 @@
     $('artifact-association').textContent=association?`Declared source: ${association.reference.document_id} r${association.reference.revision} · ${association.reference.feature_id}. This association does not establish geometric provenance.`:'No editable native source is associated with this artifact.';
     $('features').replaceChildren();const groups=p.artifact_geometry.groups,curves=p.artifact_geometry.polylines;
     $('feature-count').textContent=groups.length+curves.length;
-    for(const item of [...groups,...curves]){const detail=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');title.textContent=item.name||item.id;const shown={...item};if(shown.points){shown.point_count=shown.points.length;delete shown.points;}body.textContent=JSON.stringify(shown,null,2);detail.append(title,body);$('features').append(detail);}
-    const metadata=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');title.textContent='Source metadata';body.textContent=JSON.stringify(p.metadata,null,2);metadata.append(title,body);$('features').append(metadata);
+    const compact=(key,value)=>key==='image_data_uri'?'Embedded image; SHA-256 shown above':key==='scene_data'?{nodes:value.nodes.length,primitives:value.primitives.length,skins:value.skins.length,animations:value.animations.length}:['points','texture_coordinates','vertex_colors','normals_mm','hatch_loops'].includes(key)?{count:value.length}:value;
+    for(const item of [...groups,...curves]){const detail=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');title.textContent=item.name||item.id;body.textContent=JSON.stringify(item,compact,2);detail.append(title,body);$('features').append(detail);}
+    const metadata=document.createElement('details'),title=document.createElement('summary'),body=document.createElement('pre');title.textContent='Source metadata';body.textContent=JSON.stringify(p.metadata,compact,2);metadata.append(title,body);$('features').append(metadata);
+  }
+  let artifactPoseKey='';
+  function artifactPoseControls(v){
+    const p=v.payload,readonly=p?.read_only===true,joints=(p?.metadata?.graph?.joints||[]).filter(j=>j.type!=='fixed'&&!j.mimic),animations=p?.metadata?.animations||[],key=readonly?p.artifact.review_sha256:'';
+    $('artifact-pose-panel').hidden=!readonly||(!joints.length&&!animations.length);
+    if(key!==artifactPoseKey){artifactPoseKey=key;$('artifact-joint-values').replaceChildren();$('artifact-animation').replaceChildren();
+      joints.forEach((joint,index)=>{const row=document.createElement('div'),label=document.createElement('label'),input=document.createElement('input');row.className='parameter-row';input.id='artifact-joint-'+index;input.type='number';input.step='any';input.dataset.joint=joint.name;input.value=0;
+        label.htmlFor=input.id;label.textContent=`${joint.name} (${joint.coordinate_units})`;if(Number.isFinite(joint.limits?.lower))input.min=joint.limits.lower;if(Number.isFinite(joint.limits?.upper))input.max=joint.limits.upper;
+        input.onchange=()=>{state.pauseArtifact();if(artifactPoseKey!==key)return;const raw=input.value,value=Number(raw);if(raw===''||!Number.isFinite(value)){state.update({artifact_pose_error:'Enter a finite joint coordinate.'});return;}state.artifactPose({joints:{...(state.value.artifact_pose.joints||{}),[joint.name]:value}}).catch(()=>{});};row.append(label,input);$('artifact-joint-values').append(row);});
+      animations.forEach((animation,index)=>{const option=document.createElement('option');option.value=index;option.textContent=animation.name||`Animation ${index+1}`;$('artifact-animation').append(option);});
+    }
+    if(!readonly)return;const configuration=v.artifact_pose||{},ready=v.status==='ready'&&!v.artifact_pose_busy;
+    for(const input of $('artifact-joint-values').querySelectorAll('input')){input.disabled=!ready||v.artifact_playing;if(document.activeElement!==input)input.value=Object.hasOwn(configuration.joints||{},input.dataset.joint)?configuration.joints[input.dataset.joint]:0;}
+    $('artifact-animation-controls').hidden=!animations.length;const select=$('artifact-animation');if(Number.isInteger(configuration.animation)&&document.activeElement!==select)select.value=configuration.animation;
+    const animation=animations[Number(select.value)],duration=animation?.duration_seconds||0,time=configuration.animation===Number(select.value)?configuration.time_seconds||0:0;
+    $('artifact-time').max=duration;$('artifact-time').disabled=!ready||!animation||v.artifact_playing;if(document.activeElement!==$('artifact-time'))$('artifact-time').value=time;$('artifact-time-value').textContent=`${fmt(time)} / ${fmt(duration)} s`;
+    select.disabled=!ready||v.artifact_playing;$('artifact-play').disabled=!ready||duration<=0||v.artifact_playing;$('artifact-pause').disabled=!v.artifact_playing;$('artifact-pose-reset').disabled=!ready;
+    $('artifact-pose-status').textContent=v.artifact_pose_error||(v.artifact_pose_busy?'Evaluating imported pose…':v.artifact_playing?'Playing imported animation':Object.keys(configuration).length?'Imported pose displayed':'Captured pose displayed');
   }
   function modelTree(model, summary) {
     $('features').replaceChildren(); $('feature-count').textContent = model?.features?.length || 0;
@@ -256,6 +275,7 @@
       const same = v.payload.read_only?rendered?.artifact?.review_sha256===v.payload.artifact.review_sha256:!rendered?.read_only&&rendered?.document_id === v.payload.document_id;
       drawnEvaluation = null;
       try {
+        renderer?.setRender(v.render||{});
         renderer?.load(v.payload, { preserveCamera: same, hiddenPartIds: v.hidden_part_ids || [],presentation:v.presentation,appearance:v.appearance });
         if (v.camera) renderer?.setCamera(v.camera); else if (!same) renderer?.reset();
         if(renderer)state.setCamera(renderer.getCamera());
@@ -264,6 +284,7 @@
     }
     if (!v.payload) { modelTree(null); rendered = null; drawnEvaluation = null; }
     artifactControls(v);
+    artifactPoseControls(v);
     parameterControls(v); partTabs(v);
     partControls(v);
     motionControls(v);sequenceControls(v);
@@ -272,6 +293,7 @@
     try {
       renderer?.setPresentation(v.presentation);
       renderer?.setAppearance(v.appearance);
+      renderer?.setRender(v.render||{});
       renderer?.setAnnotations(ready&&v.read_only!==true&&v.payload?.read_only!==true?v.annotations:[]);
       renderer?.setHiddenParts(v.hidden_part_ids || []);
       if(v.camera&&renderer&&JSON.stringify(renderer.getCamera())!==JSON.stringify(v.camera))renderer.setCamera(v.camera);
@@ -279,7 +301,7 @@
       renderer?.setSection(ready && !v.payload?.draft && v.section_status?.state === 'succeeded' ? v.section_status.result : null);
     } catch (error) { fail(error); }
     presentationControls(v);
-    appearanceControls(v);
+    renderControls(v);appearanceControls(v);
     presetControls(v);
     annotationControls(v);
     sectionControls(v);
@@ -291,8 +313,18 @@
     const bounds=v.payload?.read_only?s?.bounds:s?.bounds_mm;
     $('dimensions').textContent=bounds?bounds.min.map((n,i)=>fmt(bounds.max[i]-n)).join(' × ')+' mm':'';
     for (const button of $('documents').querySelectorAll('button')) button.setAttribute('aria-current', String(button.dataset.document === v.document_id));
+    captures?.accept(v.capture_requests);
   }
+  let captures=null;
   const state = new CadLiveState(bridge, update);
+  const seekArtifact=()=>{state.pauseArtifact();state.artifactPose({animation:Number($('artifact-animation').value),time_seconds:Number($('artifact-time').value)}).catch(()=>{});};
+  $('artifact-animation').onchange=()=>{state.pauseArtifact();$('artifact-time').value=0;seekArtifact();};
+  $('artifact-time').oninput=()=>{$('artifact-time-value').textContent=`${fmt(Number($('artifact-time').value))} s`;};
+  $('artifact-time').onchange=seekArtifact;
+  $('artifact-play').onclick=()=>{try{state.playArtifact(Number($('artifact-animation').value));}catch(error){state.update({artifact_pose_error:error.message});}};
+  $('artifact-pause').onclick=()=>state.pauseArtifact();
+  $('artifact-pose-reset').onclick=()=>{state.pauseArtifact();state.artifactPose({}).catch(()=>{});};
+  captures=new CadCapture(bridge,state,()=>renderer,()=>!disposed&&!rendererError&&document.visibilityState==='visible'&&drawnEvaluation===state.value.payload?.evaluation_id);
   let sequenceFrames=[],sequenceSourceKey=null;
   function sequenceControls(v){
     const p=v.payload,ready=v.status==='ready'&&!!p&&!p.read_only&&!v.read_only&&!v.sequence_busy,source=p&&!p.read_only?[p.document_id,p.revision,p.feature_id].join('/') : null;
@@ -501,6 +533,30 @@
   $('annotation-clear').onclick=()=>state.annotation('clear').then(()=>selectNote('')).catch(error=>status(error.message));
   $('annotation-refresh').onclick=()=>state.annotation('list').catch(error=>status(error.message));
   function renderPins(pins){$('annotation-overlay').replaceChildren();for(const pin of pins){const button=document.createElement('button');button.className='annotation-pin';button.textContent=pin.number;button.title=pin.text;button.style.left=`${pin.x}px`;button.style.top=`${pin.y}px`;button.setAttribute('aria-label',`Review note ${pin.number}: ${pin.text}`);button.onclick=()=>selectNote(pin.id);$('annotation-overlay').append(button);}}
+  let renderKey='';
+  const renderIds=['render-mode','render-projection','render-opacity','render-finish','render-lighting','render-exposure','render-rotation','render-fill','render-background','render-floor','render-floor-color','render-floor-opacity','render-floor-finish','render-reset'];
+  function renderControls(v){
+    const ready=v.status==='ready'&&!!v.payload&&!v.preset_busy,r=v.render||CadRenderer.math.renderSettings();$('render-panel').hidden=!v.payload;
+    const key=JSON.stringify([r,ready,v.render_unsaved]);if(key===renderKey)return;renderKey=key;
+    for(const id of renderIds)$(id).disabled=!ready;
+    const values={'render-mode':r.mode,'render-projection':r.projection,'render-opacity':r.surfaces.opacity,'render-finish':r.surfaces.finish,'render-exposure':r.lighting.exposure,'render-rotation':r.lighting.rotation_deg,'render-fill':r.lighting.fill,'render-background':colorHex(r.background.color),'render-floor-color':colorHex(r.floor.color),'render-floor-opacity':r.floor.opacity,'render-floor-finish':r.floor.finish};
+    for(const [id,value] of Object.entries(values))$(id).value=value;$('render-lighting').checked=r.lighting.enabled;$('render-floor').checked=r.floor.enabled;
+    for(const [id,key] of [['toggle-grid','grid'],['toggle-axes','axes'],['toggle-edges','edges']])$(id).setAttribute('aria-pressed',String(r[key]));
+    $('render-status').textContent=v.render_unsaved?'Saving display settings…':'Display settings are saved with this view.';
+  }
+  function editRender(edit){try{const r=JSON.parse(JSON.stringify(state.value.render));edit(r);state.setRender(r).catch(error=>status(error.message));}catch(error){status(error.message);}}
+  $('render-mode').onchange=()=>state.setRender({mode:$('render-mode').value}).catch(error=>status(error.message));
+  $('render-reset').onclick=()=>state.setRender({mode:state.value.render.mode}).catch(error=>status(error.message));
+  $('render-projection').onchange=()=>editRender(r=>{r.projection=$('render-projection').value;});
+  $('render-opacity').onchange=()=>editRender(r=>{r.surfaces.opacity=Number($('render-opacity').value);});
+  $('render-finish').onchange=()=>editRender(r=>{r.surfaces.finish=$('render-finish').value;});
+  $('render-lighting').onchange=()=>editRender(r=>{r.lighting.enabled=$('render-lighting').checked;});
+  for(const [id,key] of [['render-exposure','exposure'],['render-rotation','rotation_deg'],['render-fill','fill']])$(id).onchange=()=>editRender(r=>{r.lighting[key]=Number($(id).value);});
+  $('render-background').onchange=()=>editRender(r=>{r.background.color=colorRgb($('render-background').value);});
+  $('render-floor').onchange=()=>editRender(r=>{r.floor.enabled=$('render-floor').checked;});
+  $('render-floor-color').onchange=()=>editRender(r=>{r.floor.color=colorRgb($('render-floor-color').value);});
+  $('render-floor-opacity').onchange=()=>editRender(r=>{r.floor.opacity=Number($('render-floor-opacity').value);});
+  $('render-floor-finish').onchange=()=>editRender(r=>{r.floor.finish=$('render-floor-finish').value;});
   let appearanceKey='',presetKey='',presetDocument=null;
   function appearanceControls(v){
     const ready=v.status==='ready'&&!!v.payload&&!v.preset_busy,appearance=v.appearance,parts=v.payload?.summary?.assembly?.parts||[];
@@ -511,18 +567,18 @@
     $('appearance-part').replaceChildren();
     for(const part of parts){const option=document.createElement('option');option.value=part.id;option.textContent=part.id;$('appearance-part').append(option);}
     $('appearance-part').value=selected;$('appearance-part-controls').hidden=!parts.length;
-    $('appearance-default').value=colorHex(appearance.default_color);
+    $('appearance-default').value=colorHex(appearance.default_color);const defaultMaterial=CadRenderer.math.material(appearance.material);$('appearance-opacity').value=defaultMaterial.opacity;$('appearance-finish').value=defaultMaterial.finish;
     const override=appearance.parts.find(part=>part.part_id===selected);
-    $('appearance-color').value=colorHex(override?.color||appearance.default_color);
-    for(const id of ['appearance-default','appearance-default-apply','appearance-reset'])$(id).disabled=!ready;
-    for(const id of ['appearance-part','appearance-color','appearance-part-apply'])$(id).disabled=!ready||!parts.length;
+    $('appearance-color').value=colorHex(override?.color||appearance.default_color);const partMaterial=CadRenderer.math.material(override?.material||appearance.material);$('appearance-part-opacity').value=partMaterial.opacity;$('appearance-part-finish').value=partMaterial.finish;
+    for(const id of ['appearance-default','appearance-default-apply','appearance-reset','appearance-opacity','appearance-finish'])$(id).disabled=!ready;
+    for(const id of ['appearance-part','appearance-color','appearance-part-apply','appearance-part-opacity','appearance-part-finish'])$(id).disabled=!ready||!parts.length;
     $('appearance-part-reset').disabled=!ready||!override;
     $('appearance-status').textContent=v.appearance_unsaved?'Saving colors…':`${appearance.parts.length} part color${appearance.parts.length===1?'':'s'} set. Colors affect this view and saved images.`;
   }
   function recolor(change){const value=JSON.parse(JSON.stringify(state.value.appearance));change(value);status('');try{state.setAppearance(value).catch(error=>status(error.message));}catch(error){status(error.message);}}
   $('appearance-part').onchange=()=>{appearanceKey='';appearanceControls(state.value);};
-  $('appearance-default-apply').onclick=()=>recolor(value=>{value.default_color=colorRgb($('appearance-default').value);});
-  $('appearance-part-apply').onclick=()=>{const part_id=$('appearance-part').value,color=colorRgb($('appearance-color').value);recolor(value=>{value.parts=value.parts.filter(part=>part.part_id!==part_id);value.parts.push({part_id,color});});};
+  $('appearance-default-apply').onclick=()=>recolor(value=>{value.default_color=colorRgb($('appearance-default').value);value.material={opacity:Number($('appearance-opacity').value),finish:$('appearance-finish').value};});
+  $('appearance-part-apply').onclick=()=>{const part_id=$('appearance-part').value,color=colorRgb($('appearance-color').value);recolor(value=>{value.parts=value.parts.filter(part=>part.part_id!==part_id);value.parts.push({part_id,color,material:{opacity:Number($('appearance-part-opacity').value),finish:$('appearance-part-finish').value}});});};
   $('appearance-part-reset').onclick=()=>recolor(value=>{value.parts=value.parts.filter(part=>part.part_id!==$('appearance-part').value);});
   $('appearance-reset').onclick=()=>state.setAppearance(CadRenderer.math.defaultAppearance()).catch(error=>status(error.message));
   function presetControls(v){
@@ -586,7 +642,7 @@
       onReady(identity) { if (identity.evaluation_id === state.value.payload?.evaluation_id) { rendererError = null; drawnEvaluation = identity.evaluation_id; update(state.value); } }
     });
   } catch (error) { fail(error); }
-  shell = CadShell.mount({ $, bridge, renderer, onToolChange(){state.stopPointMeasurement();},onMeasureToggle(){
+  shell = CadShell.mount({ $, bridge, renderer,onDisplayChange(settings){editRender(r=>Object.assign(r,settings));}, onToolChange(){state.stopPointMeasurement();},onMeasureToggle(){
     const hadSelection = !!state.value.selection, m=state.value.point_measurement;
     if(m.active){state.stopPointMeasurement();return;}
     if(m.a&&m.b)state.update({selection:null,point_measurement:{...m,active:true,error:null}});
@@ -666,9 +722,10 @@
     finally { exporting = false; if (!disposed) update(state.value); }
   };
   $('fit').onclick = () => renderer?.reset();
-  $('save-image').onclick=()=>{
+  $('save-image').onclick=async()=>{
     try{
       if(state.value.status!=='ready'||!renderer)return;
+      await renderer.whenTexturesReady?.();
       const image=renderer.capture();if(typeof image!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image)||image.length>8*1024*1024)throw Error('The saved image exceeds the 8 MiB limit.');
       const link=document.createElement('a');link.href=image;link.download=state.value.payload.read_only?`artifact-${state.value.payload.artifact.review_sha256.slice(0,12)}.png`:`${state.value.payload.document_id}-r${state.value.payload.revision}.png`;document.body.append(link);link.click();link.remove();status('PNG download requested. Your host may ask where to save it.');
     }catch(error){status(error.message);}

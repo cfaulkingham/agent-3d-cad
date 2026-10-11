@@ -11,6 +11,7 @@
 #include <numbers>
 #include <set>
 #include <sstream>
+#include <tuple>
 #include <vector>
 
 namespace agentcad {
@@ -155,6 +156,38 @@ struct Balloon {
   int item_number{};
   Point anchor,center;
 };
+struct HoleCallout { std::string view,label; Point label_at; Json evidence; };
+std::vector<HoleCallout> drawing_holes(const Json& projected,const Json& normalized) {
+  std::vector<HoleCallout> result;
+  if(!normalized.contains("hole_callouts")) return result;
+  for(const auto& requested:normalized.at("hole_callouts")) {
+    const auto view=text_field(requested,"view");const Json* evidence=nullptr;
+    for(const auto& candidate:projected.at("views")) if(candidate.at("id")==view && candidate.contains("hole_evidence"))
+      for(const auto& item:candidate.at("hole_evidence")) if(item.at("index")==requested.at("index")) evidence=&item;
+    if(!evidence) invalid("Kernel did not supply exact hole evidence",{{"view",view},{"callout",requested.at("index")}});
+    const auto& centers=evidence->at("centers_mm");
+    if(!centers.is_array() || centers.empty() || centers.size()!=requested.at("centers").size()) invalid("Hole evidence has incorrect center count",{{"view",view}});
+    for(const auto& center:centers) point(center);
+    const auto diameter=projected_number(evidence->at("diameter_mm")),depth=projected_number(evidence->at("depth_mm"));
+    if(diameter<=0 || depth<=0 || !evidence->at("through").is_boolean()) invalid("Invalid exact hole evidence",{{"view",view}});
+    Json value=*evidence;value.erase("index");value["view"]=view;value["count"]=centers.size();
+    std::string text=(centers.size()>1?std::to_string(centers.size())+" x ":"")+std::string("DIA ")+dimension_numeric(diameter);
+    if(requested.contains("fit")) {value["fit"]=requested.at("fit");text+=" "+text_field(requested,"fit");}
+    text+=evidence->at("through").get<bool>()?" THRU":" DEPTH "+dimension_numeric(depth);
+    if(evidence->contains("counterbore")) {
+      const auto& bore=evidence->at("counterbore");
+      text+="; CBORE DIA "+dimension_numeric(projected_number(bore.at("diameter_mm")))+" DEPTH "+dimension_numeric(projected_number(bore.at("depth_mm")));
+    }
+    if(evidence->contains("countersink")) {
+      const auto& sink=evidence->at("countersink");
+      text+="; CSINK DIA "+dimension_numeric(projected_number(sink.at("diameter_mm")))+" x "+dimension_numeric(projected_number(sink.at("angle_deg")))+" deg";
+    }
+    if(requested.contains("thread")) {value["thread"]=requested.at("thread");text+="; THREAD "+text_field(requested,"thread");}
+    value["label"]=text;value["label_mm"]=requested.at("label");
+    result.push_back({view,text,point(requested.at("label")),std::move(value)});
+  }
+  return result;
+}
 std::vector<Balloon> drawing_balloons(const Json& projected,const Json& normalized) {
   std::vector<Balloon> result;
   if(!normalized.contains("balloons")) return result;
@@ -636,6 +669,36 @@ void annotate(Scene& s,const View& v,const Placement& p,const std::vector<Dimens
     }
   }
 }
+void annotate_holes(Scene& scene,const View& view,const Placement& placement,const std::vector<HoleCallout>& holes,const Scene& annotations) {
+  std::vector<std::array<double,4>> occupied;
+  auto overlaps=[](const auto& a,const auto& b){return a[0]<b[2]+1 && a[2]>b[0]-1 && a[1]<b[3]+1 && a[3]>b[1]-1;};
+  for(const auto& annotation:annotations) if(annotation.kind=="text" && annotation.angle==0)
+    occupied.push_back({annotation.center.x,annotation.center.y-annotation.font,annotation.center.x+text_width(annotation.text,annotation.font),annotation.center.y+1});
+  const auto upper_left=placement.map({view.bounds[0],view.bounds[3]}),lower_right=placement.map({view.bounds[2],view.bounds[1]});
+  const std::array<double,4> geometry_box={upper_left.x,upper_left.y,lower_right.x,lower_right.y};
+  for(const auto& hole:holes) if(hole.view==view.id) {
+    const auto at=placement.map(hole.label_at);const auto lines=wrap(hole.label,2.7,55);
+    double width=0;for(const auto& text:lines) width=std::max(width,text_width(text,2.7));
+    const std::array<double,4> box={at.x,at.y-2.7,at.x+width,at.y+(lines.size()-1)*3.7+1};
+    if(box[0]<placement.x+1 || box[1]<placement.y+7 || box[2]>placement.x+placement.width-1 || box[3]>placement.y+placement.height-1)
+      invalid("Hole callout label does not fit its view cell",{{"view",view.id},{"label_mm",point_json(hole.label_at)}});
+    if(overlaps(box,geometry_box) || std::any_of(occupied.begin(),occupied.end(),[&](const auto& b){return overlaps(box,b);}))
+      invalid("Hole callout label overlaps geometry or another annotation",{{"view",view.id},{"label_mm",point_json(hole.label_at)}});
+    occupied.push_back(box);
+    double radius=hole.evidence.at("diameter_mm").get<double>()/2;
+    for(const auto* kind:{"counterbore","countersink"}) if(hole.evidence.contains(kind)) radius=hole.evidence.at(kind).at("diameter_mm").get<double>()/2;
+    const Point elbow={at.x-2,at.y+1};
+    line(scene,elbow,{at.x+width,at.y+1},"HOLE_CALLOUTS");
+    for(const auto& center:hole.evidence.at("centers_mm")) {
+      const auto c=point(center);const auto direction=hole.label_at-c;const auto length=std::hypot(direction.x,direction.y);
+      if(length<=radius+attachment_tolerance) invalid("Hole callout leader must extend outside its opening",{{"view",view.id}});
+      const auto tip=placement.map(c+direction*(radius/length));
+      line(scene,tip,elbow,"HOLE_CALLOUTS");const auto before=scene.size();arrow(scene,tip,elbow);
+      for(std::size_t i=before;i<scene.size();++i) scene[i].layer="HOLE_CALLOUTS";
+    }
+    double y=at.y;for(const auto& text:lines){label(scene,{at.x,y},text,2.7);scene.back().layer="HOLE_CALLOUTS";y+=3.7;}
+  }
+}
 std::string svg(const Scene& scene,double width,double height) {
   std::ostringstream out;out.imbue(std::locale::classic());
   out<<"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""<<numeric(width)<<"mm\" height=\""<<numeric(height)<<"mm\" viewBox=\"0 0 "<<numeric(width)<<' '<<numeric(height)<<"\">\n<rect width=\"100%\" height=\"100%\" fill=\"white\"/>\n";
@@ -643,7 +706,7 @@ std::string svg(const Scene& scene,double width,double height) {
     if(p.kind=="text") {
       out<<"<text x=\""<<numeric(p.center.x)<<"\" y=\""<<numeric(p.center.y)<<"\" font-family=\"Helvetica,Arial,sans-serif\" font-size=\""<<numeric(p.font)<<"\"";
       if(p.angle) out<<" transform=\"rotate("<<numeric(p.angle)<<' '<<numeric(p.center.x)<<' '<<numeric(p.center.y)<<")\"";
-      if(p.layer=="BOM" || p.layer=="BALLOONS") out<<" data-layer=\""<<p.layer<<"\"";
+      if(p.layer=="BOM" || p.layer=="BALLOONS" || p.layer=="HOLE_CALLOUTS") out<<" data-layer=\""<<p.layer<<"\"";
       out<<" fill=\"#111\">"<<xml(p.text)<<"</text>\n";continue;
     }
     std::string attrs=" data-layer=\""+p.layer+"\" fill=\"none\" stroke=\""+std::string(p.layer=="VISIBLE"?"#111":"#555")+"\" stroke-width=\""+(p.layer=="VISIBLE"?"0.3":p.layer=="HATCH"?"0.13":"0.18")+"\"";
@@ -662,7 +725,7 @@ std::string svg(const Scene& scene,double width,double height) {
   }
   out<<"</svg>\n";return out.str();
 }
-std::string pdf(const Scene& scene,double width,double height) {
+std::string pdf_stream(const Scene& scene,double height) {
   constexpr double unit=72/25.4;
   std::ostringstream content;content.imbue(std::locale::classic());
   auto xy=[&](Point p){return numeric(p.x*unit)+" "+numeric((height-p.y)*unit);};
@@ -690,18 +753,30 @@ std::string pdf(const Scene& scene,double width,double height) {
     }
     content<<"S\n";
   }
-  const auto stream=content.str();
-  const std::vector<std::string> objects={
+  return content.str();
+}
+struct PdfPage { double width,height; std::string stream; };
+std::string pdf_document(const std::vector<PdfPage>& pages) {
+  constexpr double unit=72/25.4;
+  std::string kids;
+  for(std::size_t i=0;i<pages.size();++i) kids+=std::to_string(4+i*2)+" 0 R ";
+  std::vector<std::string> objects={
     "<< /Type /Catalog /Pages 2 0 R >>",
-    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 "+numeric(width*unit)+" "+numeric(height*unit)+"] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
-    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
-    "<< /Length "+std::to_string(stream.size())+" >>\nstream\n"+stream+"endstream"};
+    "<< /Type /Pages /Kids ["+kids+"] /Count "+std::to_string(pages.size())+" >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"};
+  for(std::size_t i=0;i<pages.size();++i) {
+    const auto& page=pages[i];
+    objects.push_back("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 "+numeric(page.width*unit)+" "+numeric(page.height*unit)+"] /Resources << /Font << /F1 3 0 R >> >> /Contents "+std::to_string(5+i*2)+" 0 R >>");
+    objects.push_back("<< /Length "+std::to_string(page.stream.size())+" >>\nstream\n"+page.stream+"endstream");
+  }
   std::string output="%PDF-1.4\n% Native agent-3d-cad vector drawing\n";std::vector<std::size_t> offsets={0};
   for(std::size_t i=0;i<objects.size();++i) {offsets.push_back(output.size());output+=std::to_string(i+1)+" 0 obj\n"+objects[i]+"\nendobj\n";}
   const auto start=output.size();output+="xref\n0 "+std::to_string(objects.size()+1)+"\n0000000000 65535 f \n";
   for(std::size_t i=1;i<offsets.size();++i) {std::ostringstream row;row.imbue(std::locale::classic());row<<std::setw(10)<<std::setfill('0')<<offsets[i]<<" 00000 n \n";output+=row.str();}
   output+="trailer\n<< /Size "+std::to_string(objects.size()+1)+" /Root 1 0 R >>\nstartxref\n"+std::to_string(start)+"\n%%EOF\n";return output;
+}
+std::string pdf(const Scene& scene,double width,double height) {
+  return pdf_document({{width,height,pdf_stream(scene,height)}});
 }
 std::string dxf(const View& view,const Scene& annotations,const Placement& placement,bool hidden) {
   std::ostringstream out;out.imbue(std::locale::classic());
@@ -719,8 +794,8 @@ std::string dxf(const View& view,const Scene& annotations,const Placement& place
     else if(type=="HIDDEN") {pair(73,2);pair(40,3);pair(49,2);pair(74,0);pair(49,-1);pair(74,0);}
     else {pair(73,4);pair(40,5);pair(49,3);pair(74,0);pair(49,-.75);pair(74,0);pair(49,.5);pair(74,0);pair(49,-.75);pair(74,0);}
   }
-  pair(0,"ENDTAB");table("LAYER","11",7);
-  for(const auto& layer:std::vector<std::string>{"0","VISIBLE","HIDDEN","CENTER","DIMENSIONS","HATCH","BALLOONS"}) {pair(0,"LAYER");record("11");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbLayerTableRecord");pair(2,layer);pair(70,0);pair(62,(layer=="HIDDEN" || layer=="HATCH")?8:7);pair(6,layer=="HIDDEN"?"HIDDEN":layer=="CENTER"?"CENTER":"CONTINUOUS");}
+  pair(0,"ENDTAB");table("LAYER","11",8);
+  for(const auto& layer:std::vector<std::string>{"0","VISIBLE","HIDDEN","CENTER","DIMENSIONS","HATCH","BALLOONS","HOLE_CALLOUTS"}) {pair(0,"LAYER");record("11");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbLayerTableRecord");pair(2,layer);pair(70,0);pair(62,(layer=="HIDDEN" || layer=="HATCH")?8:7);pair(6,layer=="HIDDEN"?"HIDDEN":layer=="CENTER"?"CENTER":"CONTINUOUS");}
   pair(0,"ENDTAB");table("STYLE","12",1);pair(0,"STYLE");record("12");pair(100,"AcDbSymbolTableRecord");pair(100,"AcDbTextStyleTableRecord");pair(2,"STANDARD");pair(70,0);pair(40,0);pair(41,1);pair(50,0);pair(71,0);pair(42,2.5);pair(3,"txt");pair(4,"");pair(0,"ENDTAB");
   table("BLOCK_RECORD","13",2);
   for(const auto& space:std::vector<std::pair<std::string,std::string>>{{"*Model_Space","14"},{"*Paper_Space","15"}}) {
@@ -762,14 +837,17 @@ Json drawing_schema() {
   const Json scalar_ref={{"$ref","#/$defs/scalar"}};
   const Json point_schema={{"type","array"},{"items",scalar_ref},{"minItems",2},{"maxItems",2}};
   const Json translation_schema={{"type","array"},{"items",scalar_ref},{"minItems",3},{"maxItems",3}};
+  const Json direction_schema={{"type","array"},{"items",{{"type","number"}}},{"minItems",3},{"maxItems",3}};
+  const Json cell_schema={{"type","array"},{"items",{{"type","number"}}},{"minItems",4},{"maxItems",4}};
   const Json id={{"type","string"},{"pattern","^[A-Za-z][A-Za-z0-9_-]{0,63}$"}};
   auto text=[](int max){return Json{{"type","string"},{"pattern","^[ -~]+$"},{"minLength",1},{"maxLength",max}};};
   const auto section=closed({{"axis",{{"enum",{"x","y","z"}}}},{"offset",scalar_ref}},{"axis","offset"});
   const Json explode={{"type","array"},{"minItems",1},{"maxItems",assembly_leaf_limit},
     {"items",closed({{"part_id",occurrence_schema()},{"translation",translation_schema}},{"part_id","translation"})}};
   const Json view={{"oneOf",Json::array({
-    closed({{"id",id},{"orientation",{{"enum",{"top","front","right","isometric"}}}},{"explode",explode}},{"id","orientation"}),
-    closed({{"id",id},{"orientation",{{"const","section"}}},{"section",section},{"hatch",{{"type","boolean"}}},{"explode",explode}},{"id","orientation","section"})})}};
+    closed({{"id",id},{"orientation",{{"enum",{"top","front","right","bottom","back","left","isometric"}}}},{"explode",explode},{"cell_mm",cell_schema}},{"id","orientation"}),
+    closed({{"id",id},{"orientation",{{"const","custom"}}},{"direction",direction_schema},{"up",direction_schema},{"explode",explode},{"cell_mm",cell_schema}},{"id","orientation","direction","up"}),
+    closed({{"id",id},{"orientation",{{"const","section"}}},{"section",section},{"hatch",{{"type","boolean"}}},{"explode",explode},{"cell_mm",cell_schema}},{"id","orientation","section"})})}};
   const Json dimension={{"oneOf",Json::array({
     closed({{"view",id},{"kind",{{"enum",{"width","height"}}}},{"manufacturing_tolerance",tolerance_schema()}},{"view","kind"}),
     closed({{"view",id},{"kind",{{"enum",{"radius","diameter"}}}},{"center",point_schema},{"radius",scalar_ref},{"tolerance",{{"type","number"},{"exclusiveMinimum",0},{"maximum",0.1}}},{"manufacturing_tolerance",tolerance_schema()}},{"view","kind","center","radius"}),
@@ -778,14 +856,24 @@ Json drawing_schema() {
       {"lines",{{"type","array"},{"minItems",2},{"maxItems",2},{"items",closed({{"from",point_schema},{"to",point_schema}},{"from","to"})}}},
       {"sweep",{{"enum",{"minor","major"}}}},{"arc_radius",scalar_ref},{"manufacturing_tolerance",tolerance_schema()}},{"view","kind","lines"})})}};
   auto general=closed({{"linear",scalar_ref},{"angular",scalar_ref}});general["minProperties"]=1;
-  return closed({{"title",text(80)},{"sheet",{{"enum",{"A4","A3"}}}},{"scale",{{"type","number"},{"exclusiveMinimum",0},{"maximum",1e6}}},
-    {"layout",{{"enum",{"grid","first_angle","third_angle"}}}},
+  const auto hole=closed({{"view",id},{"centers",{{"type","array"},{"minItems",1},{"maxItems",64},{"items",point_schema}}},
+    {"radius",scalar_ref},{"termination",{{"enum",{"through","blind"}}}},{"depth",scalar_ref},
+    {"counterbore",closed({{"radius",scalar_ref},{"depth",scalar_ref}},{"radius","depth"})},
+    {"countersink",closed({{"radius",scalar_ref},{"angle",scalar_ref}},{"radius","angle"})},
+    {"thread",text(40)},{"fit",text(20)},{"label",point_schema},
+    {"tolerance",{{"type","number"},{"exclusiveMinimum",0},{"maximum",0.1}}}}, {"view","centers","radius","termination","label"});
+  auto base=closed({{"title",text(80)},{"sheet",{{"enum",{"A0","A1","A2","A3","A4"}}}},{"sheet_orientation",{{"enum",{"landscape","portrait"}}}},{"scale",{{"type","number"},{"exclusiveMinimum",0},{"maximum",1e6}}},
+    {"layout",{{"enum",{"grid","first_angle","third_angle","manual"}}}},
     {"hidden_lines",{{"type","boolean"}}},{"formats",{{"type","array"},{"minItems",1},{"maxItems",3},{"uniqueItems",true},{"items",{{"enum",{"svg","pdf","dxf"}}}}}},
     {"views",{{"type","array"},{"minItems",1},{"maxItems",6},{"items",view}}},{"dimensions",{{"type","array"},{"maxItems",32},{"items",dimension}}},
     {"bom",{{"type","boolean"}}},
     {"balloons",{{"type","array"},{"maxItems",64},{"items",closed({{"view",id},{"part_id",occurrence_schema()},{"anchor",translation_schema},{"label",point_schema}}, {"view","part_id","anchor","label"})}}},
+    {"hole_callouts",{{"type","array"},{"maxItems",32},{"items",hole}}},
     {"general_tolerances",general},
     {"material",text(80)},{"notes",{{"type","array"},{"maxItems",6},{"items",text(120)}}}});
+  auto page=base;page["required"]={"views"};page["properties"].erase("formats");page["properties"].erase("hidden_lines");
+  base["properties"]["pages"]={{"type","array"},{"minItems",1},{"maxItems",16},{"items",page}};
+  return base;
 }
 
 Json drawing_dimension_result_schema() {
@@ -808,16 +896,74 @@ Json drawing_dimension_result_schema() {
   return {{"oneOf",variants}};
 }
 
+Json drawing_hole_result_schema() {
+  const Json positive={{"type","number"},{"exclusiveMinimum",0}};
+  const Json point={{"type","array"},{"minItems",2},{"maxItems",2},{"items",{{"type","number"}}}};
+  return closed({{"view",{{"type","string"}}},{"centers_mm",{{"type","array"},{"minItems",1},{"maxItems",64},{"items",point}}},
+    {"diameter_mm",positive},{"depth_mm",positive},{"through",{{"type","boolean"}}},{"count",{{"type","integer"},{"minimum",1},{"maximum",64}}},
+    {"counterbore",closed({{"diameter_mm",positive},{"depth_mm",positive}},{"diameter_mm","depth_mm"})},
+    {"countersink",closed({{"diameter_mm",positive},{"angle_deg",positive},{"depth_mm",positive}},{"diameter_mm","angle_deg","depth_mm"})},
+    {"thread",{{"type","string"}}},{"fit",{{"type","string"}}},{"label",{{"type","string"}}},{"label_mm",point}},
+    {"view","centers_mm","diameter_mm","depth_mm","through","count","label","label_mm"});
+}
+
+Json drawing_page_result_schema() {
+  const Json positive={{"type","number"},{"exclusiveMinimum",0}};
+  const Json point={{"type","array"},{"minItems",2},{"maxItems",2},{"items",{{"type","number"}}}};
+  const auto placements=closed({{"view",{{"type","string"}}},{"origin_mm",point},
+    {"cell_mm",{{"type","array"},{"minItems",4},{"maxItems",4},{"items",{{"type","number"}}}}}}, {"view","origin_mm","cell_mm"});
+  return closed({{"page",{{"type","integer"},{"minimum",1},{"maximum",16}}},
+    {"sheet_mm",{{"type","array"},{"minItems",2},{"maxItems",2},{"items",positive}}},{"scale",positive},
+    {"layout",{{"enum",{"grid","first_angle","third_angle","manual"}}}},
+    {"view_layouts",{{"type","array"},{"minItems",1},{"maxItems",6},{"items",placements}}}},
+    {"page","sheet_mm","scale","layout","view_layouts"});
+}
+
 Json normalize_drawing(const Json& spec,const Json& model) {
-  fields(spec,{}, {"title","sheet","scale","layout","hidden_lines","formats","views","dimensions","material","notes","general_tolerances","bom","balloons"});
+  fields(spec,{}, {"title","sheet","sheet_orientation","scale","layout","hidden_lines","formats","views","dimensions","material","notes","general_tolerances","bom","balloons","hole_callouts","pages"});
+  if(spec.contains("pages")) {
+    for(const auto* field:{"views","dimensions","balloons","hole_callouts"})
+      if(spec.contains(field)) invalid("Page-set annotations and views belong inside pages",{{"field",field}});
+    const auto& pages=spec.at("pages");
+    if(!pages.is_array() || pages.empty() || pages.size()>16) invalid("Request one to 16 drawing pages");
+    Json defaults=spec;defaults.erase("pages");
+    Json result;std::set<std::string> ids;
+    for(const auto& page:pages) {
+      if(!page.is_object() || !page.contains("views") || page.contains("pages") || page.contains("formats") || page.contains("hidden_lines"))
+        invalid("Each page requires explicit views and inherits formats/hidden_lines");
+      auto recipe=defaults;for(const auto& [key,value]:page.items()) recipe[key]=value;
+      auto normalized=normalize_drawing(recipe,model);
+      if(result.is_null()) {
+        result=normalized;result["views"]=Json::array();result["dimensions"]=Json::array();
+        result.erase("balloons");result.erase("hole_callouts");result.erase("view_cells");result["pages"]=Json::array();
+      }
+      for(const auto& view:normalized.at("views")) {
+        auto id=text_field(view,"id");for(auto& c:id) if(c>='A'&&c<='Z') c=static_cast<char>(c-'A'+'a');
+        if(!ids.insert(id).second) invalid("View IDs must be unique throughout the drawing set",{{"view",view.at("id")}});
+        result["views"].push_back(view);
+      }
+      for(const auto& dimension:normalized.at("dimensions")) result["dimensions"].push_back(dimension);
+      for(const auto* field:{"balloons","hole_callouts"}) if(normalized.contains(field)) {
+        if(!result.contains(field)) result[field]=Json::array();
+        for(const auto& value:normalized.at(field)) result[field].push_back(value);
+      }
+      result["pages"].push_back(std::move(normalized));
+    }
+    if(result.at("dimensions").size()>512 || (result.contains("balloons")&&result.at("balloons").size()>64) ||
+       (result.contains("hole_callouts")&&result.at("hole_callouts").size()>32))
+      invalid("Drawing set exceeds 512 dimensions, 64 balloons or 32 hole callouts");
+    return result;
+  }
   const auto& parameters=model.at("parameters");
   Json result={{"sheet",spec.value("sheet",Json("A4"))},{"hidden_lines",spec.value("hidden_lines",Json(true))},
     {"formats",spec.value("formats",Json::array({"svg","pdf","dxf"}))},{"views",Json::array()},{"dimensions",Json::array()},{"notes",Json::array()}};
   // Preserve custom recipes' cell ordering. The default four-view preset uses
   // third-angle projection; explicit layouts never silently fall back to grid.
   result["layout"]=spec.value("layout",Json(spec.contains("views")?"grid":"third_angle"));
-  if(result["layout"]!="grid" && result["layout"]!="first_angle" && result["layout"]!="third_angle") invalid("Layout must be grid, first_angle or third_angle");
-  if(!result["sheet"].is_string() || (result["sheet"]!="A4" && result["sheet"]!="A3")) invalid("Sheet must be A4 or A3 landscape");
+  if(result["layout"]!="grid" && result["layout"]!="first_angle" && result["layout"]!="third_angle" && result["layout"]!="manual") invalid("Unsupported drawing layout");
+  if(!result["sheet"].is_string() || (result["sheet"]!="A4" && result["sheet"]!="A3" && result["sheet"]!="A2" && result["sheet"]!="A1" && result["sheet"]!="A0")) invalid("Sheet must be A0 through A4");
+  result["sheet_orientation"]=spec.value("sheet_orientation",Json("landscape"));
+  if(result["sheet_orientation"]!="landscape" && result["sheet_orientation"]!="portrait") invalid("Sheet orientation must be landscape or portrait");
   if(!result["hidden_lines"].is_boolean()) throw Error("invalid_argument","hidden_lines must be boolean");
   if(spec.contains("bom")) {
     if(!spec.at("bom").is_boolean()) invalid("bom must be boolean");
@@ -846,7 +992,7 @@ Json normalize_drawing(const Json& spec,const Json& model) {
   if(!views.is_array() || views.empty() || views.size()>6) invalid("Request one to six drawing views");
   std::set<std::string> ids,portable_ids;
   for(const auto& view:views) {
-    fields(view,{"id","orientation"},{"section","hatch","explode"});const auto id=text_field(view,"id"),orientation=text_field(view,"orientation");view_identifier(id);
+    fields(view,{"id","orientation"},{"section","hatch","explode","cell_mm","direction","up"});const auto id=text_field(view,"id"),orientation=text_field(view,"orientation");view_identifier(id);
     auto portable=id;for(auto& c:portable) if(c>='A' && c<='Z') c=static_cast<char>(c-'A'+'a');
     if(!ids.insert(id).second || !portable_ids.insert(portable).second) invalid("View IDs must be unique, including case-insensitive filesystems");
     Json normalized={{"id",id},{"orientation",orientation}};
@@ -858,8 +1004,21 @@ Json normalize_drawing(const Json& spec,const Json& model) {
       if(!normalized["hatch"].is_boolean()) invalid("Section hatch must be boolean");
     } else {
       if(view.contains("section") || view.contains("hatch")) invalid("Only section views accept a section plane or hatch flag");
-      if(orientation!="top" && orientation!="front" && orientation!="right" && orientation!="isometric") invalid("Unsupported drawing orientation");
+      if(orientation!="top" && orientation!="front" && orientation!="right" && orientation!="bottom" && orientation!="back" && orientation!="left" && orientation!="isometric" && orientation!="custom") invalid("Unsupported drawing orientation");
     }
+    if(orientation=="custom") {
+      if(!view.contains("direction") || !view.contains("up")) invalid("Custom views require direction and up vectors");
+      const auto direction=vector3(view.at("direction"),Json::object()),up=vector3(view.at("up"),Json::object());
+      double dl=0,ul=0,dot_product=0;for(int a=0;a<3;++a){dl+=direction[a]*direction[a];ul+=up[a]*up[a];dot_product+=direction[a]*up[a];}
+      if(dl<1e-18 || ul<1e-18 || 1-dot_product*dot_product/(dl*ul)<1e-12) invalid("Custom direction/up vectors must be nonzero and nonparallel");
+      normalized["direction"]=direction;normalized["up"]=up;
+    } else if(view.contains("direction") || view.contains("up")) invalid("Only custom views accept direction/up vectors");
+    if(result["layout"]=="manual") {
+      if(!view.contains("cell_mm") || !view.at("cell_mm").is_array() || view.at("cell_mm").size()!=4) invalid("Manual views require cell_mm [x,y,width,height]",{{"view",id}});
+      Json cell=Json::array();for(const auto& n:view.at("cell_mm")) cell.push_back(number(n));
+      if(cell[2].get<double>()<=0 || cell[3].get<double>()<=0) invalid("Manual view cells require positive width and height",{{"view",id}});
+      result["view_cells"][id]=cell;
+    } else if(view.contains("cell_mm")) invalid("cell_mm requires layout manual",{{"view",id}});
     if(view.contains("explode")) {
       const Json* assembly=nullptr;
       for(const auto& feature:model.at("features")) if(feature.at("id")==model.at("output") && feature.at("type")=="assembly") assembly=&feature;
@@ -887,10 +1046,11 @@ Json normalize_drawing(const Json& spec,const Json& model) {
     }
     result["views"].push_back(std::move(normalized));
   }
-  if(result["layout"]!="grid") {
+  if(result["layout"]!="grid" && result["layout"]!="manual") {
     std::set<std::string> orientations;std::size_t auxiliary=0;
     for(const auto& v:result["views"]) {
       const auto orientation=v["orientation"].get<std::string>();
+      if(orientation=="custom" || orientation=="bottom" || orientation=="back" || orientation=="left") invalid("Additional orientations require grid or manual layout");
       if(orientation=="section" || orientation=="isometric") ++auxiliary;
       if(orientation!="section" && !orientations.insert(orientation).second) invalid("Standard layouts require unique orthographic/isometric orientations");
     }
@@ -945,13 +1105,60 @@ Json normalize_drawing(const Json& spec,const Json& model) {
       result["balloons"].push_back({{"view",view},{"part_id",part},{"anchor",anchor},{"label",center}});
     }
   }
+  if(spec.contains("hole_callouts")) {
+    const auto& callouts=spec.at("hole_callouts");
+    if(!callouts.is_array() || callouts.size()>32) invalid("Request at most 32 hole callouts");
+    result["hole_callouts"]=Json::array();
+    std::set<std::tuple<std::string,double,double>> used;
+    for(std::size_t index=0;index<callouts.size();++index) {
+      const auto& callout=callouts[index];
+      fields(callout,{"view","centers","radius","termination","label"},{"tolerance","depth","counterbore","countersink","thread","fit"});
+      const auto view=text_field(callout,"view"),termination=text_field(callout,"termination");
+      Json* target=nullptr;for(auto& candidate:result["views"]) if(candidate.at("id")==view) target=&candidate;
+      if(!target || target->at("orientation")=="section") invalid("Hole callouts require a non-section drawing view",{{"view",view}});
+      if(termination!="through" && termination!="blind") invalid("Hole termination must be through or blind");
+      if(termination=="blind" && !callout.contains("depth")) invalid("Blind hole callouts require an explicit depth matching rule");
+      if(callout.contains("counterbore") && callout.contains("countersink")) invalid("A callout cannot request both a counterbore and countersink");
+      const auto& centers=callout.at("centers");
+      if(!centers.is_array() || centers.empty() || centers.size()>64) invalid("A hole callout requires one to 64 explicit centers");
+      Json normalized={{"view",view},{"index",index},{"centers",Json::array()},{"radius",scalar(callout.at("radius"),parameters)},
+        {"termination",termination},{"label",resolved_point(callout.at("label"),parameters)},
+        {"tolerance",callout.contains("tolerance")?number(callout.at("tolerance")):attachment_tolerance}};
+      if(normalized.at("radius").get<double>()<=0) invalid("Hole radius matching rule must be positive");
+      if(normalized.at("tolerance").get<double>()<=0 || normalized.at("tolerance").get<double>()>0.1) invalid("Hole matching tolerance must be positive and at most 0.1 mm");
+      for(const auto& input:centers) {
+        const auto center=resolved_point(input,parameters);
+        if(!used.emplace(view,center[0].get<double>(),center[1].get<double>()).second) invalid("Hole centers must be unique per view",{{"view",view},{"center",center}});
+        normalized["centers"].push_back(center);
+      }
+      if(callout.contains("depth")) {
+        normalized["depth"]=scalar(callout.at("depth"),parameters);
+        if(normalized.at("depth").get<double>()<=0) invalid("Hole depth matching rule must be positive");
+      }
+      for(const auto* kind:{"counterbore","countersink"}) if(callout.contains(kind)) {
+        const bool bored=std::string(kind)=="counterbore";
+        const auto dimension=bored?"depth":"angle";fields(callout.at(kind),{"radius",dimension});
+        Json secondary={{"radius",scalar(callout.at(kind).at("radius"),parameters)},
+          {dimension,scalar(callout.at(kind).at(dimension),parameters,bored?"mm":"deg")}};
+        if(secondary.at("radius").get<double>()<=normalized.at("radius").get<double>() || secondary.at(dimension).get<double>()<=0 || (!bored&&secondary.at("angle").get<double>()>=180))
+          invalid("Hole entry geometry requires a larger radius and positive depth or angle below 180 deg");
+        normalized[kind]=secondary;
+      }
+      auto request=normalized;request.erase("view");request.erase("label");
+      if(!target->contains("hole_requests")) (*target)["hole_requests"]=Json::array();
+      (*target)["hole_requests"].push_back(std::move(request));
+      for(const auto* field:{"thread","fit"}) if(callout.contains(field)) normalized[field]=printable(callout.at(field),field,std::string(field)=="thread"?40:20);
+      result["hole_callouts"].push_back(std::move(normalized));
+    }
+  }
   if(spec.contains("notes")) {if(!spec["notes"].is_array() || spec["notes"].size()>6) invalid("Request at most six drawing notes");for(const auto& note:spec["notes"]) result["notes"].push_back(printable(note,"note",120));}
   return result;
 }
 
-Json render_drawing(const Json& projected,const Json& normalized,const Json& identity) {
+static Json render_page(const Json& projected,const Json& normalized,const Json& identity,std::size_t page_number,std::size_t page_count,std::vector<PdfPage>* pdf_pages=nullptr,std::array<std::size_t,2>* hatch_totals=nullptr) {
   const auto views=projections(projected,normalized);const auto dims=dimensions(views,normalized);
   const auto balloons=drawing_balloons(projected,normalized);
+  const auto holes=drawing_holes(projected,normalized);
   // Angular arcs and virtual intersections participate in fitting without
   // changing the geometry extents measured by width/height dimensions.
   std::vector<std::array<double,4>> layout_bounds;
@@ -963,9 +1170,13 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
       for(int quadrant=0;quadrant<=8;++quadrant) if(quadrant*90>=d.angle && quadrant*90<=d.angle+d.sweep) include(circle_point(d.center,d.radius,quadrant*90));
     }
     for(const auto& balloon:balloons) if(balloon.view==v.id) {include(balloon.anchor);include(balloon.center);}
+    for(const auto& hole:holes) if(hole.view==v.id) include(hole.label_at);
     layout_bounds.push_back(bounds);
   }
-  const double sheet_w=normalized["sheet"]=="A3"?420:297,sheet_h=normalized["sheet"]=="A3"?297:210,margin=8,gap=7;
+  const std::map<std::string,std::pair<double,double>> sizes={{"A0",{1189,841}},{"A1",{841,594}},{"A2",{594,420}},{"A3",{420,297}},{"A4",{297,210}}};
+  auto [sheet_w,sheet_h]=sizes.at(text_field(normalized,"sheet"));
+  if(normalized.value("sheet_orientation",std::string("landscape"))=="portrait") std::swap(sheet_w,sheet_h);
+  constexpr double margin=8,gap=7;
   const auto document=printable(identity.at("document_id"),"document_id",64);
   const auto title=normalized.value("title",document);const auto kernel=printable(identity.at("kernel_version"),"kernel_version",32);
   const auto revision=revision_number(identity.at("revision"));
@@ -989,7 +1200,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
   const double views_bottom=footer_y-(bom_table.height>0?bom_table.height+gap:0);
   if(views_bottom-margin<30) invalid("Complete BOM and views cannot fit on this sheet; use A3 or export the BOM separately");
   const auto layout=normalized.at("layout").get<std::string>();
-  const bool standard=layout!="grid",third=layout=="third_angle";
+  const bool manual=layout=="manual",standard=layout!="grid"&&!manual,third=layout=="third_angle";
   const auto auxiliary=std::count_if(views.begin(),views.end(),[](const auto& v){return v.orientation=="section" || v.orientation=="isometric";});
   const std::size_t cols=standard?(auxiliary>1?3:2):(views.size()<=1?1:views.size()<=4?2:3),rows=standard?2:(views.size()+cols-1)/cols;
   std::vector<std::pair<std::size_t,std::size_t>> slots(views.size());
@@ -1014,12 +1225,30 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
       if(d.kind=="width" || d.kind=="horizontal") ++horizontal;
       else if(d.kind=="height" || d.kind=="vertical") ++vertical;
       else ++radial;
-      if(text_width(d.label,2.7)>cell_w-6) invalid("Dimension label cannot fit the selected sheet",{{"view",d.view}});
-      if((d.kind=="height" || d.kind=="vertical") && text_width(d.label,2.7)>cell_h-12)
-        invalid("Vertical dimension label cannot fit the selected sheet",{{"view",d.view}});
     }
     Placement p{};p.x=margin+slots[i].first*(cell_w+gap);p.y=margin+slots[i].second*(cell_h+gap);p.width=cell_w;p.height=cell_h;
-    p.gx=p.x+5;p.gy=p.y+9+radial*5;p.gw=cell_w-10-(vertical?4+vertical*6.5:0);p.gh=cell_h-14-radial*5-(horizontal?4+horizontal*6.5:0);
+    if(manual) {
+      const auto& cell=normalized.at("view_cells").at(views[i].id);
+      p.x=number(cell[0]);p.y=number(cell[1]);p.width=number(cell[2]);p.height=number(cell[3]);
+      if(p.x<margin || p.y<margin || p.x+p.width>sheet_w-margin || p.y+p.height>views_bottom-gap)
+        invalid("Manual view cell overlaps the sheet margin, title block or BOM",{{"view",views[i].id},{"cell_mm",cell}});
+      for(std::size_t j=0;j<i;++j) {const auto& other=placements[j];
+        if(p.x<other.x+other.width+1 && p.x+p.width>other.x-1 && p.y<other.y+other.height+1 && p.y+p.height>other.y-1)
+          invalid("Manual view cells must have at least 1 mm separation",{{"view",views[i].id},{"other_view",views[j].id}});
+      }
+    }
+    for(const auto& d:dims) if(d.view==views[i].id) {
+      if(text_width(d.label,2.7)>p.width-6) invalid("Dimension label cannot fit the selected view cell",{{"view",d.view}});
+      if((d.kind=="height" || d.kind=="vertical") && text_width(d.label,2.7)>p.height-12)
+        invalid("Vertical dimension label cannot fit the selected view cell",{{"view",d.view}});
+    }
+    p.gx=p.x+5;p.gy=p.y+9+radial*5;p.gw=p.width-10-(vertical?4+vertical*6.5:0);p.gh=p.height-14-radial*5-(horizontal?4+horizontal*6.5:0);
+    double hole_width=0,hole_height=0;
+    for(const auto& hole:holes) if(hole.view==views[i].id) {
+      const auto lines=wrap(hole.label,2.7,55);double width=0;for(const auto& text:lines) width=std::max(width,text_width(text,2.7));
+      hole_width=std::max(hole_width,width+3);hole_height=std::max(hole_height,3.7*lines.size()+3);
+    }
+    p.gw-=hole_width;p.gh-=hole_height;
     if(std::any_of(balloons.begin(),balloons.end(),[&](const auto& b){return b.view==views[i].id;})) {p.gx+=4;p.gy+=4;p.gw-=8;p.gh-=8;}
     if(p.gw<10 || p.gh<10) invalid("Annotations cannot fit the selected sheet; use fewer views/dimensions or A3",{{"view",views[i].id}});
     const auto& b=layout_bounds[i];const auto width=b[2]-b[0],height=b[3]-b[1];
@@ -1059,7 +1288,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
   const auto ratio=scale<1?"1:"+numeric(1/scale):numeric(scale)+":1";
   label(sheet,{metadata_x,footer_y+10},"Scale "+ratio+" | "+normalized["sheet"].get<std::string>(),2.7);
   label(sheet,{metadata_x,footer_y+15},"Kernel: OpenCascade "+kernel,2.7);
-  label(sheet,{metadata_x,footer_y+20},std::string(standard?(third?"Third-angle":"First-angle"):"Labeled grid")+" | Sheet 1/1",2.7);
+  label(sheet,{metadata_x,footer_y+20},std::string(standard?(third?"Third-angle":"First-angle"):manual?"Manual layout":"Labeled grid")+" | Sheet "+std::to_string(page_number)+"/"+std::to_string(page_count),2.7);
   label(sheet,{metadata_x,footer_y+25},"Dimensions from saved model",2.7);
   Json files=Json::array(),measured=Json::array();
   for(const auto& d:dims) {
@@ -1080,7 +1309,8 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     if(a.horizontal) placements[i].origin.x=(a.low+a.high)/2-(a.min+a.max)*scale/2;
     else placements[i].origin.y=(a.low+a.high)/2+(a.min+a.max)*scale/2;
   }
-  Json view_layouts=Json::array();std::size_t hatch_work=0,hatch_segments=0;
+  std::array<std::size_t,2> local_hatch{};auto& hatch_budget=hatch_totals?*hatch_totals:local_hatch;
+  Json view_layouts=Json::array();auto& hatch_work=hatch_budget[0];auto& hatch_segments=hatch_budget[1];
   for(std::size_t i=0;i<views.size();++i) {
     auto& p=placements[i];const auto& v=views[i];
     view_layouts.push_back({{"view",v.id},{"origin_mm",point_json(p.origin)},{"cell_mm",{p.x,p.y,p.width,p.height}}});
@@ -1098,6 +1328,8 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     Scene balloon_scene;annotate_balloons(balloon_scene,v,p,balloons,dimensions_scene);
     sheet.insert(sheet.end(),balloon_scene.begin(),balloon_scene.end());
     annotations.insert(annotations.end(),balloon_scene.begin(),balloon_scene.end());
+    Scene hole_scene;annotate_holes(hole_scene,v,p,holes,annotations);
+    sheet.insert(sheet.end(),hole_scene.begin(),hole_scene.end());annotations.insert(annotations.end(),hole_scene.begin(),hole_scene.end());
     if(std::find(normalized["formats"].begin(),normalized["formats"].end(),Json("dxf"))!=normalized["formats"].end()) {
       // Center marks and dimensions use the same view transform, reversed back
       // into model mm; exact projection circles/arcs are serialized directly.
@@ -1114,6 +1346,7 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
       files.push_back({{"name",v.id+".dxf"},{"format","dxf"},{"content",dxf(v,annotations,p,normalized["hidden_lines"].get<bool>())}});
     }
   }
+  if(pdf_pages) pdf_pages->push_back({sheet_w,sheet_h,pdf_stream(sheet,sheet_h)});
   for(const auto& format:normalized["formats"]) {
     if(format=="svg") files.push_back({{"name","drawing.svg"},{"format","svg"},{"content",svg(sheet,sheet_w,sheet_h)}});
     if(format=="pdf") files.push_back({{"name","drawing.pdf"},{"format","pdf"},{"content",pdf(sheet,sheet_w,sheet_h)}});
@@ -1130,8 +1363,55 @@ Json render_drawing(const Json& projected,const Json& normalized,const Json& ide
     for(const auto& balloon:balloons) result["balloons"].push_back({{"view",balloon.view},{"part_id",balloon.part_id},{"item_number",balloon.item_number},
       {"anchor_mm",point_json(balloon.anchor)},{"label_mm",point_json(balloon.center)}});
   }
+  if(normalized.contains("hole_callouts")) {
+    result["hole_callouts"]=Json::array();for(const auto& hole:holes) result["hole_callouts"].push_back(hole.evidence);
+  }
   std::size_t size=0;for(const auto& file:files) size+=file["content"].get_ref<const std::string&>().size();
   if(size>32*1024*1024) throw Error("limit_exceeded","Drawing artifacts exceed 32 MiB");
   result["files"]=std::move(files);return result;
+}
+
+Json render_drawing(const Json& projected,const Json& normalized,const Json& identity) {
+  if(!normalized.contains("pages")) return render_page(projected,normalized,identity,1,1);
+  Json result;Json files=Json::array(),pages=Json::array();std::vector<PdfPage> pdf_pages;
+  std::array<std::size_t,2> hatch_totals{};
+  std::set<std::string> file_names;
+  const auto count=normalized.at("pages").size();
+  for(std::size_t i=0;i<count;++i) {
+    const auto& page=normalized.at("pages")[i];auto page_projection=projected;page_projection["views"]=Json::array();
+    for(const auto& requested:page.at("views")) {
+      const auto id=text_field(requested,"id");const auto found=std::find_if(projected.at("views").begin(),projected.at("views").end(),[&](const auto& view){return view.at("id")==id;});
+      if(found==projected.at("views").end())invalid("Drawing page is missing a requested projection",{{"view",id}});
+      page_projection["views"].push_back(*found);
+    }
+    const auto rendered=render_page(page_projection,page,identity,i+1,count,&pdf_pages,&hatch_totals);
+    if(result.is_null()) {
+      result=rendered;result.erase("files");result["dimensions"]=Json::array();result["view_layouts"]=Json::array();
+      result.erase("balloons");result.erase("hole_callouts");
+    }
+    for(const auto* field:{"dimensions","view_layouts","balloons","hole_callouts"}) if(rendered.contains(field)) {
+      if(!result.contains(field)) result[field]=Json::array();
+      for(const auto& value:rendered.at(field)) result[field].push_back(value);
+    }
+    if(rendered.contains("bom")) result["bom"]=rendered.at("bom");
+    pages.push_back({{"page",i+1},{"scale",rendered.at("scale")},{"sheet_mm",rendered.at("sheet_mm")},
+      {"layout",rendered.at("layout")},{"view_layouts",rendered.at("view_layouts")}});
+    for(auto file:rendered.at("files")) {
+      const auto format=text_field(file,"format");
+      if(format=="pdf") continue;
+      if(format=="svg") file["name"]="drawing-"+std::to_string(i+1)+".svg";
+      const auto name=text_field(file,"name");
+      if(!file_names.insert(name).second) {
+        if(name!="bom.json" && name!="bom.csv") invalid("Duplicate drawing-set artifact filename",{{"name",name}});
+        continue;
+      }
+      files.push_back(std::move(file));
+    }
+  }
+  if(std::find(normalized.at("formats").begin(),normalized.at("formats").end(),Json("pdf"))!=normalized.at("formats").end())
+    files.push_back({{"name","drawing.pdf"},{"format","pdf"},{"content",pdf_document(pdf_pages)}});
+  std::size_t bytes=0;for(const auto& file:files) bytes+=file.at("content").get_ref<const std::string&>().size();
+  if(bytes>32*1024*1024) throw Error("limit_exceeded","Drawing-set artifacts exceed 32 MiB");
+  result["pages"]=std::move(pages);result["files"]=std::move(files);return result;
 }
 }

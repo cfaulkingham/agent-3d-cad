@@ -1,6 +1,7 @@
 #include "agentcad/service.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/app.hpp"
+#include "agentcad/render_settings.hpp"
 #include <algorithm>
 #include <chrono>
 #include <functional>
@@ -87,6 +88,35 @@ void device_name_tests() {
   require(call(service,"cad_list",Json::object()).at("documents")==Json::array({Json{{"document_id","assembly"},{"revision",1}}}),
     "Listing skips an unaddressable directory");
 #endif
+}
+void render_persistence_tests() {
+  Temporary temporary;Service service(temporary.path);auto model=box();
+  model["features"].push_back({{"id","assembly"},{"type","assembly"},{"parts",Json::array({{{"id","left"},{"input","base"}},{{"id","right"},{"input","base"},{"placement",{{"translation",{30,0,0}}}}}})}});model["output"]="assembly";
+  call(service,"cad_create",{{"document_id","display"},{"model",model}});call(service,"cad_open",{{"document_id","display"},{"view_id","review"}});auto shown=ready(service,"review"),eid=shown.at("evaluation_id");
+  require(shown.at("render")==normalize_render_settings(),"An existing color-only view starts with the original solid display defaults");
+  const auto head=read_text(temporary.path/"documents/display/HEAD.json");
+  const auto rendering=normalize_render_settings({{"mode","render"},{"surfaces",{{"opacity",.6},{"finish","glossy"}}},{"floor",{{"finish","glossy"}}},{"lighting",{{"rotation_deg",45}}}});
+  Json appearance={{"default_color",{.2,.3,.4}},{"material",{{"opacity",.7}}},{"parts",Json::array({{{"part_id","left"},{"color",{1,0,0}},{"material",{{"finish","metal"},{"opacity",.4}}}}})}};
+  const Json context={{"action","context"},{"view_id","review"},{"evaluation_id",eid},{"selection",nullptr},{"render",rendering},{"appearance",appearance}};
+  auto current=call(service,"cad_viewer",context);appearance["material"]["finish"]="satin";
+  require(current.at("render")==rendering&&current.at("appearance")==appearance,"Closed rendering and partial material fields normalize before native persistence");
+  current=call(service,"cad_viewer",{{"action","preset"},{"operation","save"},{"name","Studio"},{"view_id","review"},{"evaluation_id",eid}});
+  require(current.at("presets")[0].at("render")==rendering&&current.at("presets")[0].at("appearance")==appearance,"A saved preset captures rendering and leaf materials with source-qualified review settings");
+  call(service,"cad_viewer",{{"action","context"},{"view_id","review"},{"evaluation_id",eid},{"selection",nullptr},{"render",{{"mode","wireframe"}}}});
+  current=call(service,"cad_viewer",{{"action","preset"},{"operation","apply"},{"name","Studio"},{"view_id","review"},{"evaluation_id",eid}});
+  require(current.at("render")==rendering,"Applying the studio preset restores perspective, floor and lights");
+  require(ready(service,"review",eid.get<std::string>()).at("render")==rendering,"Unchanged-evaluation sync reconciles persisted render settings");
+  Service restarted(temporary.path);require(call(restarted,"cad_context",{{"view_id","review"}}).at("render")==rendering,"Display settings survive native service restart");
+  const auto state_path=temporary.path/"views/review/state.json";const auto before=read_text(state_path);
+  for(const auto& invalid:Json::array({Json{{"shader","return 1"}},Json{{"lens_mm",17}},Json{{"mode","photoreal"}},Json{{"floor",{{"opacity",2}}}}})){auto bad=context;bad["render"]=invalid;fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});}
+  for(const auto& invalid:Json::array({Json{{"opacity",1.1}},Json{{"finish","custom"}},Json{{"shader","eval"}}})){auto bad=context;bad["appearance"]["parts"][0]["material"]=invalid;fails("invalid_argument",[&]{call(service,"cad_viewer",bad);});}
+  require(read_text(state_path)==before&&read_text(temporary.path/"documents/display/HEAD.json")==head,"Invalid rendering and material edits preserve both view persistence and source HEAD");
+  auto legacy=parse_json(before);legacy.erase("render");for(auto& preset:legacy["presets"])preset.erase("render");atomic_text(state_path,legacy.dump());
+  current=call(restarted,"cad_context",{{"view_id","review"}});require(current.at("render")==normalize_render_settings()&&current.at("presets")[0].at("render")==normalize_render_settings(),"Legacy view and preset files migrate missing rendering without changing saved materials");
+  current=call(restarted,"cad_viewer",{{"action","preset"},{"operation","apply"},{"name","Studio"},{"view_id","review"},{"evaluation_id",eid}});require(current.at("render").at("mode")=="solid","Applying a legacy preset retains the original solid presentation");
+  call(restarted,"cad_viewer",context);call(restarted,"cad_apply",{{"document_id","display"},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",8}}})}});shown=ready(restarted,"review");require(shown.at("render")==rendering&&shown.at("appearance")==appearance,"Revision refresh retains rendering and surviving source leaf materials");
+  call(restarted,"cad_create",{{"document_id","other-display"},{"model",box()}});call(restarted,"cad_show",{{"view_id","review"},{"document_id","other-display"}});shown=ready(restarted,"review");
+  require(shown.at("render")==normalize_render_settings()&&!shown.at("appearance").contains("material"),"Changing the reviewed source resets rendering and materials");
 }
 void appearance_preset_tests() {
   Temporary temporary;Service service(temporary.path);auto model=box();
@@ -400,7 +430,7 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==31,"Native authoring capture/import, STEP inspection, drawings, manufacturing, review and live tools remain published");
+  require(definitions.size()==33,"Native authoring capture/import, STEP inspection, drawings, manufacturing, review, visual and live tools remain published");
   require(std::any_of(definitions.begin(),definitions.end(),[](const Json& tool){return tool.at("name")=="cad_printer_handoff";}),"native offline printer handoff is included in discovery");
   for(const auto* name:{"cad_artifact","cad_artifact_show"})require(std::any_of(definitions.begin(),definitions.end(),[&](const Json& tool){return tool.at("name")==name;}),std::string(name)+" is included in discovery");
   for(const auto& tool:definitions) {
@@ -409,6 +439,7 @@ int main() {try {
     if(tool.at("name")=="cad_viewer")require(tool.at("_meta").at("ui").at("visibility")==Json::array({"app"}),"viewer plumbing advertises app-only visibility");
   }
   appearance_preset_tests();
+  render_persistence_tests();
   visibility_tests();
   device_name_tests();
   retention_tests();
