@@ -1,4 +1,5 @@
 #include "agentcad/kernel.hpp"
+#include <iterator>
 #include "agentcad/hash.hpp"
 #include "agentcad/mesh_reconstruction.hpp"
 #include "agentcad/storage.hpp"
@@ -806,6 +807,7 @@ struct SheetFlange {
   double width,radius,angle,length,allowance,miter_start=0,miter_end=0;
   bool fold=false;
   std::vector<SheetCut> cuts;
+  TopoDS_Shape flat_leg; // Exact carried far-panel profile, including captured trims and holes.
 };
 struct SheetPlan {
   TopoDS_Shape face;
@@ -838,6 +840,16 @@ TopoDS_Shape sheet_subtract(const TopoDS_Shape& source,const TopoDS_Shape& tool)
   if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Sheet-metal intent cut failed");
   return operation.Shape();
 }
+TopoDS_Shape sheet_common(const TopoDS_Shape& left,const TopoDS_Shape& right) {
+  BRepAlgoAPI_Common operation;NCollection_List<TopoDS_Shape> a,b;a.Append(left);b.Append(right);
+  operation.SetArguments(a);operation.SetTools(b);operation.SetNonDestructive(true);operation.SetRunParallel(false);operation.Build();
+  if(!operation.IsDone()||operation.HasErrors())throw Error("kernel_failure","Sheet intent intersection failed");
+  return operation.Shape();
+}
+double sheet_attachment_length(const TopoDS_Shape& face,const SheetFrame& frame,double width) {
+  const auto edge=BRepBuilderAPI_MakeEdge(frame.start,sheet_point(frame,0,0,width)).Edge();
+  GProp_GProps properties;BRepGProp::LinearProperties(sheet_common(face,edge),properties);return properties.Mass();
+}
 SheetFrame sheet_leg_frame(const SheetFlange& flange,double thickness,bool flat) {
   if(flat){auto frame=flange.flat;frame.start=sheet_point(frame,flange.allowance,0);return frame;}
   const auto angle=std::abs(flange.angle),sign=flange.angle>0?1.0:-1.0;
@@ -854,7 +866,71 @@ SheetFrame sheet_attachment(const SheetFlange& parent,double thickness,bool flat
   else if(attachment=="start"){start=sheet_point(leg,0,0);end=sheet_point(leg,parent.length,0,parent.length*parent.miter_start);}
   else {start=sheet_point(leg,parent.length,0,parent.width-parent.length*parent.miter_end);end=sheet_point(leg,0,0,parent.width);}
   const auto axis=gp_Dir(gp_Vec(start,end));width=start.Distance(end);
-  return {start,axis,gp_Dir(gp_Vec(axis).Crossed(gp_Vec(leg.normal))),leg.normal};
+  SheetFrame result{start,axis,gp_Dir(gp_Vec(axis).Crossed(gp_Vec(leg.normal))),leg.normal};
+  if(flat&&!parent.flat_leg.IsNull()&&std::abs(sheet_attachment_length(parent.flat_leg,result,width)-width)>1e-6)
+    throw Error("invalid_model","Named far-panel attachment is interrupted by its captured boundary trim");
+  return result;
+}
+void sheet_internal_jog(SheetPlan& plan,const Json& flange,const Json& parameters,const SheetFrame& frame,double radius,double angle) {
+  const auto& jog=flange.at("jog");const auto id=text_field(flange,"id"),return_id=text_field(jog,"return_id");
+  const auto offset=scalar(jog.at("offset"),parameters),depth=scalar(jog.at("moving_length"),parameters);
+  const auto width=parameter_point(flange.at("fold_line")[0],parameters).Distance(parameter_point(flange.at("fold_line")[1],parameters));
+  const auto a=std::abs(angle),allowance=a*(radius+plan.k_factor*plan.thickness);
+  if(offset*angle<=0)throw Error("invalid_model","Jog offset and first bend angle must have the same sign");
+  const auto run=(std::abs(offset)-(2*radius+plan.thickness)*(1-std::cos(a)))/std::sin(a);
+  const auto far_start=2*allowance+run,far_length=depth-far_start;
+  if(!std::isfinite(run)||run<1e-5||far_length<1e-5)throw Error("invalid_model","Jog needs positive run and remaining far-panel lengths",{{"run_mm",run},{"far_panel_length_mm",far_length}});
+  const auto moving=sheet_common(plan.face,sheet_rectangle(frame,0,depth,0,width));
+  const auto strip=sheet_rectangle(frame,0,far_start,0,width);
+  // A relative area comparison can conceal a small hole in a large strip.
+  // Reject every missing material region instead of filling it during forming.
+  if(count(sheet_subtract(strip,plan.face),TopAbs_FACE)!=0)throw Error("invalid_model","Both jog bends and the run require a complete unperforated strip");
+  const auto far_panel=sheet_common(plan.face,sheet_rectangle(frame,far_start,depth,0,width));
+  const auto stationary=sheet_subtract(plan.face,moving);
+  if(count(far_panel,TopAbs_FACE)!=1||count(stationary,TopAbs_FACE)!=1||sheet_area(far_panel)<1e-5)
+    throw Error("invalid_model","Jog must leave one connected far panel and one stationary region");
+  gp_Trsf to_local;to_local.SetTransformation(gp_Ax3(frame.start,frame.normal,frame.outward));
+  const auto far_bounds=bounds(BRepBuilderAPI_Transform(far_panel,to_local,true).Shape());
+  if(std::abs(far_bounds.at("max")[0].get<double>()-depth)>1e-6)
+    throw Error("invalid_model","Jog moving_length must reach the actual far boundary without extending beyond it");
+  // A region boundary inside uncut sheet would create an undeclared slit. The
+  // only material shared by the moving and stationary regions is the fold line.
+  TopoDS_Compound boundary;BRep_Builder builder;builder.MakeCompound(boundary);
+  for(TopExp_Explorer it(stationary,TopAbs_EDGE);it.More();it.Next())builder.Add(boundary,it.Current());
+  const auto seam=sheet_common(boundary,moving);double seam_length=0;
+  const gp_Lin axis(frame.start,frame.axis);
+  for(TopExp_Explorer it(seam,TopAbs_EDGE);it.More();it.Next()) {
+    const auto edge=TopoDS::Edge(it.Current());BRepAdaptor_Curve curve(edge);GProp_GProps length;BRepGProp::LinearProperties(edge,length);seam_length+=length.Mass();
+    if(curve.GetType()!=GeomAbs_Line||axis.Distance(curve.Value(curve.FirstParameter()))>1e-7||axis.Distance(curve.Value(curve.LastParameter()))>1e-7)
+      throw Error("invalid_model","Jog region would cut an undeclared seam in the source blank");
+  }
+  if(std::abs(seam_length-width)>1e-6)throw Error("invalid_model","Jog fold line must be the complete shared boundary of its moving region",{{"shared_length_mm",seam_length},{"fold_width_mm",width}});
+  std::set<std::string> carried;
+  for(const auto& value:jog.at("carry")) {
+    const auto name=value.get<std::string>();const auto found=std::find_if(plan.flanges.begin(),plan.flanges.end(),[&](const auto& f){return f.id==name;});
+    if(found==plan.flanges.end()||!found->parent.empty()||found->fold)throw Error("invalid_model","Jog carry must name earlier uncarried source-edge flange roots",{{"attachment_id",name}});
+    if(std::abs(sheet_attachment_length(far_panel,found->flat,found->width)-found->width)>1e-6)
+      throw Error("invalid_model","Carried root attachment must lie entirely on the preserved far panel",{{"attachment_id",name}});
+    carried.insert(name);
+  }
+  for(const auto& existing:plan.flanges) {
+    if(carried.contains(existing.parent))carried.insert(existing.id);
+    if(existing.parent.empty()&&!carried.contains(existing.id)&&sheet_attachment_length(moving,existing.flat,existing.width)>1e-7)
+      throw Error("invalid_model","Moving material has an undeclared attached bend",{{"attachment_id",existing.id}});
+  }
+  SheetFlange first{id,"","",frame,frame,width,radius,angle,run,allowance,0,0,true,{}, {}};
+  double return_width=0;const auto formed=sheet_attachment(first,plan.thickness,false,"tip",return_width),flat=sheet_attachment(first,plan.thickness,true,"tip",return_width);
+  SheetFlange second{return_id,id,"tip",formed,flat,width,radius,-angle,far_length,allowance,0,0,false,{}, {}};second.flat_leg=far_panel;
+  const auto formed_far=sheet_leg_frame(second,plan.thickness,false),flat_far=sheet_leg_frame(second,plan.thickness,true);
+  const gp_Vec translation(flat_far.start,formed_far.start);
+  std::vector<SheetFlange> retained,moved;
+  for(auto existing:plan.flanges) {
+    if(carried.contains(existing.id)) {existing.formed.start.Translate(translation);if(existing.parent.empty())existing.parent=return_id;moved.push_back(std::move(existing));}
+    else retained.push_back(std::move(existing));
+  }
+  retained.push_back(std::move(first));retained.push_back(std::move(second));
+  retained.insert(retained.end(),std::make_move_iterator(moved.begin()),std::make_move_iterator(moved.end()));
+  plan.flanges=std::move(retained);plan.face=stationary;
 }
 SheetPlan sheet_plan(const Json& feature,const Json& parameters,const FeatureGeometry& source) {
   const auto input=text_field(feature,"input");
@@ -906,8 +982,10 @@ SheetPlan sheet_plan(const Json& feature,const Json& parameters,const FeatureGeo
       const auto width=edge_length-start_gap-end_gap;if(width<1e-5)throw Error("invalid_model","Flange gaps and relief consume its entire attachment",{{"edge_length_mm",edge_length}});
       frame.start.Translate(gp_Vec(frame.axis)*start_gap);flat.start.Translate(gp_Vec(flat.axis)*start_gap);
       const auto radius=scalar(flange.at("inside_radius"),parameters),angle=scalar(flange.at("angle_deg"),parameters,"deg")*std::numbers::pi/180;
+      if(flange.contains("jog")){sheet_internal_jog(result,flange,parameters,frame,radius,angle);continue;}
+      if(flange.contains("edge")&&std::abs(sheet_attachment_length(result.face,flat,width)-width)>1e-6)throw Error("invalid_model","Source-edge attachment has been removed or carried; reference its named moving panel instead");
       const auto length=scalar(flange.at("length"),parameters),allowance=std::abs(angle)*(radius+result.k_factor*result.thickness);
-      SheetFlange planned{id,parent_id,attachment,frame,flat,width,radius,angle,length,allowance,0,0,false,{}};planned.fold=flange.contains("fold_line");
+      SheetFlange planned{id,parent_id,attachment,frame,flat,width,radius,angle,length,allowance,0,0,false,{}, {}};planned.fold=flange.contains("fold_line");
       if(flange.contains("miter")){planned.miter_start=std::tan(scalar(flange.at("miter").at("start_deg"),parameters,"deg")*std::numbers::pi/180);planned.miter_end=std::tan(scalar(flange.at("miter").at("end_deg"),parameters,"deg")*std::numbers::pi/180);if(length*(planned.miter_start+planned.miter_end)>=width-1e-5)throw Error("invalid_model","Miter consumes the complete flange tip");}
       if(planned.fold) {
         // The authored line and length identify a complete rectangular developed tab.
@@ -959,8 +1037,13 @@ std::vector<TopoDS_Shape> sheet_regions(const SheetFlange& flange,double thickne
   if(flat)regions.push_back(sheet_prism(sheet_rectangle(flange.flat,0,flange.allowance,0,flange.width),gp_Vec(flange.flat.normal)*-thickness));
   else regions.push_back(sheet_bend_region(flange,thickness,0,std::abs(flange.angle),0,flange.width));
   const auto leg=sheet_leg_frame(flange,thickness,flat);
-  regions.push_back(sheet_prism(sheet_polygon({sheet_point(leg,0,0),sheet_point(leg,flange.length,0,flange.length*flange.miter_start),
+  if(flange.flat_leg.IsNull())regions.push_back(sheet_prism(sheet_polygon({sheet_point(leg,0,0),sheet_point(leg,flange.length,0,flange.length*flange.miter_start),
     sheet_point(leg,flange.length,0,flange.width-flange.length*flange.miter_end),sheet_point(leg,0,0,flange.width)}),gp_Vec(leg.normal)*-thickness));
+  else {
+    auto profile=flange.flat_leg;
+    if(!flat){const auto source=sheet_leg_frame(flange,thickness,true);gp_Trsf transform;transform.SetDisplacement(gp_Ax3(source.start,source.normal,source.outward),gp_Ax3(leg.start,leg.normal,leg.outward));profile=BRepBuilderAPI_Transform(profile,transform,true).Shape();}
+    regions.push_back(sheet_prism(profile,gp_Vec(leg.normal)*-thickness));
+  }
   // Map cuts by neutral-axis arclength. A crossing cut becomes an exact annular
   // sector and a planar prism, sharing the physical tangent boundary.
   for(const auto& cut:flange.cuts) {
@@ -978,7 +1061,7 @@ Json sheet_report(const SheetPlan& plan,const std::string& source,bool flat) {
   Json bends=Json::array();auto flat_area=plan.base_area,formed_volume=plan.base_area*plan.thickness;
   for(const auto& flange:plan.flanges) {
     const auto allowance=flange.allowance,geometric_allowance=std::abs(flange.angle)*(flange.radius+.5*plan.thickness);
-    const auto leg_area=flange.width*flange.length-.5*flange.length*flange.length*(flange.miter_start+flange.miter_end);
+    const auto leg_area=flange.flat_leg.IsNull()?flange.width*flange.length-.5*flange.length*flange.length*(flange.miter_start+flange.miter_end):sheet_area(flange.flat_leg);
     flat_area+=flange.width*allowance+leg_area;formed_volume+=(flange.width*geometric_allowance+leg_area)*plan.thickness;
     for(const auto& cut:flange.cuts){flat_area-=cut.width*(cut.to-cut.from);const auto bend_length=std::max(0.0,std::min(cut.to,allowance)-cut.from),leg_length=std::max(0.0,cut.to-std::max(cut.from,allowance));formed_volume-=cut.width*plan.thickness*(bend_length*geometric_allowance/allowance+leg_length);}
     const auto line=[&](double x){return Json::array({point(sheet_point(flange.flat,x,0)),point(sheet_point(flange.flat,x,0,flange.width))});};

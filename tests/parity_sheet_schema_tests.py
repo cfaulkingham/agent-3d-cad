@@ -63,6 +63,41 @@ with tempfile.TemporaryDirectory(prefix="cad-parity-sheet-schema-") as directory
     import math
     fold["model"]["features"][1]["flanges"][0]["length"] = 20 - 2.75 * math.pi / 2
     call("cad_create", fold)
+    jog = copy.deepcopy(request)
+    jog["document_id"] = "internalJog"
+    jog["model"]["parameters"]["offset"] = 8
+    jog["model"]["features"][1]["flanges"] = jog["model"]["features"][1]["flanges"][:2]
+    jog["model"]["features"][1]["flanges"].append({"id":"step", "fold_line":[[80,40,0],[0,40,0]], "inside_radius":2, "angle_deg":90,
+        "jog":{"return_id":"stepReturn", "offset":{"parameter":"offset"}, "moving_length":20, "carry":["wall"]}})
+    initial = call("cad_create", jog)
+    assert len(initial["summary"]["sheet_metal"]["bends"]) == 4
+    checks += 1
+    exact = call("cad_read", {"document_id":"internalJog", "revision":initial["revision"]})
+    assert exact["model"]["features"][1]["flanges"] == jog["model"]["features"][1]["flanges"]
+    checks += 1
+    updated = call("cad_apply", {"document_id":"internalJog", "expected_revision":1, "operations":[{"op":"set_parameter", "name":"offset", "value":9}]})
+    assert abs(updated["summary"]["volume_mm3"] - initial["summary"]["volume_mm3"]) < 1e-6
+    checks += 1
+    call("cad_query", {"document_id":"internalJog", "revision":2, "feature_id":"formed"})
+    call("cad_export", {"document_id":"internalJog", "revision":2, "feature_id":"formed", "format":"step"})
+    fixture = json.loads((Path(__file__).resolve().parent.parent / "examples/sheet-internal-jog.create.json").read_text())
+    fixture_made = call("cad_create", fixture)
+    allowance = 2.5 * math.pi / 2
+    miter = math.tan(math.pi / 12) + math.tan(math.pi / 18)
+    assert abs(fixture_made["summary"]["volume_mm3"] - (6000 + 60 * (10 + allowance) - 50 * miter - 15 + (60 - 10 * miter) * (3 + allowance))) < 1e-6
+    checks += 1
+    call("cad_query", {"document_id":fixture["document_id"], "revision":1, "feature_id":"formed"})
+    call("cad_export", {"document_id":fixture["document_id"], "revision":1, "feature_id":"flat", "format":"step"})
+    for field, value in (("length",5), ("hem",False), ("cuts",[]), ("relief",{"width":1,"depth":1})):
+        bad = copy.deepcopy(jog)
+        bad["model"]["features"][1]["flanges"][-1][field] = value
+        assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid(bad)
+        checks += 1
+    for field, value in (("unknown",1), ("carry",["wall","wall"])):
+        bad = copy.deepcopy(jog)
+        bad["model"]["features"][1]["flanges"][-1]["jog"][field] = value
+        assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid(bad)
+        checks += 1
     call("cad_apply", {"document_id": request["document_id"], "expected_revision": 1, "operations":[{"op":"set_parameter", "name":"lip", "value":9}]})
     call("cad_export", {"document_id": request["document_id"], "revision":2, "feature_id":"formed", "format":"step"})
 print(f"{checks} sheet parity schema checks / {len(tools)} tools")

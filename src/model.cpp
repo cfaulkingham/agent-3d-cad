@@ -191,13 +191,18 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"const","surface_solid"}}},{"input",id},{"reverse",{{"type","boolean"}}}}, {"id","type","input"}));
   const Json workplane_schema = object({{"origin",vector_ref},{"normal",vector_ref},{"x_direction",vector_ref}}, {"origin","normal","x_direction"});
   const Json sheet_cut=object({{"offset",scalar_ref},{"width",scalar_ref},{"from",scalar_ref},{"to",scalar_ref}}, {"offset","width","from","to"});
+  const Json sheet_jog=object({{"return_id",id},{"offset",scalar_ref},{"moving_length",scalar_ref},{"carry",{{"type","array"},{"items",id},{"maxItems",32},{"uniqueItems",true}}}}, {"return_id","offset","moving_length","carry"});
   Json sheet_flange=object({{"id",id},{"edge",{{"$ref","#/$defs/selector"}}},{"parent",id},
     {"attachment",{{"enum",{"tip","start","end"}}}},{"fold_line",{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",2}}},
     {"inside_radius",scalar_ref},{"angle_deg",scalar_ref},{"length",scalar_ref},{"start_gap",scalar_ref},{"end_gap",scalar_ref},
-    {"hem",{{"type","boolean"}}},{"relief",object({{"width",scalar_ref},{"depth",scalar_ref}},{"width","depth"})},
+    {"jog",sheet_jog},{"hem",{{"type","boolean"}}},{"relief",object({{"width",scalar_ref},{"depth",scalar_ref}},{"width","depth"})},
     {"miter",object({{"start_deg",scalar_ref},{"end_deg",scalar_ref}},{"start_deg","end_deg"})},
     {"cuts",{{"type","array"},{"items",sheet_cut},{"maxItems",32}}}},
-    {"id","inside_radius","angle_deg","length"});
+    {"id","inside_radius","angle_deg"});
+  Json jog_forbidden=Json::array();for(const auto* key:{"hem","start_gap","end_gap","relief","miter","cuts"})jog_forbidden.push_back({{"required",{key}}});
+  sheet_flange["allOf"]=Json::array();
+  sheet_flange["allOf"].push_back({{"oneOf",Json::array({Json{{"required",{"length"}}},Json{{"required",{"jog"}}}})}});
+  sheet_flange["allOf"].push_back({{"if",{{"required",{"jog"}}}},{"then",{{"required",{"fold_line"}},{"not",{{"anyOf",jog_forbidden}}}}}});
   sheet_flange["oneOf"]=Json::array({Json{{"required",{"edge"}}},Json{{"required",{"parent"}}},Json{{"required",{"fold_line"}}}});
   sheet_flange["dependentRequired"]={{"attachment",{"parent"}}};
   features.push_back(object({{"id",id},{"type",{{"const","sheet_metal"}}},{"input",id},{"thickness",scalar_ref},
@@ -910,7 +915,8 @@ void validate_model(const Json& model) {
       for(const auto& flange:flanges) {
         const auto flange_id=text_field(flange,"id");
         try {
-          fields(flange,{"id","inside_radius","angle_deg","length"},{"edge","parent","attachment","fold_line","start_gap","end_gap","hem","relief","miter","cuts"});model_identifier(flange_id);
+          fields(flange,{"id","inside_radius","angle_deg"},{"length","jog","edge","parent","attachment","fold_line","start_gap","end_gap","hem","relief","miter","cuts"});model_identifier(flange_id);
+          if(flange.contains("jog")==flange.contains("length"))throw Error("invalid_model","A bend requires either straight length or internal jog intent");
           if(flange_ids.contains(flange_id))throw Error("invalid_model","Sheet-metal flange IDs must be unique");
           if(static_cast<int>(flange.contains("edge"))+static_cast<int>(flange.contains("parent"))+static_cast<int>(flange.contains("fold_line"))!=1)throw Error("invalid_model","A flange needs exactly one edge, parent or fold_line attachment");
           if(flange.contains("edge")) {
@@ -920,8 +926,19 @@ void validate_model(const Json& model) {
           if(flange.contains("parent")&&!flange_ids.contains(text_field(flange,"parent")))throw Error("invalid_model","Flange parent must name an earlier flange");
           if(flange.contains("attachment")&&(!flange.contains("parent")||(flange.at("attachment")!="tip"&&flange.at("attachment")!="start"&&flange.at("attachment")!="end")))throw Error("invalid_model","Attachment must be tip, start or end of a named parent");
           if(flange.contains("fold_line")){const auto& line=flange.at("fold_line");if(!line.is_array()||line.size()!=2)throw Error("invalid_model","A fold line has two endpoints");for(const auto& point:line)vector3(point,parameters);}
-          flange_ids.insert(flange_id);
-          positive(flange.at("inside_radius"));positive(flange.at("length"));
+          if(flange.contains("jog")) {
+            const auto& jog=flange.at("jog");fields(jog,{"return_id","offset","moving_length","carry"});
+            if(!flange.contains("fold_line"))throw Error("invalid_model","An internal jog requires a source-plane fold line");
+            for(const auto* key:{"hem","start_gap","end_gap","relief","miter","cuts"})if(flange.contains(key))throw Error("invalid_model","Jog trims must be preserved in the source blank or carried flange intent",{{"field",key}});
+            const auto return_id=text_field(jog,"return_id");model_identifier(return_id);
+            if(return_id==flange_id||flange_ids.contains(return_id))throw Error("invalid_model","Jog return bend ID must be unique");
+            positive(jog.at("moving_length"));if(std::abs(scalar(jog.at("offset"),parameters))<1e-5)throw Error("invalid_model","Jog offset must be nonzero");
+            const auto& carry=jog.at("carry");if(!carry.is_array()||carry.size()>32)throw Error("invalid_model","Jog carry must list at most 32 earlier attachment roots");
+            std::set<std::string> carried;for(const auto& item:carry){if(!item.is_string()||!flange_ids.contains(item.get<std::string>())||!carried.insert(item.get<std::string>()).second)throw Error("invalid_model","Jog carry IDs must be distinct earlier attachment roots");}
+            flange_ids.insert(return_id);
+          } else positive(flange.at("length"));
+          flange_ids.insert(flange_id);if(flange_ids.size()>32)throw Error("invalid_model","Sheet metal allows at most 32 bends including jog returns");
+          positive(flange.at("inside_radius"));
           const auto angle=std::abs(scalar(flange.at("angle_deg"),parameters,"deg"));
           if(flange.contains("hem")&&!flange.at("hem").is_boolean())throw Error("invalid_model","Hem is a boolean");
           const bool hem=flange.value("hem",false);

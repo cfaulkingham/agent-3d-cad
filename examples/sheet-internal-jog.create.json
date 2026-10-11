@@ -1,0 +1,139 @@
+{
+  "document_id": "sheetInternalJog",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "thickness": 1,
+      "k": 0.5,
+      "offset": 10,
+      "angle": 90,
+      "lip": 3
+    },
+    "features": [
+      {
+        "id": "profile",
+        "type": "sketch",
+        "workplane": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "profile": {
+          "type": "rectangle",
+          "width": 100,
+          "height": 60
+        }
+      },
+      {
+        "id": "formed",
+        "type": "sheet_metal",
+        "input": "profile",
+        "thickness": {
+          "parameter": "thickness"
+        },
+        "k_factor": {
+          "parameter": "k"
+        },
+        "flanges": [
+          {
+            "id": "wall",
+            "edge": {
+              "type": "geometric",
+              "feature_id": "profile",
+              "curve_kind": "line",
+              "expected_count": 1,
+              "center": {
+                "point": [
+                  100,
+                  30,
+                  0
+                ],
+                "tolerance": 1e-06
+              },
+              "direction": {
+                "vector": [
+                  0,
+                  1,
+                  0
+                ],
+                "tolerance": 1e-06
+              }
+            },
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": 10,
+            "miter": {
+              "start_deg": 15,
+              "end_deg": 10
+            },
+            "cuts": [
+              {
+                "offset": 20,
+                "width": 3,
+                "from": 1,
+                "to": 6
+              }
+            ]
+          },
+          {
+            "id": "lip",
+            "parent": "wall",
+            "inside_radius": 2,
+            "angle_deg": 90,
+            "length": {
+              "parameter": "lip"
+            }
+          },
+          {
+            "id": "step",
+            "fold_line": [
+              [
+                50,
+                0,
+                0
+              ],
+              [
+                50,
+                60,
+                0
+              ]
+            ],
+            "inside_radius": 2,
+            "angle_deg": {
+              "parameter": "angle"
+            },
+            "jog": {
+              "return_id": "stepReturn",
+              "offset": {
+                "parameter": "offset"
+              },
+              "moving_length": 50,
+              "carry": [
+                "wall"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "id": "flat",
+        "type": "sheet_unfold",
+        "input": "formed"
+      }
+    ],
+    "output": "flat"
+  }
+}

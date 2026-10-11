@@ -8,7 +8,7 @@ has no Python or sibling-repository dependency.
 ## Named attachments and chains
 
 Each item in `flanges` has a unique local `id`, `inside_radius`, `angle_deg`,
-`length`, and exactly one attachment:
+`length` (or the internal `jog` intent below), and exactly one attachment:
 
 - `edge`: an expected-count geometric selector on a straight outer boundary of
   the source sketch, as before.
@@ -38,6 +38,50 @@ radius R, thickness T, signed magnitude A and first straight length L, the
 parallel-face offset is `2*(R+T/2)*(1-cos(A)) + L*sin(A)` at the geometric middle
 surface. Use the actual signed frames to choose the desired direction. Each
 bend preserves its separate radius, ID and bend allowance.
+
+An internal jog consumes an existing blank instead of adding a stepped extension.
+Use a fold-line entry with `jog` in place of `length`:
+
+```json
+{"id":"step", "fold_line":[[50,0,0],[50,60,0]],
+ "inside_radius":2, "angle_deg":90,
+ "jog":{"return_id":"stepReturn", "offset":10,
+        "moving_length":50, "carry":["wall"]}}
+```
+
+`moving_length` is the developed depth from the stationary tangent to the far
+boundary. `offset` is the signed displacement of the parallel far panel and
+must agree with the signed first angle. For `a=abs(angle)`, the two equal bend
+allowances are `BA=a*(R+K*T)`, the run is
+`L=(abs(offset)-(2*R+T)*(1-cos(a)))/sin(a)`, and the far-panel depth is
+`moving_length-2*BA-L`. Angles in those formulas are radians. Both straight
+lengths must be at least 0.00001 mm. Offset, moving depth and angle accept ordinary
+editable scalar expressions. Both bend IDs count toward the existing 32-bend
+limit and remain distinct in developed bend reports.
+
+The complete bend/run/bend strip must exist unperforated in the captured blank.
+The far panel preserves its exact boundary trims, notches and holes. Its only
+connection to the stationary material must be the complete named fold line;
+material reaching around the moving region, a partial-depth cut or an interrupted
+fold line is rejected rather than creating an implicit slit. The stationary
+region and far panel must each remain one connected face.
+
+`carry` explicitly names earlier source-edge flange roots attached wholly to
+that far panel. Their entire existing descendant trees move with the panel;
+formed placement changes while their source selectors, local IDs, gaps, miters,
+cuts, relief and developed coordinates remain preserved. Undeclared attached
+roots, roots on the bend/run strip, repeated/already-carried roots and partial
+attachments fail. Add later geometry through `parent:"stepReturn"` or a carried
+flange ID; a parent edge interrupted by captured trims fails explicitly. An
+internal jog does not accept `hem`, endpoint gaps, `miter`, `relief` or `cuts` on
+the jog entry: author those shapes in the blank or the carried flange intent.
+This contract supports existing source-edge attachment trees, not folding an
+already formed bend a second time.
+
+With K=0.5 the formed and developed volumes agree. With another K, the preserved
+blank area still follows the neutral-axis allowances while physical bend volume
+uses the unchanged nominal thickness and inside radius. Neither source volume
+nor a manufacturing conservation law is silently substituted.
 
 `hem: true` permits exactly +180 or -180 degrees and an explicit positive
 inside radius, forming an open safety hem. Other bends retain their previous
@@ -122,6 +166,15 @@ formed and flat features export independently. Changing `lip`, `thickness` or
 `k` rebuilds the captured recipe, including the hem's formed placement and the
 developed bend lines. The developed output is aligned with the world XY plane
 for the ordinary exact top-view cutting DXF workflow.
+
+`examples/sheet-internal-jog.create.json` starts with a 100 by 60 mm blank,
+a 10 mm wall with endpoint miters and a cut crossing its bend, plus a 3 mm
+return lip. A jog at the blank midpoint carries that complete wall/lip tree
+up 10 mm. Editing the offset or angle repartitions the existing 50 mm moving
+depth while keeping the developed blank. The regression independently checks
+the axial retreat, raised wall and parallel panel from exact STEP faces. A
+separate tapered, holed panel proves that captured trims move without replacement
+by a rectangular approximation; a tiny valid hole in the bend strip is rejected.
 
 The dedicated `parity_sheet` suite covers analytic three-bend lengths and
 volumes, named side attachment, opposite-sign jogs, exact 180° hems, miter
