@@ -63,6 +63,26 @@ constraints or solver failure reject the feature. No constraint is silently drop
 validation still apply. As with other numerical geometry operations, these checks
 are not a formal global continuity proof between every sampled point.
 
+The first native solve requests an average of 50 initial discretization points
+per curve, at most four refinement passes, and degree-14/16-segment spline approximation. If native
+completion or independent verification rejects that construction, one fresh
+solve requests an average of 75 initial points, at most five passes, and degree-16/32-segment
+approximation. Each attempt rebuilds private copies of every original constraint;
+no failed result supplies modified edges to the next attempt. Both use one tenth
+of the public positional/angular/curvature tolerances internally and the same
+unchanged public acceptance checks. A first accepted result is retained. Input
+validation errors are not retried. Two rejected solves report both the original
+failure and final failure with attempt settings. These point counts are native
+initial resolution settings, not a cap on adaptive discretization; worker
+resource limits still apply to the entire feature operation.
+
+OCCT 8.0.1's `GeomPlate_BuildPlateSurface::Perform` exits at its iteration limit
+even when `VerifSurface` reports unmet objectives. `BRepFill_Filling` reports that
+plate error and separately approximates the plate as a spline, so completion
+alone establishes neither curve interpolation nor continuity. The original
+1e-5 mm cylinder regression remains unchanged, with an additional 1e-6 mm case
+checking the refined result independently after STEP.
+
 The pinned OCCT 8.0.1 call path is `BRepOffsetAPI_MakeFilling::Add` →
 `BRepFill_Filling::Build` / `AddConstraints` → `BRepFill_CurveConstraint` →
 `GeomPlate_CurveConstraint` / `GeomPlate_BuildPlateSurface`. It forwards the

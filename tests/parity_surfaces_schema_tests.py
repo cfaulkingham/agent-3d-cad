@@ -114,7 +114,23 @@ with tempfile.TemporaryDirectory(prefix="cad-surface-schema-") as temp:
             checks += 2
         run("cad_query", dict(document_id=name, revision=1, kind="topology"), root)
         run("cad_query", dict(document_id=name, revision=1, kind="mesh"), root)
-    for name in ("network_general", "network_rational", "network_closed", "network_periodic", "network_collapse", "sphere_nearest", "sphere_farthest"):
+    # Same nonplanar G2 geometry as the independent STEP oracle, with stricter
+    # positional demand; source-qualified selectors come from an actual call.
+    run("cad_create",dict(document_id="fill_support",model=model([cylinder])),root)
+    support = run("cad_query",dict(document_id="fill_support",revision=1,kind="topology"),root)["topology"]
+    def boundary_order(edge):
+        x,y,z=edge["center_mm"]
+        return 0 if abs(z)<1e-5 else 1 if abs(x)<1e-5 else 2 if abs(z-5)<1e-5 else 3
+    boundaries=[dict(input="patch",edge=e["selector"],face=support["faces"][0]["selector"],continuity="G2") for e in sorted(support["edges"],key=boundary_order)]
+    strict_fill=model([cylinder,dict(id="fill",type="surface_fill",boundaries=boundaries,tolerance=1e-6,
+        angular_tolerance=1e-3,curvature_tolerance=1e-3,points=[[math.sqrt(50),math.sqrt(50),2.5]])])
+    receipt=run("cad_create",dict(document_id="refined_fill",model=strict_fill),root)
+    assert receipt["revision"] == 1
+    saved=run("cad_read",dict(document_id="refined_fill",revision=1),root)
+    assert saved["model"]["features"][-1]["tolerance"] == 1e-6
+    assert saved["model"]["features"][-1]["boundaries"] == boundaries
+    checks += 3
+    for name in ("network_general", "network_rational", "network_closed", "network_periodic", "network_collapse", "sphere_nearest", "sphere_farthest", "refined_fill"):
         step = run("cad_export", dict(document_id=name, revision=1, format="step"), root)
         imported = run("cad_import", dict(document_id=name+"_step", path=step["path"], geometry="surface"), root)
         assert imported["summary"]["solid_count"] == 0

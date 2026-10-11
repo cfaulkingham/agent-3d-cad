@@ -1593,11 +1593,11 @@ TopoDS_Edge unique_surface_edge(const FeatureGeometry& source,const Json& select
   if(matched.size()!=1)throw Error(matched.empty()?"selection_missing":"selection_ambiguous","Surface boundary requires one uniquely selected exact edge",{{"source_feature_id",input},{"actual_count",matched.size()}});
   return TopoDS::Edge(source.edges(matched.front()));
 }
-TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources) {
+TopoDS_Face filling_surface_attempt(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources,bool refined,bool& built) {
   const auto tolerance=feature.at("tolerance").get<double>(),angular=feature.value("angular_tolerance",1e-4),curvature=feature.value("curvature_tolerance",1e-4);
   // Reserve an approximation margin for the plate-to-B-spline conversion;
   // independently checked public tolerances are never enlarged.
-  BRepOffsetAPI_MakeFilling filling(4,50,4,false,1e-8,tolerance*.1,angular*.1,curvature*.1,14,16);
+  BRepOffsetAPI_MakeFilling filling(4,refined?75:50,refined?5:4,false,1e-8,tolerance*.1,angular*.1,curvature*.1,refined?16:14,refined?32:16);
   struct Constraint {TopoDS_Edge edge;TopoDS_Face face;GeomAbs_Shape order;int index;};std::vector<Constraint> constraints;
   gp_Pnt start,previous;std::map<std::string,std::unique_ptr<BRepBuilderAPI_Copy>> copies;
   for(const auto& boundary:feature.at("boundaries")) {
@@ -1623,7 +1623,7 @@ TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std
   }
   if(previous.Distance(start)>tolerance)throw Error("invalid_model","Filling boundary must close explicitly; no missing edges are synthesized");
   if(feature.contains("points"))for(const auto& p:feature.at("points"))filling.Add(parameter_point(p,parameters));
-  filling.Build();if(!filling.IsDone())throw Error("kernel_failure","Constrained surface filling did not converge");
+  filling.Build();built=true;if(!filling.IsDone())throw Error("kernel_failure","Constrained surface filling did not converge");
   // OCCT 8.0.1's indexed G0Error accessor throws on valid C0 constraints;
   // use the algorithm's global maximum, followed by independent boundary checks.
   if(filling.G0Error()>tolerance||filling.G1Error()>angular||filling.G2Error()>curvature)throw Error("invalid_shape","Filling does not satisfy its explicit continuity tolerances",{{"distance_error_mm",filling.G0Error()},{"angular_error_rad",filling.G1Error()},{"curvature_error_per_mm",filling.G2Error()}});
@@ -1648,6 +1648,29 @@ TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std
     }
   }
   return face;
+}
+TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources) {
+  // Pinned OCCT 8.0.1 GeomPlate_BuildPlateSurface::Perform stops after NbIter
+  // even when VerifSurface reports unmet constraints. BRepFill_Filling exposes
+  // those plate errors, then separately approximates the plate as a B-spline.
+  // A completed operation therefore needs our unchanged independent checks.
+  // Keep the first accepted construction. Retry a rejected construction once
+  // with denser constraints and greater approximation resolution; blindly
+  // tightening the plate tolerance can worsen the conditioning of its solve.
+  bool built=false;
+  try{return filling_surface_attempt(feature,parameters,sources,false,built);}
+  catch(const Error& first) {
+    if(!built||(first.code!="invalid_shape"&&first.code!="kernel_failure"))throw;
+    // Each attempt reconstructs every constraint from fresh private copies, so
+    // no failed solver's modified pcurves or edge tolerances leak into the retry.
+    bool refined_built=false;
+    try{return filling_surface_attempt(feature,parameters,sources,true,refined_built);}
+    catch(const Error& last) {
+      auto details=last.details;details["solve_attempts"]=2;details["first_failure"]=first.json();
+      details["attempt_bounds"]=Json::array({{{"initial_points_per_curve",50},{"max_iterations",4},{"max_degree",14},{"max_segments",16}},{{"initial_points_per_curve",75},{"max_iterations",5},{"max_degree",16},{"max_segments",32}}});
+      throw Error(last.code,last.what(),details);
+    }
+  }
 }
 using Spline=occ::handle<Geom_BSplineCurve>;
 Spline network_curve(const Json& value,const Json& parameters) {

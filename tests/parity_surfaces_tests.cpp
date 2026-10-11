@@ -89,14 +89,14 @@ void filling(const fs::path& root){Json boundary=Json::array();for(const auto& c
  auto open=d;open["features"][0]["boundaries"].erase(3);fails("invalid_model",[&]{BuiltModel invalid(open);});
 }
 
-void nonplanar_continuity(const fs::path& root) {
+void nonplanar_continuity(const fs::path& root,double position_tolerance=1e-5) {
   const auto patch=cylindrical();BuiltModel support(model(Json::array({patch}),"patch"));const auto topology=support.topology();
   std::vector<Json> edges=topology.at("edges").get<std::vector<Json>>();
   const auto order=[](const Json& edge){const auto c=edge.at("center_mm").get<std::array<double,3>>();return std::abs(c[2])<1e-5?0:std::abs(c[0])<1e-5?1:std::abs(c[2]-5)<1e-5?2:3;};
   std::sort(edges.begin(),edges.end(),[&](const Json& a,const Json& b){return order(a)<order(b);});
   Json boundaries=Json::array();for(const auto& edge:edges)boundaries.push_back({{"input","patch"},{"edge",edge.at("selector")},{"face",topology.at("faces")[0].at("selector")},{"continuity","G2"}});
-  const auto d=model(Json::array({patch,{{"id","fill"},{"type","surface_fill"},{"boundaries",boundaries},{"tolerance",1e-5},{"angular_tolerance",1e-3},{"curvature_tolerance",1e-3},{"points",{{std::sqrt(50),std::sqrt(50),2.5}}}}}),"fill");
-  BuiltModel filled(d);const auto shape=independent_step(filled,root/"cylinder-G2.step");const auto face=TopoDS::Face(TopExp_Explorer(shape,TopAbs_FACE).Current());const auto surface=BRep_Tool::Surface(face);
+  const auto d=model(Json::array({patch,{{"id","fill"},{"type","surface_fill"},{"boundaries",boundaries},{"tolerance",position_tolerance},{"angular_tolerance",1e-3},{"curvature_tolerance",1e-3},{"points",{{std::sqrt(50),std::sqrt(50),2.5}}}}}),"fill");
+  BuiltModel filled(d);const auto shape=independent_step(filled,root/(position_tolerance<1e-5?"cylinder-G2-refined.step":"cylinder-G2.step"));const auto face=TopoDS::Face(TopExp_Explorer(shape,TopAbs_FACE).Current());const auto surface=BRep_Tool::Surface(face);
   double max_distance=0,max_angle=0,max_curvature=0;
   // Independent analytic quarter-cylinder oracle after a fresh STEP read.
   // Boundary continuity does not constrain the whole interior to a cylinder.
@@ -110,9 +110,9 @@ void nonplanar_continuity(const fs::path& root) {
     const auto k=[&](const gp_Dir& a,const gp_Dir& b){return props.MaxCurvature()*maximum.Dot(a)*maximum.Dot(b)+props.MinCurvature()*minimum.Dot(a)*minimum.Dot(b);};
     max_curvature=std::max({max_curvature,std::abs(std::abs(k(azimuth,azimuth))-.1),std::abs(k(axis,axis)),std::abs(k(axis,azimuth))});
   }
-  require(max_distance<1e-5,"Nonplanar G2 boundary position meets authored tolerance after STEP");require(max_angle<1e-3,"Nonplanar G2 tangent plane meets authored tolerance after STEP");require(max_curvature<1e-3,"Nonplanar G2 curvature tensor agrees with analytic cylinder after STEP");
-  GeomAPI_ProjectPointOnSurf interior(gp_Pnt(std::sqrt(50),std::sqrt(50),2.5),surface);require(interior.IsDone()&&interior.LowerDistance()<1e-5,"G2 interior point is independently preserved");
-  std::cout<<"G2 STEP errors: distance="<<max_distance<<" mm, angle="<<max_angle<<" rad, curvature="<<max_curvature<<" /mm\n";
+  require(max_distance<position_tolerance,"Nonplanar G2 boundary position meets authored tolerance after STEP");require(max_angle<1e-3,"Nonplanar G2 tangent plane meets authored tolerance after STEP");require(max_curvature<1e-3,"Nonplanar G2 curvature tensor agrees with analytic cylinder after STEP");
+  GeomAPI_ProjectPointOnSurf interior(gp_Pnt(std::sqrt(50),std::sqrt(50),2.5),surface);require(interior.IsDone()&&interior.LowerDistance()<position_tolerance,"G2 interior point is independently preserved");
+  std::cout<<"G2 STEP errors (position tolerance="<<position_tolerance<<"): distance="<<max_distance<<" mm, angle="<<max_angle<<" rad, curvature="<<max_curvature<<" /mm\n";
   auto ambiguous=d;ambiguous["features"][1]["boundaries"][0]["edge"]={{"type","geometric"},{"feature_id","patch"},{"curve_kind",edges[0].at("selector").at("curve_kind")},{"expected_count",1}};fails("selection_ambiguous",[&]{BuiltModel invalid(ambiguous);});
 }
 void component_capture(const fs::path& root) {
@@ -225,4 +225,4 @@ void reversed_projection_orientation(const fs::path& root) {
 }
 void rollback(const fs::path& root){auto d=model(Json::array({plane()}),"patch");Service service(root/"rollback");service.call("cad_create",{{"document_id","surface"},{"model",d}});const auto before=service.call("cad_read",{{"document_id","surface"}});const auto bad=Json{{"id","trimmed"},{"type","surface_trim"},{"input","patch"},{"boundary",polygon({{-.1,.1},{.9,.1},{.9,.9},{-.1,.9}})}};fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","surface"},{"expected_revision",1},{"operations",Json::array({{{"op","add_feature"},{"feature",bad}},{{"op","set_output"},{"feature_id","trimmed"}}})}});});require(service.call("cad_read",{{"document_id","surface"}})==before,"Failed worker surface edit preserves committed revision and bytes");}
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);component_capture(temp.path);networks(temp.path);projections(temp.path);generalized_networks(temp.path);projection_branches(temp.path);reversed_projection_orientation(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);nonplanar_continuity(temp.path,1e-6);component_capture(temp.path);networks(temp.path);projections(temp.path);generalized_networks(temp.path);projection_branches(temp.path);reversed_projection_orientation(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
