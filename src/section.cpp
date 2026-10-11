@@ -23,7 +23,8 @@ Json section_definitions(){
     {"area_mm2",nonnegative},{"perimeter_mm",nonnegative},{"center_mm",point},{"wire_count",count}});
   auto curve=object({{"id",{{"type","string"},{"pattern","^section-[1-9][0-9]*$"}}},{"part_id",owner},{"solid_index",{{"type","integer"},{"minimum",1},{"maximum",section_part_limit}}},
     {"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},{"length_mm",nonnegative},{"center_mm",point},{"bounds_mm",object({{"min",point},{"max",point}})},
-    {"degenerate",{{"type","boolean"}}},{"points",array(point,section_point_limit)},{"direction",point},{"axis",point},{"radius_mm",nonnegative}});
+    {"degenerate",{{"type","boolean"}}},{"points",array(point,section_point_limit)},{"direction",point},{"axis",point},{"radius_mm",nonnegative},
+    {"closed",{{"type","boolean"}}},{"endpoints_mm",array(point,2,2)}});
   curve["required"]={"id","part_id","solid_index","curve_kind","length_mm","center_mm","bounds_mm","degenerate","points"};
   const Json status={{"enum",{"empty","tangent","area"}}};
   const Json scope=object({{"part_id",owner},{"source_plane_offset_mm",scalar},{"displacement_mm",point},{"area_mm2",nonnegative},{"boundary_length_mm",nonnegative},

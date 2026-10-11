@@ -523,6 +523,21 @@ async def smoke(executable, workspace):
         section_args={"document_id":"sdk_section","revision":1,"evaluation_id":section_eval["evaluation_id"],"feature_id":"ring","query":section_query}
         native_section=await call(client,definitions,"cad_measure",section_args)
         require(math.isclose(native_section["report"]["area_mm2"],21*math.pi,abs_tol=1e-6) and native_section["report"]["regions"][0]["wire_count"]==2,"SDK native section lost exact annular area or its interior wire")
+        require(len(native_section["report"]["curves"]) == 2,
+                "SDK annular section must expose both circular boundaries")
+        for curve in native_section["report"]["curves"]:
+            require(curve["closed"] is True and curve["radius_mm"] in (2, 5),
+                    "SDK annular section lost exact circle closure or radius")
+            require(len(curve["endpoints_mm"]) == 2 and all(
+                math.isclose(p[2], 5, abs_tol=1e-7) and
+                math.isclose(math.hypot(p[0], p[1]), curve["radius_mm"], abs_tol=1e-7)
+                for p in curve["endpoints_mm"]), "SDK section endpoints left their analytic circle")
+        section_validator = Draft202012Validator(definitions["cad_measure"].output_schema)
+        for field, value in [("closed", "yes"), ("endpoints_mm", [[5, 0, 5]]), ("unchecked_extra", True)]:
+            malformed = json.loads(json.dumps(native_section))
+            malformed["report"]["curves"][0][field] = value
+            require(not section_validator.is_valid(malformed),
+                    f"Section schema accepted malformed {field}")
         section_job=await call(client,definitions,"cad_job",{"action":"submit","request_id":"sdk_section_job","tool":"cad_measure","arguments":section_args})
         section_completed=await poll(client,definitions,section_job["job_id"])
         require(section_completed["state"]=="succeeded" and section_completed["result"]["report"]["mesh"]["triangles"],"SDK asynchronous section did not return actual native cap triangles")

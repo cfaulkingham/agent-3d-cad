@@ -3,6 +3,7 @@
 #include "agentcad/jobs.hpp"
 #include "agentcad/model.hpp"
 #include "agentcad/service.hpp"
+#include "mutation_test_support.hpp"
 #include <STEPControl_Reader.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepGProp.hxx>
@@ -92,7 +93,7 @@ void geometry_and_persistence(){
     {{"op","set_output"},{"feature_id","module"}}
   })}});
   near(captured.at("summary").at("volume_mm3"),80);
-  Temporary independent;Service portable(independent.root);auto portable_record=portable.call("cad_create",{{"document_id","portable"},{"model",captured.at("model")}});near(portable_record.at("summary").at("volume_mm3"),80);
+  Temporary independent;Service portable(independent.root);auto portable_record=portable.call("cad_create",{{"document_id","portable"},{"model",test::receipt_source(service,captured)}});near(portable_record.at("summary").at("volume_mm3"),80);
 }
 }
 int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));arithmetic();geometry_and_persistence();std::cout<<checks<<" parametric checks passed\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

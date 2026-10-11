@@ -9,6 +9,18 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — active, 2026-10-10
 
+Final integration checkpoint: the official **MCP SDK 2.3.0 passed 1,403
+interoperability checks**, including native stdio framing, current closed
+schemas, jobs, saved-source history, resource bytes and section geometry.
+The run exposed undeclared `closed`/`endpoints_mm` fields in section curves;
+their typed schema and independent analytic/rejection checks now pass.
+The initial new rejection probe used wire-field access on the SDK's typed Tool
+object; its harness now uses the SDK's `output_schema` attribute. The remaining
+parametric component portability test now reads the exact receipt revision.
+Focused `parametric`, `section` and `app_protocol` CTests passed **3/3 in 6.88 s**.
+Complete native acceptance and the independently detected STEP centroid fix
+remain in progress; these results are not a final full-branch acceptance claim.
+
 Integration checkpoint: strict compact committed-revision receipts now include
 `model_sha256`; `cad_read` at the returned revision retains the complete editable
 source. CLI, MCP, mutation replay and durable job recovery use the same Service
