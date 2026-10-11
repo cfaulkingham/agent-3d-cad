@@ -9,6 +9,14 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
+Original-scope completion audit at `2cdf20d` reopened concrete native workflows:
+constrained point/common tangency and fixed-radius arcs, inverted full-round and
+general curved hull inputs; differently parameterized/rational/closed Gordon
+networks and explicit curved projection branches; and an internal jog that
+carries an existing far panel and attached walls. Parallel implementation is
+underway. The `d359331` test evidence below remains valid for its initial bounded
+contracts; it does not prove these reopened workflows or completion of the goal.
+
 Continuation audit at ledger `465e937`: the final packaged binary passed **110
 additional resource-delivery checks across 10 files** (STEP, STL, 3MF/layout,
 PDF, SVG and four DXFs). Independently decoded bytes match native outputs after
