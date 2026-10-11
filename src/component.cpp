@@ -21,6 +21,7 @@ std::set<std::string> dependencies(const Json& feature) {
   for(const auto* key:{"input","left","right","target"})if(feature.contains(key))result.insert(text_field(feature,key));
   if(feature.contains("path")&&feature.at("path").is_string())result.insert(text_field(feature,"path"));
   if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input"))result.insert(text_field(b,"input"));
+  if(feature.contains("constraints"))for(const auto& c:feature.at("constraints"))if(c.contains("edge"))result.insert(text_field(c.at("edge"),"feature_id"));
   if(feature.contains("sections"))for(const auto& id:feature.at("sections"))result.insert(id.get<std::string>());
   if(feature.contains("inputs"))for(const auto& id:feature.at("inputs"))result.insert(id.get<std::string>());
   if(feature.at("type")=="assembly")for(const auto& part:feature.at("parts"))result.insert(text_field(part,"input"));
@@ -97,6 +98,7 @@ Materialized materialize(const Json& component) {
     for(const auto* key:{"input","left","right","target"})if(copy.contains(key))copy[key]=result.feature_map.at(text_field(copy,key));
     if(copy.contains("path")&&copy.at("path").is_string())copy["path"]=result.feature_map.at(text_field(copy,"path"));
     if(copy.contains("boundaries"))for(auto& b:copy["boundaries"])if(b.contains("input")){b["input"]=result.feature_map.at(text_field(b,"input"));b["edge"]["feature_id"]=b["input"];if(b.contains("face"))b["face"]["feature_id"]=b["input"];}
+    if(copy.contains("constraints"))for(auto& c:copy["constraints"])if(c.contains("edge"))c["edge"]["feature_id"]=result.feature_map.at(text_field(c.at("edge"),"feature_id"));
     if(copy.contains("sections"))for(auto& section:copy["sections"])section=result.feature_map.at(section.get<std::string>());
     if(copy.contains("inputs"))for(auto& input:copy["inputs"])input=result.feature_map.at(input.get<std::string>());
     for(const auto* key:{"edges","vertices"})if(copy.contains(key)&&copy.at(key).is_object())copy[key]["feature_id"]=result.feature_map.at(text_field(copy.at(key),"feature_id"));

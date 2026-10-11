@@ -21,6 +21,15 @@
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepOffsetAPI_DraftAngle.hxx>
 #include <Geom2d_Line.hxx>
+#include <Geom2dGcc_Lin2d2Tan.hxx>
+#include <Geom2dGcc_Circ2d2TanRad.hxx>
+#include <Geom2dGcc_QualifiedCurve.hxx>
+#include <Geom2dAPI_ProjectPointOnCurve.hxx>
+#include <Geom2dAdaptor_Curve.hxx>
+#include <Geom2d_CartesianPoint.hxx>
+#include <Geom2d_Circle.hxx>
+#include <ElCLib.hxx>
+
 #include <gp_GTrsf.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepOffsetAPI_MakePipe.hxx>
@@ -1169,6 +1178,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   for (const auto* key:{"input","left","right","target"}) if (feature.contains(key)) dependencies.push_back(feature.at(key));
   if(feature.contains("path")&&feature.at("path").is_string())dependencies.push_back(feature.at("path"));
   if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input")&&std::find(dependencies.begin(),dependencies.end(),b.at("input"))==dependencies.end())dependencies.push_back(b.at("input"));
+  if(feature.contains("constraints"))for(const auto& c:feature.at("constraints"))if(c.contains("edge")&&std::find(dependencies.begin(),dependencies.end(),c.at("edge").at("feature_id"))==dependencies.end())dependencies.push_back(c.at("edge").at("feature_id"));
   if (feature.contains("sections")) dependencies=feature.at("sections");
   if (feature.contains("inputs")) dependencies=feature.at("inputs");
   if (feature.at("type")=="assembly") {
@@ -1621,7 +1631,122 @@ struct SketchCoordinates {
   gp_Pnt2d local(const gp_Pnt& point)const {const gp_Vec v(plane.Location(),point);if(std::abs(v.Dot(gp_Vec(plane.Direction())))>1e-7)throw Error("invalid_model","Sketch path geometry must lie in its authored workplane");return {v.Dot(gp_Vec(plane.XDirection())),v.Dot(gp_Vec(plane.YDirection()))};}
   gp_Pnt world(const gp_Pnt2d& point)const {return plane.Location().Translated(gp_Vec(plane.XDirection())*point.X()+gp_Vec(plane.YDirection())*point.Y());}
 };
-TopoDS_Face sketch_hull(const std::vector<TopoDS_Shape>& inputs,const gp_Ax2& plane) {
+TopoDS_Wire constrained_curve(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources) {
+  constexpr double tolerance=1e-7;
+  const auto plane=parameter_plane(feature.at("workplane"),parameters);const SketchCoordinates coordinates{plane};
+  struct Constraint {bool point=false;gp_Pnt2d p;occ::handle<Geom2d_Curve> curve;double first=0,last=0;GccEnt_Position qualifier=GccEnt_unqualified;};
+  std::array<Constraint,2> constraints;
+  for(int i=0;i<2;++i){auto& result=constraints[i];const auto& rule=feature.at("constraints")[i];
+    if(rule.contains("point")){result.point=true;result.p=coordinates.local(parameter_point(rule.at("point"),parameters));continue;}
+    const auto& selector=rule.at("edge");const auto source=text_field(selector,"feature_id");const auto edge=unique_surface_edge(sources.at(source),selector,parameters,source);
+    gp_Trsf transform;transform.SetTransformation(gp_Ax3(plane));BRepBuilderAPI_Transform local(edge,transform,true);Bnd_Box bounds;BRepBndLib::AddOptimal(local.Shape(),bounds,false,false);const auto box=bounds.Get();
+    if(std::abs(box.Zmin)>tolerance||std::abs(box.Zmax)>tolerance)throw Error("invalid_model","Tangency constraints must lie in the authored workplane");
+    const auto curve=BRep_Tool::Curve(edge,result.first,result.last);if(curve.IsNull())throw Error("invalid_model","Tangency constraint needs a native 3D curve");result.curve=GeomAPI::To2d(curve,gp_Pln(plane));
+    if(result.curve.IsNull())throw Error("invalid_model","Tangency constraint cannot be represented as a planar native curve");
+    const auto q=rule.value("qualifier",std::string("unqualified"));result.qualifier=q=="enclosed"?GccEnt_enclosed:q=="enclosing"?GccEnt_enclosing:q=="outside"?GccEnt_outside:GccEnt_unqualified;
+    if(edge.Orientation()==TopAbs_REVERSED){const auto a=result.curve->ReversedParameter(result.last),b=result.curve->ReversedParameter(result.first);result.curve=result.curve->Reversed();result.first=a;result.last=b;}
+  }
+  // Solver ordering is internal only. Public constraints and orientation keep
+  // their authored order; no native solution index becomes document identity.
+  bool swapped=false;if(constraints[0].point&&!constraints[1].point){std::swap(constraints[0],constraints[1]);swapped=true;}
+  const auto qualified=[](const Constraint& c){return Geom2dGcc_QualifiedCurve(Geom2dAdaptor_Curve(c.curve,c.first,c.last),c.qualifier);};
+  const auto contact_valid=[&](const Constraint& c,const gp_Pnt2d& contact,const gp_Vec2d& tangent){
+    if(c.point)return c.p.Distance(contact)<=tolerance;
+    Geom2dAPI_ProjectPointOnCurve projection(contact,c.curve,c.first,c.last);if(projection.NbPoints()==0||projection.LowerDistance()>tolerance)return false;
+    gp_Pnt2d point;gp_Vec2d derivative;c.curve->D1(projection.LowerDistanceParameter(),point,derivative);
+    return derivative.Magnitude()>1e-12&&tangent.Magnitude()>1e-12&&std::abs(derivative.Crossed(tangent))/(derivative.Magnitude()*tangent.Magnitude())<=1e-6;
+  };
+  std::vector<TopoDS_Wire> matches;std::vector<std::array<gp_Pnt,3>> selected_geometry;const auto landmark=parameter_point(feature.at("solution").at("point"),parameters);coordinates.local(landmark);
+  const auto selection_tolerance=scalar(feature.at("solution").at("tolerance"),parameters);
+  const auto add=[&](const TopoDS_Edge& edge){const auto wire=BRepBuilderAPI_MakeWire(edge).Wire();const CurvePath path(wire);const auto midpoint=path.sample(.5).point;if(midpoint.Distance(landmark)>selection_tolerance)return;
+    const auto start=path.sample(0).point,end=path.sample(1).point;for(const auto& previous:selected_geometry)if(midpoint.Distance(previous[1])<=tolerance&&((start.Distance(previous[0])<=tolerance&&end.Distance(previous[2])<=tolerance)||(start.Distance(previous[2])<=tolerance&&end.Distance(previous[0])<=tolerance)))return;check_curve_shape(wire);matches.push_back(wire);selected_geometry.push_back({start,midpoint,end});};
+  if(feature.at("type")=="curve_constrained_line") {
+    std::unique_ptr<Geom2dGcc_Lin2d2Tan> solver;
+    if(constraints[1].point)solver=std::make_unique<Geom2dGcc_Lin2d2Tan>(qualified(constraints[0]),constraints[1].p,1e-9);
+    else solver=std::make_unique<Geom2dGcc_Lin2d2Tan>(qualified(constraints[0]),qualified(constraints[1]),1e-9);
+    if(!solver->IsDone())throw Error("kernel_failure","Native tangent-line solver did not converge");
+    if(solver->NbSolutions()>128)throw Error("limit_exceeded","Tangent-line solution budget exceeded");
+    for(int i=1;i<=solver->NbSolutions();++i){double a,b;gp_Pnt2d p,q;solver->Tangency1(i,a,b,p);solver->Tangency2(i,a,b,q);const gp_Vec2d tangent(p,q);
+      if(p.Distance(q)<=tolerance||!contact_valid(constraints[0],p,tangent)||!contact_valid(constraints[1],q,tangent))continue;
+      if(swapped)std::swap(p,q);add(BRepBuilderAPI_MakeEdge(coordinates.world(p),coordinates.world(q)).Edge());}
+  } else {
+    const double radius=scalar(feature.at("radius"),parameters);std::unique_ptr<Geom2dGcc_Circ2d2TanRad> solver;
+    if(constraints[0].point)solver=std::make_unique<Geom2dGcc_Circ2d2TanRad>(new Geom2d_CartesianPoint(constraints[0].p),new Geom2d_CartesianPoint(constraints[1].p),radius,tolerance);
+    else if(constraints[1].point)solver=std::make_unique<Geom2dGcc_Circ2d2TanRad>(qualified(constraints[0]),new Geom2d_CartesianPoint(constraints[1].p),radius,tolerance);
+    else solver=std::make_unique<Geom2dGcc_Circ2d2TanRad>(qualified(constraints[0]),qualified(constraints[1]),radius,tolerance);
+    if(!solver->IsDone())throw Error("kernel_failure","Native tangent-arc solver did not converge");
+    if(solver->NbSolutions()>128)throw Error("limit_exceeded","Tangent-arc solution budget exceeded");
+    for(int i=1;i<=solver->NbSolutions();++i){if(solver->IsTheSame1(i)||solver->IsTheSame2(i))throw Error("selection_ambiguous","Coincident tangency constraints do not determine finite contact points");
+      double a,b;gp_Pnt2d p,q;solver->Tangency1(i,a,b,p);solver->Tangency2(i,a,b,q);const auto circle=solver->ThisSolution(i);
+      const gp_Vec2d rp(circle.Location(),p),rq(circle.Location(),q);if(p.Distance(q)<=tolerance||std::abs(rp.Magnitude()-radius)>tolerance||std::abs(rq.Magnitude()-radius)>tolerance)continue;
+      if(!contact_valid(constraints[0],p,gp_Vec2d(-rp.Y(),rp.X()))||!contact_valid(constraints[1],q,gp_Vec2d(-rq.Y(),rq.X())))continue;
+      if(swapped)std::swap(p,q);const auto curve=GeomAPI::To3d(new Geom2d_Circle(circle),gp_Pln(plane));double first=ElCLib::Parameter(circle,p),last=ElCLib::Parameter(circle,q);while(last<=first)last+=2*std::numbers::pi;
+      add(BRepBuilderAPI_MakeEdge(curve,first,last).Edge());auto other=BRepBuilderAPI_MakeEdge(curve,last,first+2*std::numbers::pi).Edge();other.Reverse();add(other);
+    }
+  }
+  if(matches.size()!=1)throw Error(matches.empty()?"selection_missing":"selection_ambiguous","Tangency solution midpoint must uniquely identify one finite native solution",{{"actual_count",matches.size()}});
+  return matches.front();
+}
+
+TopoDS_Face general_sketch_hull(const std::vector<TopoDS_Shape>& inputs,const gp_Ax2& plane,double tolerance) {
+  // The polygon is a bounded contact-search scaffold only. Result intervals
+  // are trimmed from their original native curves; only hull bridges are lines.
+  // Newton-refined contacts and independent containment samples are checked
+  // against the authored numerical tolerance, without claiming a global proof.
+  const SketchCoordinates coordinates{plane};
+  struct Source {occ::handle<Geom_Curve> curve;double first,last;std::vector<double> samples;};
+  struct Location {std::size_t source,index;double parameter;};
+  struct Point {gp_Pnt2d xy;std::vector<Location> locations;};
+  std::vector<Source> sources;std::vector<Point> points;
+  for(const auto& input:inputs)for(TopExp_Explorer it(input,TopAbs_EDGE);it.More();it.Next()) {
+    if(sources.size()>=256)throw Error("limit_exceeded","General hull permits at most 256 source edges");
+    const auto edge=TopoDS::Edge(it.Current());gp_Trsf transform;transform.SetTransformation(gp_Ax3(plane));BRepBuilderAPI_Transform local(edge,transform,true);Bnd_Box bounds;BRepBndLib::AddOptimal(local.Shape(),bounds,false,false);const auto box=bounds.Get();
+    if(std::abs(box.Zmin)>1e-7||std::abs(box.Zmax)>1e-7)throw Error("invalid_model","Hull source must lie in the authored workplane");
+    Source source;source.curve=BRep_Tool::Curve(edge,source.first,source.last);if(source.curve.IsNull())throw Error("invalid_model","Hull source needs a native 3D curve");BRepAdaptor_Curve adaptor(edge);
+    GCPnts_QuasiUniformDeflection sampling(adaptor,tolerance/16);if(!sampling.IsDone()||sampling.NbPoints()<2)throw Error("kernel_failure","Hull contact sampling failed");
+    if(points.size()+sampling.NbPoints()>65536)throw Error("limit_exceeded","Hull contact search exceeds 65536 samples; choose a coarser contact_tolerance");
+    for(int i=1;i<=sampling.NbPoints();++i){const auto u=sampling.Parameter(i);source.samples.push_back(u);points.push_back({coordinates.local(source.curve->Value(u)),{{sources.size(),static_cast<std::size_t>(i-1),u}}});}
+    sources.push_back(std::move(source));
+  }
+  std::sort(points.begin(),points.end(),[](const Point& a,const Point& b){return std::pair{a.xy.X(),a.xy.Y()}<std::pair{b.xy.X(),b.xy.Y()};});
+  std::vector<Point> unique;for(auto& p:points){if(!unique.empty()&&unique.back().xy.Distance(p.xy)<=1e-9)unique.back().locations.insert(unique.back().locations.end(),p.locations.begin(),p.locations.end());else unique.push_back(std::move(p));}
+  points=std::move(unique);if(points.size()<3)throw Error("invalid_shape","Hull has no planar area");
+  const auto cross=[&](std::size_t a,std::size_t b,std::size_t c){return gp_Vec2d(points[a].xy,points[b].xy).Crossed(gp_Vec2d(points[a].xy,points[c].xy));};
+  std::vector<std::size_t> hull;
+  for(std::size_t i=0;i<points.size();++i){while(hull.size()>=2&&cross(hull[hull.size()-2],hull.back(),i)<=0)hull.pop_back();hull.push_back(i);}
+  const auto lower=hull.size();for(std::size_t i=points.size()-1;i-->0;){while(hull.size()>lower&&cross(hull[hull.size()-2],hull.back(),i)<=0)hull.pop_back();hull.push_back(i);}hull.pop_back();
+  struct Span {int source=-1;double first=0,last=0;gp_Pnt a,b;};std::vector<Span> spans;
+  for(std::size_t i=0;i<hull.size();++i){const auto& a=points[hull[i]];const auto& b=points[hull[(i+1)%hull.size()]];Span span;span.a=coordinates.world(a.xy);span.b=coordinates.world(b.xy);
+    for(const auto& x:a.locations)for(const auto& y:b.locations)if(x.source==y.source&&(x.index+1==y.index||y.index+1==x.index)){span.source=static_cast<int>(x.source);span.first=x.parameter;span.last=y.parameter;}
+    if(span.source>=0&&!spans.empty()&&spans.back().source==span.source&&std::abs(spans.back().last-span.first)<1e-10&&(spans.back().last-spans.back().first)*(span.last-span.first)>0){spans.back().last=span.last;spans.back().b=span.b;}else spans.push_back(span);
+  }
+  if(spans.size()<2||spans.size()>1024)throw Error("limit_exceeded","Hull native interval count is outside 2–1024");
+  const auto evaluate=[&](const Span& span,double u,gp_Pnt2d& p,gp_Vec2d& d1,gp_Vec2d& d2){gp_Pnt point;gp_Vec a,b;sources[span.source].curve->D2(u,point,a,b);p=coordinates.local(point);d1={a.Dot(gp_Vec(plane.XDirection())),a.Dot(gp_Vec(plane.YDirection()))};d2={b.Dot(gp_Vec(plane.XDirection())),b.Dot(gp_Vec(plane.YDirection()))};};
+  for(std::size_t i=0;i<spans.size();++i)if(spans[i].source<0){auto& bridge=spans[i];auto& before=spans[(i+spans.size()-1)%spans.size()];auto& after=spans[(i+1)%spans.size()];double u=before.last,v=after.first;
+    const auto interior=[&](const Span& span,double parameter){return span.source>=0&&parameter>sources[span.source].first+1e-10&&parameter<sources[span.source].last-1e-10;};
+    const bool free_a=interior(before,u),free_b=interior(after,v);if(!free_a&&!free_b)continue;
+    gp_Pnt2d a=coordinates.local(bridge.a),b=coordinates.local(bridge.b);gp_Vec2d da,db,dda,ddb;
+    const auto residual=[&](){if(free_a)evaluate(before,u,a,da,dda);if(free_b)evaluate(after,v,b,db,ddb);const gp_Vec2d delta(a,b);if((free_a&&da.Magnitude()<1e-12)||(free_b&&db.Magnitude()<1e-12))throw Error("invalid_model","Hull contact has undefined tangent");return std::max(free_a?std::abs(da.Crossed(delta))/da.Magnitude():0.,free_b?std::abs(db.Crossed(delta))/db.Magnitude():0.);};
+    for(int iteration=0;iteration<40&&residual()>tolerance/8;++iteration){const gp_Vec2d delta(a,b);const double f=free_a?da.Crossed(delta):0,g=free_b?db.Crossed(delta):0,A=free_a?dda.Crossed(delta):1,D=free_b?ddb.Crossed(delta):1,B=free_a&&free_b?da.Crossed(db):0;double du=0,dv=0;
+      if(free_a&&free_b){const double determinant=A*D-B*B;if(std::abs(determinant)<1e-20)break;du=(-f*D+B*g)/determinant;dv=(-g*A+B*f)/determinant;}
+      else if(free_a){if(std::abs(A)<1e-20)break;du=-f/A;}else {if(std::abs(D)<1e-20)break;dv=-g/D;}
+      if(free_a){const auto& source=sources[before.source];const double low=before.last>before.first?before.first:source.first,high=before.last>before.first?source.last:before.first;u=std::clamp(u+std::clamp(du,-(high-low)/4,(high-low)/4),low+1e-12,high-1e-12);}
+      if(free_b){const auto& source=sources[after.source];const double low=after.last>after.first?source.first:after.last,high=after.last>after.first?after.last:source.last;v=std::clamp(v+std::clamp(dv,-(high-low)/4,(high-low)/4),low+1e-12,high-1e-12);}
+    }
+    const auto error=residual();if(!std::isfinite(error)||error>tolerance)throw Error("kernel_failure","Hull contact refinement exceeds contact_tolerance",{{"contact_error_mm",error},{"contact_tolerance_mm",tolerance}});
+    if(free_a){before.last=u;before.b=coordinates.world(a);bridge.a=before.b;}if(free_b){after.first=v;after.a=coordinates.world(b);bridge.b=after.a;}
+  }
+  BRepBuilderAPI_MakeWire wire;for(const auto& span:spans){if(span.a.Distance(span.b)<1e-9&&span.source<0)continue;TopoDS_Edge edge;
+    if(span.source<0)edge=BRepBuilderAPI_MakeEdge(span.a,span.b).Edge();else {if(std::abs(span.last-span.first)<1e-12)throw Error("invalid_shape","Hull contact collapsed a retained native interval");BRepBuilderAPI_MakeEdge retained(sources[span.source].curve,std::min(span.first,span.last),std::max(span.first,span.last));if(!retained.IsDone())throw Error("kernel_failure","Hull native curve trimming failed");edge=retained.Edge();if(span.last<span.first)edge.Reverse();}wire.Add(edge);}
+  if(!wire.IsDone())throw Error("invalid_shape","Hull contact intervals do not form one closed wire");BRepBuilderAPI_MakeFace result(gp_Pln(plane),wire.Wire(),true);if(!result.IsDone())throw Error("invalid_shape","Hull has no valid native planar face");check_sketch_shape(result.Face(),plane);
+  // Verify original curve samples and independent interval midpoints against
+  // the native result. This is numerical containment at the declared tolerance.
+  std::size_t verified=0;for(const auto& source:sources)for(std::size_t i=0;i<source.samples.size();++i)for(int half=0;half<(i+1<source.samples.size()?2:1);++half){const auto u=half?(source.samples[i]+source.samples[i+1])/2:source.samples[i];const auto p=source.curve->Value(u);BRepClass_FaceClassifier inside(result.Face(),p,1e-7);if(inside.State()!=TopAbs_IN&&inside.State()!=TopAbs_ON){BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(p).Vertex(),result.Face());if(!distance.IsDone()||distance.Value()>tolerance)throw Error("invalid_shape","Hull does not contain source curve within contact_tolerance");}if(++verified>131072)throw Error("limit_exceeded","Hull containment sample budget exceeded");}
+  return result.Face();
+}
+
+TopoDS_Face sketch_hull(const std::vector<TopoDS_Shape>& inputs,const gp_Ax2& plane,double contact_tolerance) {
+  for(const auto& input:inputs)for(TopExp_Explorer it(input,TopAbs_EDGE);it.More();it.Next()){const auto kind=BRepAdaptor_Curve(TopoDS::Edge(it.Current())).GetType();if(kind!=GeomAbs_Line&&kind!=GeomAbs_Circle)return general_sketch_hull(inputs,plane,contact_tolerance);}
   // Exact support-function envelope of line endpoints and circular arcs. Pairwise
   // support equalities and arc limits partition normal angle; no sampled polygon
   // substitutes for a curved boundary.
@@ -1670,7 +1795,7 @@ TopoDS_Shape sketch_trace(const TopoDS_Shape& input,const gp_Ax2& plane,double w
   if(faces.empty()||faces.size()>1024)throw Error("invalid_shape","Trace did not produce bounded planar faces");TopoDS_Shape result=faces.front();for(std::size_t i=1;i<faces.size();++i){BRepAlgoAPI_Fuse fuse;NCollection_List<TopoDS_Shape> a,b;a.Append(result);b.Append(faces[i]);fuse.SetArguments(a);fuse.SetTools(b);fuse.SetNonDestructive(true);fuse.SetRunParallel(false);fuse.Build();if(!fuse.IsDone()||fuse.HasErrors())throw Error("kernel_failure","Trace region union failed");fuse.SimplifyResult(true,true);result=fuse.Shape();}
   check_sketch_shape(result,plane);const auto expected=width*path.length;if(std::abs(shape_area(result)-expected)>std::max(1e-6,expected*1e-7))throw Error("invalid_shape","Trace width folds or overlaps; swept material differs from width times path length",{{"expected_area_mm2",expected},{"actual_area_mm2",shape_area(result)}});return result;
 }
-TopoDS_Face sketch_full_round(const FeatureGeometry& source,const Json& selector,const Json& parameters,const gp_Ax2& plane) {
+TopoDS_Face sketch_full_round(const FeatureGeometry& source,const Json& selector,const Json& parameters,const gp_Ax2& plane,bool invert) {
   if(source.faces.Extent()!=1)throw Error("invalid_model","Full round requires one planar region");BRepBuilderAPI_Copy copy(source.shape);const auto original=unique_surface_edge(source,selector,parameters,text_field(selector,"feature_id"));const auto selected=copy.ModifiedShape(original);
   const auto face=TopoDS::Face(TopExp_Explorer(copy.Shape(),TopAbs_FACE).Current());const auto outer=BRepTools::OuterWire(face);std::vector<TopoDS_Edge> edges;int middle=-1;
   for(BRepTools_WireExplorer it(outer,face);it.More();it.Next()){if(it.Current().IsSame(selected))middle=static_cast<int>(edges.size());edges.push_back(it.Current());}
@@ -1683,8 +1808,9 @@ TopoDS_Face sketch_full_round(const FeatureGeometry& source,const Json& selector
   for(int c=0;c<3;++c){int pivot=c;for(int r=c+1;r<3;++r)if(std::abs(matrix[r][c])>std::abs(matrix[pivot][c]))pivot=r;if(std::abs(matrix[pivot][c])<1e-12)throw Error("selection_ambiguous","Full-round supporting lines have no unique inscribed circle");std::swap(matrix[c],matrix[pivot]);const auto scale=matrix[c][c];for(int k=c;k<4;++k)matrix[c][k]/=scale;for(int r=0;r<3;++r)if(r!=c){const auto factor=matrix[r][c];for(int k=c;k<4;++k)matrix[r][k]-=factor*matrix[c][k];}}
   const double cx=matrix[0][3],cy=matrix[1][3],radius=matrix[2][3];if(radius<=1e-7||!std::isfinite(radius))throw Error("invalid_model","Full round has no positive inscribed radius");std::array<gp_Pnt,3> contact;
   for(int i=0;i<3;++i){const auto& line=lines[i];const gp_Pnt2d p(cx-radius*line.nx,cy-radius*line.ny);const auto dx=line.b.X()-line.a.X(),dy=line.b.Y()-line.a.Y(),t=((p.X()-line.a.X())*dx+(p.Y()-line.a.Y())*dy)/(dx*dx+dy*dy);if(t<1e-8||t>1-1e-8)throw Error("invalid_model","Full round must meet the interiors of all three finite edges");contact[i]=coordinates.world(p);}
+  if(invert)contact[1]=coordinates.world(gp_Pnt2d(2*cx-coordinates.local(contact[1]).X(),2*cy-coordinates.local(contact[1]).Y()));
   GC_MakeArcOfCircle arc(contact[0],contact[1],contact[2]);if(!arc.IsDone())throw Error("kernel_failure","Full-round tangent arc failed");gp_Pnt a,b;gp_Vec ta,tb;arc.Value()->D1(arc.Value()->FirstParameter(),a,ta);arc.Value()->D1(arc.Value()->LastParameter(),b,tb);
-  const auto before=BRep_Tool::Pnt(TopExp::FirstVertex(edges[previous],true)),after=BRep_Tool::Pnt(TopExp::LastVertex(edges[next],true));if(gp_Dir(ta).Dot(gp_Dir(gp_Vec(before,contact[0])))<1-1e-9||gp_Dir(tb).Dot(gp_Dir(gp_Vec(contact[2],after)))<1-1e-9)throw Error("invalid_model","Selected end does not admit a convex tangent full round");
+  const auto before=BRep_Tool::Pnt(TopExp::FirstVertex(edges[previous],true)),after=BRep_Tool::Pnt(TopExp::LastVertex(edges[next],true));if((invert?-1:1)*gp_Dir(ta).Dot(gp_Dir(gp_Vec(before,contact[0])))<1-1e-9||(invert?-1:1)*gp_Dir(tb).Dot(gp_Dir(gp_Vec(contact[2],after)))<1-1e-9)throw Error("invalid_model","Selected end does not admit a convex tangent full round");
   BRepBuilderAPI_MakeWire wire;for(std::size_t i=0;i<n;++i){if(i==previous)wire.Add(BRepBuilderAPI_MakeEdge(before,contact[0]).Edge());else if(i==static_cast<std::size_t>(middle))wire.Add(BRepBuilderAPI_MakeEdge(arc.Value()).Edge());else if(i==next)wire.Add(BRepBuilderAPI_MakeEdge(contact[2],after).Edge());else wire.Add(edges[i]);}
   if(!wire.IsDone())throw Error("invalid_shape","Full-round boundary is disconnected");BRepBuilderAPI_MakeFace result(gp_Pln(plane),wire.Wire(),true);for(TopExp_Explorer it(face,TopAbs_WIRE);it.More();it.Next())if(!it.Current().IsSame(outer))result.Add(TopoDS::Wire(it.Current()));if(!result.IsDone())throw Error("invalid_shape","Full-round face construction failed");check_sketch_shape(result.Face(),plane);
   if(shape_area(result.Face())>=shape_area(face)-1e-8||shape_area(extrusion_boolean<BRepAlgoAPI_Cut>(result.Face(),face))>1e-6)throw Error("invalid_shape","Full round must remove material without extending its source region");return result.Face();
@@ -2082,6 +2208,7 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
       } else if(type=="curve_helix") {shape=helix_curve(feature,parameters);
       } else if(type=="curve_trim") {shape=CurvePath(single_curve_wire(impl_->features.at(text_field(feature,"input")).shape)).trim(scalar(feature.at("start"),parameters,"dimensionless"),scalar(feature.at("end"),parameters,"dimensionless"));
       } else if(type=="curve_tangent_line"||type=="curve_tangent_arc") {shape=tangent_curve(feature,parameters,impl_->features.at(text_field(feature,"input")).shape);
+      } else if(type=="curve_constrained_line"||type=="curve_constrained_arc") {shape=constrained_curve(feature,parameters,impl_->features);
       } else if(type=="curve_extract") {const auto input=text_field(feature,"input");BRepBuilderAPI_Copy copy(unique_surface_edge(impl_->features.at(input),feature.at("edges"),parameters,input));shape=BRepBuilderAPI_MakeWire(TopoDS::Edge(copy.Shape())).Wire();
       } else if(type=="curve_project"||type=="surface_project") {
         shape=project_geometry(feature,parameters,impl_->features.at(text_field(feature,"input")),impl_->features.at(text_field(feature,"target")));
@@ -2147,9 +2274,9 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         const auto plane = parameter_plane(feature.at("workplane"),parameters);
         planes.emplace(id,plane);
         const auto kind=text_field(feature.at("profile"),"type");shape=(kind=="text"||kind=="svg"||kind=="dxf")?authoring_face(feature.at("profile"),parameters,plane):sketch_face(feature.at("profile"),parameters,plane);
-      } else if(type=="sketch_hull") {const auto plane=parameter_plane(feature.at("workplane"),parameters);std::vector<TopoDS_Shape> inputs;for(const auto& input:feature.at("inputs"))inputs.push_back(shapes.at(input.get<std::string>()));shape=sketch_hull(inputs,plane);planes.emplace(id,plane);
+      } else if(type=="sketch_hull") {const auto plane=parameter_plane(feature.at("workplane"),parameters);std::vector<TopoDS_Shape> inputs;for(const auto& input:feature.at("inputs"))inputs.push_back(shapes.at(input.get<std::string>()));shape=sketch_hull(inputs,plane,scalar(feature.value("contact_tolerance",Json(1e-5)),parameters));planes.emplace(id,plane);
       } else if(type=="sketch_trace") {const auto plane=parameter_plane(feature.at("workplane"),parameters);shape=sketch_trace(shapes.at(text_field(feature,"input")),plane,scalar(feature.at("width"),parameters));planes.emplace(id,plane);
-      } else if(type=="sketch_full_round") {const auto input=text_field(feature,"input");const auto plane=planes.at(input);shape=sketch_full_round(impl_->features.at(input),feature.at("edges"),parameters,plane);planes.emplace(id,plane);
+      } else if(type=="sketch_full_round") {const auto input=text_field(feature,"input");const auto plane=planes.at(input);shape=sketch_full_round(impl_->features.at(input),feature.at("edges"),parameters,plane,feature.value("invert",false));planes.emplace(id,plane);
       } else if(type=="text_on_path") {
         const auto input=text_field(feature,"input"),path=text_field(feature,"path");const Json* captured=nullptr;for(const auto& candidate:model.at("features"))if(candidate.at("id")==input){captured=&candidate.at("profile");break;}
         shape=text_path_shape(feature,*captured,parameters,planes.at(input),impl_->features.at(input),shapes.at(path),history,history_truncated);planes.emplace(id,planes.at(input));

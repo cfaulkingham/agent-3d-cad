@@ -33,6 +33,32 @@ constraints fail. `curve_tangent_line` references an earlier curve with `input`,
 reverses the initial tangent. Arc endpoints must be distinct and off the initial
 tangent line. The chosen circle/line is independently checked at its start.
 
+`curve_constrained_line` solves a tangent line from an external point to a
+selected finite native curve, or a common tangent between two curves.
+`curve_constrained_arc` solves a positive `radius` circle through/tangent to two
+constraints and returns a selected finite circular arc. Both take `workplane`,
+exactly two `constraints`, and `solution:{point:[x,y,z],tolerance:...}`. A constraint
+is either `{point:[x,y,z]}` or `{edge:<geometric selector>,qualifier:...}`. The edge
+must identify exactly one edge of an earlier nonassembly feature; this supports
+curves and edges of sketches, surfaces and solids. Constraints and solution points
+must be coplanar. A line requires at least one curve constraint; an arc also permits
+two points. Curve qualifiers are native OCCT `unqualified` (default), `enclosed`,
+`enclosing` or `outside`, relative to the oriented source curve.
+
+The solution point identifies the **arc-length midpoint of the resulting finite
+line or arc**, with a tolerance between 1e-7 and 1000 mm. Exactly one geometrically
+distinct solution must match. Public selection never uses an OCCT solution number.
+Two common tangents can share a midpoint, in which case midpoint selection reports
+ambiguity; a side qualifier or a more specific source interval must distinguish
+them. For each circle, both arc paths between contacts are considered. Endpoint
+order follows authored constraint order. Native `Geom2dGcc` solvers run with
+bounded finite curve adaptors; contacts are independently checked for incidence
+within 1e-7 mm and normalized tangent cross product within 1e-6. At most 128 native
+solutions are considered. No convergence, unsupported qualifiers, missing finite
+contacts, coincident underdetermined contacts, or ambiguous selection fail
+explicitly. General spline solvers are numerical; this is a bounded two-constraint
+constructor, not a global or arbitrary constraint-system solver.
+
 `curve_extract` takes `input` and `edges`, a selector with `expected_count:1`,
 and captures an editable exact edge reference as a one-edge wire. Input may be
 an earlier nonassembly solid, sketch, surface or curve. Missing and ambiguous
@@ -73,12 +99,22 @@ an insufficient rule produces an explicit ambiguity error.
 ## Sketch hull, trace and full round
 
 `sketch_hull` takes 1–16 distinct sketch/curve `inputs` and a `workplane`.
-It constructs the convex hull of up to 256 analytic support primitives from
-straight lines and circular arcs. Angular support-function crossings and arc
-limits determine exact line and circle segments; no sampled polygon replaces
-the curves. Input sketch regions are independently checked for containment.
-Inputs must be coplanar. Bezier/B-spline/elliptical hulls fail explicitly,
-including rational Beziers that happen to describe circles.
+Straight-line/circular-arc inputs use exact support-function crossings and arc
+limits. General inputs, including native ellipses, rational conics, Beziers and
+B-splines, use a bounded numerical contact search. The returned boundary retains
+trimmed original native curves and straight hull bridges; it is never a sampled
+polygon. Inputs must be coplanar, with at most 256 source edges.
+
+Optional `contact_tolerance` is a scalar in [1e-7,0.01] mm, default 1e-5 mm.
+General contact search uses OCCT quasi-uniform deflection at one sixteenth that
+tolerance, at most 65,536 scaffold samples and 1,024 retained intervals. Interior
+bridge contacts are refined with at most 40 Newton steps and independently checked
+against the contact tolerance. Original curve samples plus interval midpoints are
+checked for containment in the native result, with at most 131,072 verification
+samples. This is numerical contact/containment evidence, not a certified global
+convexity proof for arbitrary oscillatory curves. Undefined tangents, failed
+refinement, exhausted budgets or invalid boundaries reject explicitly. The
+existing exact line/circle path independently checks input-region containment.
 
 `sketch_trace` takes a curve `input`, `workplane` and positive scalar `width`.
 It sweeps a perpendicular line along one connected planar wire with right-corner
@@ -95,10 +131,14 @@ curved paths including rational Beziers, subject to native sweep convergence.
 for a straight outer edge. The selected edge and its two immediate neighbors
 must all be straight. Interior supporting lines determine a unique positive
 inscribed circle, and contact must occur inside all three finite edges. The
-selected end is replaced by its convex tangent arc; neighboring edges are
+selected end is replaced by its convex tangent arc by default; optional
+`invert:true` chooses the complementary concave cut; neighboring edges are
 trimmed exactly and holes are retained. Independent tangent, validity and
 material-containment checks reject ambiguous, oversized or concave solutions.
-A curved-edge or inverted full-round construction is not currently supported.
+Curved neighboring edges remain unsupported; this operation requires three
+straight finite edges. Inversion preserves the same circle and tangent contacts.
+It reverses arc tangents relative to the adjacent boundary, matching the inward
+full-round cut; invalid or self-intersecting results fail.
 
 All three yield intermediate editable sketches; extrude or thicken to make
 material. Their inputs and selectors participate in component capture/remapping,
@@ -113,6 +153,14 @@ invalidation, durable query jobs and failed-edit rollback. Analytic capsule hull
 annular traces, tangent caps and portable curve-to-material components cover the
 derived sketch operations. `parity_curves_schema_tests.py` validates
 real request/results with an independent Draft 2020-12 validator.
+`parity_curve_completion` adds analytic point/common tangents, general rational
+curve tangencies, fixed-radius short/long arcs, arbitrary frames, finite-contact
+failures, ambiguity, independent STEP geometry, inverted caps, exact curved hull
+areas, native imported ellipse retention, edited dependencies, portable components
+and durable edits. The completion increment passed 144 native checks; focused
+existing curve, protocol, dependency-cache and component suites also passed.
+`parity_curve_completion_schema_tests.py` validates actual new-feature create,
+read, query, edit, rollback and job results with Draft 2020-12.
 
 Curve sampling is one connected
 wire (or one explicitly selected edge); branches, undefined differential

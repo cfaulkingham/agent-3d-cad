@@ -21,7 +21,7 @@ bool is_surface_feature_type(const std::string& type) {
   static const std::set<std::string> types={"surface_bezier","surface_bspline","surface_trim","surface_shell","import_step_surface","surface_fill","surface_gordon","surface_project"};
   return types.contains(type);
 }
-bool is_curve_feature_type(const std::string& type) { static const std::set<std::string> types={"curve","curve_project","curve_helix","curve_trim","curve_tangent_line","curve_tangent_arc","curve_extract"};return types.contains(type); }
+bool is_curve_feature_type(const std::string& type) { static const std::set<std::string> types={"curve","curve_project","curve_helix","curve_trim","curve_tangent_line","curve_tangent_arc","curve_extract","curve_constrained_line","curve_constrained_arc"};return types.contains(type); }
 void validate_purchase(const Json& purchase,bool require_artifact) {
   fields(purchase,{"supplier","part_number","source_url"},{"artifact_sha256"});
   for(const auto* key:{"supplier","part_number","source_url"}) {
@@ -173,6 +173,17 @@ Json model_definitions() {
   features.push_back(object({{"id",id},{"type",{{"const","curve_trim"}}},{"input",id},{"start",scalar_ref},{"end",scalar_ref}}, {"id","type","input","start","end"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve_tangent_line"}}},{"input",id},{"position",scalar_ref},{"length",scalar_ref},{"reverse",{{"type","boolean"}}}}, {"id","type","input","position","length"}));
   features.push_back(object({{"id",id},{"type",{{"const","curve_tangent_arc"}}},{"input",id},{"position",scalar_ref},{"end",vector_ref},{"reverse",{{"type","boolean"}}}}, {"id","type","input","position","end"}));
+  const Json tangency_constraint={{"oneOf",Json::array({
+    object({{"point",vector_ref}},{"point"}),
+    object({{"edge",{{"$ref","#/$defs/selector"}}},{"qualifier",{{"enum",{"unqualified","enclosed","enclosing","outside"}}}}},{"edge"})})}};
+  const Json tangency_solution=object({{"point",vector_ref},{"tolerance",scalar_ref}},{"point","tolerance"});
+  for(const auto* kind:{"curve_constrained_line","curve_constrained_arc"}) {
+    auto properties=Json{{"id",id},{"type",{{"const",kind}}},{"workplane",{{"$ref","#/$defs/workplane"}}},
+      {"constraints",{{"type","array"},{"items",tangency_constraint},{"minItems",2},{"maxItems",2}}},{"solution",tangency_solution}};
+    Json required={"id","type","workplane","constraints","solution"};
+    if(std::string(kind)=="curve_constrained_arc"){properties["radius"]=scalar_ref;required.push_back("radius");}
+    features.push_back(object(properties,required));
+  }
   features.push_back(object({{"id",id},{"type",{{"const","curve_extract"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}}}, {"id","type","input","edges"}));
   features.push_back(object({{"id",id},{"type",{{"enum",{"surface_project","curve_project"}}}},{"input",id},{"target",id},{"faces",{{"$ref","#/$defs/face_selector"}}},{"direction",vector_ref}}, {"id","type","input","target","faces","direction"}));
   features.push_back(object({{"id",id},{"type",{{"const","surface_shell"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",64},{"uniqueItems",true}}},
@@ -249,9 +260,9 @@ Json model_definitions() {
     {"type","feature_id","point","tolerance","expected_count"});
   const Json vertices={{"oneOf",Json::array({Json{{"const","all"}},vertex_selector})}};
   features.push_back(object({{"id",id},{"type",{{"enum",{"sketch_cut","sketch_fuse","sketch_intersection"}}}},{"left",id},{"right",id}}, {"id","type","left","right"}));
-  features.push_back(object({{"id",id},{"type",{{"const","sketch_hull"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",16},{"uniqueItems",true}}},{"workplane",workplane_schema}}, {"id","type","inputs","workplane"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_hull"}}},{"inputs",{{"type","array"},{"items",id},{"minItems",1},{"maxItems",16},{"uniqueItems",true}}},{"workplane",workplane_schema},{"contact_tolerance",scalar_ref}}, {"id","type","inputs","workplane"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_trace"}}},{"input",id},{"workplane",workplane_schema},{"width",scalar_ref}}, {"id","type","input","workplane","width"}));
-  features.push_back(object({{"id",id},{"type",{{"const","sketch_full_round"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}}}, {"id","type","input","edges"}));
+  features.push_back(object({{"id",id},{"type",{{"const","sketch_full_round"}}},{"input",id},{"edges",{{"$ref","#/$defs/selector"}}},{"invert",{{"type","boolean"}}}}, {"id","type","input","edges"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_offset"}}},{"input",id},{"distance",scalar_ref},{"join",{{"enum",{"arc","intersection"}}}}}, {"id","type","input","distance"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_fillet"}}},{"input",id},{"radius",scalar_ref},{"vertices",vertices}}, {"id","type","input","radius","vertices"}));
   features.push_back(object({{"id",id},{"type",{{"const","sketch_chamfer"}}},{"input",id},{"distance",scalar_ref},{"vertices",vertices}}, {"id","type","input","distance","vertices"}));
@@ -805,6 +816,19 @@ void validate_model(const Json& model) {
       const auto input=text_field(feature,"input");if(!prior.contains(input)||!is_curve_feature_type(types.at(input)))throw Error("invalid_model","Curve operation requires an earlier exact curve");
       const auto station=[&](const char* key){const auto value=scalar(feature.at(key),parameters,"dimensionless");if(value<0||value>1)throw Error("invalid_model","Curve positions must be normalized arc-length fractions in [0,1]");return value;};
       if(type=="curve_trim"){if(station("end")-station("start")<1e-9)throw Error("invalid_model","Curve trim end must exceed start");}else {station("position");if(feature.contains("reverse")&&!feature.at("reverse").is_boolean())throw Error("invalid_model","Curve reverse must be boolean");if(type=="curve_tangent_line")positive(feature.at("length"));else vector3(feature.at("end"),parameters);}
+    } else if(type=="curve_constrained_line"||type=="curve_constrained_arc") {
+      if(type=="curve_constrained_line")fields(feature,{"id","type","workplane","constraints","solution"});
+      else {fields(feature,{"id","type","workplane","constraints","solution","radius"});positive(feature.at("radius"));}
+      workplane(feature.at("workplane"),parameters);const auto& constraints=feature.at("constraints");
+      if(!constraints.is_array()||constraints.size()!=2)throw Error("invalid_model","Tangency needs exactly two qualified constraints");
+      int edges=0;for(const auto& constraint:constraints){if(constraint.contains("point")){fields(constraint,{"point"});vector3(constraint.at("point"),parameters);}
+        else {fields(constraint,{"edge"},{"qualifier"});const auto& edge=constraint.at("edge");const auto input=text_field(edge,"feature_id");
+          if(!prior.contains(input)||types.at(input)=="assembly")throw Error("invalid_model","Tangency edge must name an earlier nonassembly feature");
+          validate_selector(edge,parameters,input);if(edge.at("expected_count")!=1)throw Error("invalid_model","Each tangency constraint selects exactly one edge");
+          const auto qualifier=constraint.value("qualifier",std::string("unqualified"));if(qualifier!="unqualified"&&qualifier!="enclosed"&&qualifier!="enclosing"&&qualifier!="outside")throw Error("invalid_model","Unknown tangency qualifier");++edges;}}
+      if(type=="curve_constrained_line"&&edges==0)throw Error("invalid_model","A constrained tangent line requires a curve constraint");
+      const auto& solution=feature.at("solution");fields(solution,{"point","tolerance"});vector3(solution.at("point"),parameters);
+      const auto tolerance=scalar(solution.at("tolerance"),parameters);if(tolerance<1e-7||tolerance>1e3)throw Error("invalid_model","Solution midpoint tolerance must be between 1e-7 and 1000 mm");
     } else if(type=="curve_extract") {
       fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");if(!prior.contains(input)||types.at(input)=="assembly")throw Error("invalid_model","Curve extraction requires an earlier nonassembly feature");validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1)throw Error("invalid_model","Curve extraction requires exactly one edge");
     } else if(type=="surface_project"||type=="curve_project") {
@@ -930,11 +954,11 @@ void validate_model(const Json& model) {
       }
       if(feature.contains("faces")&&!(type=="shell"&&feature.at("faces").is_array()&&feature.at("faces").empty()))validate_face_selection(feature.at("faces"),parameters,input);
     } else if(type=="sketch_hull") {
-      fields(feature,{"id","type","inputs","workplane"});workplane(feature.at("workplane"),parameters);const auto& inputs=feature.at("inputs");if(!inputs.is_array()||inputs.empty()||inputs.size()>16)throw Error("invalid_model","Sketch hull requires 1–16 earlier sketches or curves");std::set<std::string> seen;for(const auto& value:inputs){if(!value.is_string())throw Error("invalid_model","Hull inputs must be feature names");const auto input=value.get<std::string>();if(!seen.insert(input).second||!prior.contains(input)||(!is_sketch_feature_type(types.at(input))&&!is_curve_feature_type(types.at(input))))throw Error("invalid_model","Hull inputs must name distinct earlier sketches or curves");}
+      fields(feature,{"id","type","inputs","workplane"},{"contact_tolerance"});const auto tolerance=scalar(feature.value("contact_tolerance",Json(1e-5)),parameters);if(tolerance<1e-7||tolerance>1e-2)throw Error("invalid_model","Hull contact_tolerance must lie between 1e-7 and 0.01 mm");workplane(feature.at("workplane"),parameters);const auto& inputs=feature.at("inputs");if(!inputs.is_array()||inputs.empty()||inputs.size()>16)throw Error("invalid_model","Sketch hull requires 1–16 earlier sketches or curves");std::set<std::string> seen;for(const auto& value:inputs){if(!value.is_string())throw Error("invalid_model","Hull inputs must be feature names");const auto input=value.get<std::string>();if(!seen.insert(input).second||!prior.contains(input)||(!is_sketch_feature_type(types.at(input))&&!is_curve_feature_type(types.at(input))))throw Error("invalid_model","Hull inputs must name distinct earlier sketches or curves");}
     } else if(type=="sketch_trace") {
       fields(feature,{"id","type","input","workplane","width"});workplane(feature.at("workplane"),parameters);positive(feature.at("width"));const auto input=text_field(feature,"input");if(!prior.contains(input)||!is_curve_feature_type(types.at(input)))throw Error("invalid_model","Trace requires an earlier exact curve");
     } else if(type=="sketch_full_round") {
-      fields(feature,{"id","type","input","edges"});const auto input=text_field(feature,"input");sketch_dependency(input);validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1||feature.at("edges").at("curve_kind")!="line")throw Error("invalid_model","Full round selects exactly one straight outer edge");
+      fields(feature,{"id","type","input","edges"},{"invert"});if(feature.contains("invert")&&!feature.at("invert").is_boolean())throw Error("invalid_model","Full-round invert must be boolean");const auto input=text_field(feature,"input");sketch_dependency(input);validate_selector(feature.at("edges"),parameters,input);if(feature.at("edges").at("expected_count")!=1||feature.at("edges").at("curve_kind")!="line")throw Error("invalid_model","Full round selects exactly one straight outer edge");
     } else if(type=="text_on_path") {
       fields(feature,{"id","type","input","path"},{"start","offset","reverse"});const auto input=text_field(feature,"input"),path=text_field(feature,"path");sketch_dependency(input);
       bool captured=false;for(const auto& candidate:features)if(candidate.at("id")==input)captured=candidate.at("type")=="sketch"&&candidate.at("profile").at("type")=="text";
