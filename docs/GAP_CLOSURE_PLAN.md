@@ -10,14 +10,14 @@ This is the completion ledger, not a declaration that planned APIs exist.
 |---|---|---|
 | Solid operations | Uniform/nonuniform scaling, existing-face draft with neutral plane, asymmetric/angle chamfers with reference side, twist extrusion, holed lofts and vertex endpoints | Integrated `ad59f5b`; strict analytic/STEP, edit/rollback, cache and component tests. [Bounded contract](PARITY_SOLIDS.md); native/actual-call acceptance at `d359331` passed |
 | Surface robustness | Both signs/joins of the existing freeform-panel thickening case; explicit surface/shell STEP round trips | Integrated `d154229`; four thickening cases, nonmaterial STEP imports and explicit solid materialization tested. [Contract](PARITY_SURFACES.md); native/actual-call acceptance at `d359331` passed |
-| Surface construction | Curve-network/Gordon surfaces, boundary fills with tangent/curvature continuity, arbitrary trim contours/holes, curved curve/sketch projection | Initial `d154229`; `bbd2a81` adds geometrically reparameterized rational/closed/periodic networks, point endpoints and explicit curved projection branches. Isolated increment passed 7/7 native suites and 252 actual-call checks; combined acceptance pending. Linux x64 baseline fill convergence failure is under investigation. [Bounds](PARITY_SURFACES.md) |
-| Sheet metal | Chained flanges, bends through blanks, hems, jogs, miters, generated bend/corner relief, cuts through bends and matching developed geometry; investigate Bezier verification abort | Initial `6ce74b9`; `2eca6b8` adds an internal jog carrying a captured far panel and attached flange trees. Isolated increment passed 5/5 native suites and 106 actual-call checks; combined acceptance pending. [Contract](PARITY_SHEET_METAL.md) |
+| Surface construction | Curve-network/Gordon surfaces, boundary fills with tangent/curvature continuity, arbitrary trim contours/holes, curved curve/sketch projection | `bbd2a81` adds reparameterized rational/closed/periodic networks, point endpoints and curved projection branches; `536c45c` adds strict bounded fill refinement. Combined 73/73 suites and 268 actual-call checks pass; current Linux confirmation awaits CI51. [Bounds](PARITY_SURFACES.md) |
+| Sheet metal | Chained flanges, bends through blanks, hems, jogs, miters, generated bend/corner relief, cuts through bends and matching developed geometry; investigate Bezier verification abort | `2eca6b8` adds an internal jog carrying a captured far panel and attached flange trees. Combined 73/73 suites and 106 actual-call checks pass. [Contract](PARITY_SHEET_METAL.md) |
 | Parametric authoring | Bounded trig/square-root/conditional expressions and parameter-driven pattern counts; explicit units, dependency tracking and failure rollback | Implemented `fcc4f1b`; focused and final native/actual-call acceptance at `d359331` passed |
-| Curves and queries | Dedicated helices; constrained tangent lines/arcs; hull, trace, full-round; curve sampling/tangents/trimming and richer geometric selection | Initial `39a5022`/`83a0b63`; `b9925f0` adds bounded point/common tangency, fixed-radius arcs, inverted full-round and general native-curve hull inputs. Isolated completion suite passed 144 checks and actual-call audit passed 133; combined acceptance pending. [Bounds](PARITY_CURVES.md) |
+| Curves and queries | Dedicated helices; constrained tangent lines/arcs; hull, trace, full-round; curve sampling/tangents/trimming and richer geometric selection | `b9925f0` adds point/common tangency, fixed-radius arcs, inverted full-round and general native-curve hull inputs. Combined 73/73 suites and 133 completion actual-call checks pass. [Bounds](PARITY_CURVES.md) |
 | Captured authoring | DXF blocks/text/hatches; editable text-on-path with captured font/source provenance | Integrated `6bd87ef` and `b5ef0d5`; captured fonts, bounded block/hatch/text expansion and editable planar glyph placement. [Contract](PARITY_AUTHORING.md); native/actual-call acceptance at `d359331` passed |
 | Mesh reconstruction | Native analytic plane/cylinder/sphere recognition with residuals and leftovers, usable as guided editable reconstruction rather than false recovered history | Integrated `aec96c0`; complete triangle residuals/membership, bounded fitting and native-built editable proposals. [Bounds](MESH_RECONSTRUCTION.md); native/actual-call acceptance at `d359331` passed |
 | Embedded file delivery | Bounded source-qualified export resources and supported host save/download action for STEP/STL/drawings; retain safe fallback when capability absent | Implemented resource capture/read and viewer request; final native/UI and SDK acceptance passes; actual target-host save actions pending |
-| Product acceptance | Current cross-platform validation; actual ChatGPT/Claude install/create/select/edit/restart/reopen/export/update/remove/reinstall journeys; signing and distribution/CPU-selection gates | Package header/provenance checks, Rosetta-aware native installer selection, complete bundled guides and isolated lifecycle implemented `9753e62`; final package inventory, 121 MCP / 387 isolated lifecycle checks and guide links pass; actual foreign-platform/host/signing/directory gates remain open. [Local evidence boundary](LOCAL_PACKAGE_ACCEPTANCE.md) |
+| Product acceptance | Current cross-platform validation; actual ChatGPT/Claude install/create/select/edit/restart/reopen/export/update/remove/reinstall journeys; signing and distribution/CPU-selection gates | Current rebuilt packages pass inventories, guides, 388 isolated lifecycle and 450 artifact SDK checks; CI51 is running. Terminal installer selection does not satisfy host CPU routing; a strict universal composer and same-package ARM/Intel runtime checks are being implemented. Actual host/signing/directory gates remain open. [Local evidence boundary](LOCAL_PACKAGE_ACCEPTANCE.md) |
 
 All geometry remains native C++20 / pinned OCCT 8.0.1 behind `BuiltModel`.
 No source-model code execution, sibling runtime dependency, silent intent change,
@@ -65,8 +65,9 @@ macOS arm64 passed 71/72 native tests; the expression fixture's singleton JSON
 list construction is compiler-dependent and is being made explicit. Linux x64
 passed 71/72; the nonplanar fill exceeded its unchanged 1e-5 mm positional
 tolerance. Windows passed 70/71 and Intel macOS passed 71/72; both failed the
-same expression fixture. All five baseline lanes completed with failures. These failures
-are being investigated before a new tested checkpoint is pushed.
+same expression fixture. All five baseline lanes completed with failures. The
+explicit array fixture, bounded fill refinement and SDK lifecycle deadlines were
+tested locally and are now published in checkpoint `59291ef` below.
 
 The first combined completion build passed **73/73 CTests in 312.46 seconds**.
 Fill refinement `536c45c` then passed 4/4 isolated suites and 268 actual-call checks;
@@ -78,8 +79,14 @@ modeling-family actual-call audits, **879 schema-conformance checks** including
 the native slicer fixture, and **450 artifact SDK checks**. The matrix exercises
 **75 models / all 63 feature kinds** with 1,263 checks. Detailed evidence is in
 HANDOFF; **12/12 actual-call schema/artifact audit scripts** passed, including
-191 actual artifact-flow schema checks. Cross-platform CI and rebuilt packages
-remain pending at this tested publication checkpoint.
+191 actual artifact-flow schema checks. Tested checkpoint `59291ef` is published
+and [CI run 51](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38101187113)
+is executing all five lanes. Rebuilt ARM64 native/plugin/Claude packages passed
+empty-PATH relocation, **388 isolated lifecycle checks**, packaged curve/sheet/
+surface audits (**133/106/268**) and **450 artifact SDK checks**. Independent
+archive validation confirms inventories, common core bytes, notices/HLR sources,
+guide links and ad-hoc signatures. These local packages require macOS27.0;
+they establish neither publisher signing nor actual host acceptance.
 SDK harness `7efd2f0` retains 90 seconds per independent lifecycle,
 180 seconds total, and unchanged call/native budgets; its deadline-attribution
 checks passed 3/3. The current 31-tool catalog occupies **467,231/476,160 bytes**.
@@ -124,7 +131,8 @@ curved hulls; differently parameterized, rational and closed Gordon networks;
 explicit nearest/farthest branches on complete curved projection faces; and an
 internal jog carrying a far panel and attached walls. Those native workstreams
 are now integrated at `bbd2a81`; focused evidence is recorded above, with combined
-native/schema/package and five-platform acceptance still pending.
+native/schema/package acceptance passed locally as recorded above; five-platform
+acceptance remains pending in CI51.
 General sketch solving, arbitrary imported-sheet unfolding and universal Python
 API parity were not named requirements in the original comparison.
 

@@ -10,10 +10,13 @@ signing/notarization and remaining host validation are still open.
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
-authorized branch publication for CI. `1fe590adf6ca04dcc8d9ac0c9414aba88016b55e`
-is now published on `codex/build123d-gap-closure`; the five-platform workflow
+authorized branch publication for CI. The tested checkpoint
+`59291ef81440c984c77d92d1c894ca8ad77c388e` is published on
+`codex/build123d-gap-closure`; the five-platform workflow
+[run 51](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38101187113)
+is executing. Its results remain pending. The preceding
 [run 50](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38099409378)
-is executing. Linux arm64 passed all 72 native suites then exceeded the SDK
+at `1fe590a` completed with failures: Linux arm64 passed all 72 native suites then exceeded the SDK
 suite's aggregate 90-second timeout in the reopened session. macOS arm64 passed
 71/72 native suites; the expression fixture's singleton JSON construction has
 a compiler-dependent array/object interpretation. The test helper now constructs
@@ -28,7 +31,7 @@ acceptance.
 No host plugin registration has changed. The CI recipe now adds all nine
 actual-call modeling schema audits plus artifact SDK/flow schema validation on
 each native platform. YAML parsing and referenced-script inventory pass; the
-expanded recipe is not yet executed in CI.
+expanded recipe is now running in CI.
 
 Corrected stale packaged native-cad instructions that still limited lofts to one
 boundary and rejected contour trims/curved projection. The skill now documents
@@ -40,7 +43,7 @@ constrained point/common tangency and fixed-radius arcs, inverted full-round and
 general curved hull inputs; differently parameterized/rational/closed Gordon
 networks and explicit curved projection branches; and an internal jog that
 carries an existing far panel and attached walls. These increments are integrated
-as `b9925f0`, `bbd2a81` and `2eca6b8`; combined build/acceptance is in progress.
+as `b9925f0`, `bbd2a81` and `2eca6b8`; combined local acceptance passes below.
 Curve completion independently passed 144 native and 133 actual-call checks;
 the sheet increment passed 5/5 suites and 106 actual-call checks; the surface
 increment passed 7/7 suites in 40.91 seconds, including 3,036 surface checks,
@@ -66,12 +69,40 @@ Evidence is `.local/evidence/gap-closure-refined-ctest.log`,
 `.local/evidence/gap-closure-refined-sdk.log` and
 `.local/evidence/schema-audit-expanded/results.json`. These are macOS arm64
 native/developer checks; current cross-platform and rebuilt-package validation
-remain pending.
+are recorded separately below.
 `7efd2f0` gives each independent SDK lifecycle a 90-second deadline and the full
 test a 180-second aggregate bound; per-call/native limits and schema checks are
 unchanged. Deadline attribution passed 3/3 checks. Timing probes showed Python
 validation dominates this developer harness; no schema validation is skipped.
 The combined 31-tool catalog is **467,231/476,160 bytes**.
+
+Rebuilt ARM64 native, ChatGPT plugin and Claude extension packages are in
+`build/packages/gap-closure-expanded/`. Relocated empty-PATH/no-SDK bundle and
+plugin smoke checks pass, including create/edit/reopen/history and exact/mesh/
+drawing outputs. The packaged executable passed **388 isolated lifecycle
+checks**, curve/sheet/surface actual-call audits (**133/106/268**), and **450
+artifact SDK checks** that independently decode resource bytes. The independent
+archive audit verified exact inventories (**365 core entries; 416 plugin
+entries**), identical core bytes across formats, all dependency notices and five
+modified HLR sources, **287 guide copies / 750 relative links**, and **171 strict
+ad-hoc Mach-O signature checks**. Package evidence and archive hashes are in
+`.local/evidence/package-audit-expanded/results.json` and
+`.local/evidence/package-audit-expanded/independent-archive-audit/evidence.json`.
+The packaged executable hash is
+`cdd2ca392ff7eec1a18300ca851b632187859e25d6f0cc04fda52dac17374b9b`;
+loader relocation/signing changes it from the developer binary. These local
+packages require **macOS 27.0** and have no publisher TeamIdentifier. Guides match
+`59291ef`; ledger stubs accurately reference configure-time `536c45c`, which is
+not a current-source attestation. No foreign-platform, public-trust or host GUI
+acceptance is implied.
+
+The completion audit confirmed that the Rosetta-aware terminal installer does
+not close the original host CPU-selection requirement. Current Mac host packages
+remain thin, and Claude records `architecture_selection: distribution_required`.
+A bounded universal composer, strict slice/provenance validation and same-package
+ARM64/Intel CI runtime checks are being implemented. Both input SDK/HLR records
+and embedded cache identities must remain distinct; a shared VERSION or Git
+revision alone cannot establish identical source bytes.
 General hull/Gordon checks are bounded numerical
 verification, not global proofs for arbitrary curves. Exact rejection and
 public tolerances remain mandatory. The `d359331` test evidence below remains valid for its initial bounded
@@ -109,7 +140,7 @@ the sibling comparison baseline is local build123d `d3b12235`.
 Native source checkpoint **`d359331`** integrates the work below.
 [GAP_CLOSURE_PLAN.md](GAP_CLOSURE_PLAN.md) retains the acceptance ledger.
 This baseline was validated locally before the branch publication recorded above;
-the new completion/refinement checkpoint is ready for its authorized publication.
+the new completion/refinement checkpoint is now published as recorded above.
 It has not been installed into the user's hosts.
 VERSION remains `0.1.0-preview.1`.
 
