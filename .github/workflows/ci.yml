@@ -122,6 +122,8 @@ jobs:
           }
           $fixture = Join-Path (Split-Path $exe) 'cad_slicer_fixture'
           if ($IsWindows) { $fixture += '.exe' }
+          python tests/schema_output_encoding_tests.py $exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/schema_conformance.py $exe $fixture
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_smoke.py $exe $fixture

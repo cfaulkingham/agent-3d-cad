@@ -7,6 +7,46 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Visual workflow plugin rebuilt and installed — 2026-10-11
+
+At the user's request, rebuilt merged `main` at `7b94725f1cbaf41de1430f769f29d00a18ef49d0`
+and replaced the enabled `agent-cad@agent-cad-local` preview.2 installation with
+the completed visual workflows. The new source is
+`~/Applications/Agent3DCAD/agent-cad-visual-7b94725-20261011`; the cache remains
+`~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.2`. Both host
+manifests retain the Documents/Agent3DCAD workspace and use the contained
+`agent-3d-cad-visual-7b94725-20261011` launcher. Previous source/cache and a
+mode-0600 host configuration backup remain available.
+
+Verification: **16/16 installation-related CTests passed in 17.08 seconds**.
+The generated portable package passed provenance, empty-PATH MCP/viewer
+discovery, create/edit/reopen/history, STEP inspection and
+STEP/STL/3MF/PDF/SVG/four-DXF export smoke checks. The customized installed
+package resolves **367 documentation links**; its source and cache match all
+**423 inventoried files plus provenance**. Fresh isolated ChatGPT
+`0.144.0-alpha.4` and Codex `0.162.0-alpha.17.2` runtimes discover both skills
+and **33 tools**, including `cad_screenshot` and `cad_render`; every tool's
+input/output schema matches the native catalog and independently validates.
+All **122 saved model files** and unrelated parsed host settings are unchanged.
+The pre-existing two-line CI workflow edit remains intact.
+
+Production source SHA-256 remains
+`72327b71e1d402dd4579005123eddd50319fd78ad4682a7441ae484ccdb669e3`;
+the packaged executable SHA-256 is
+`2acfd4e1b355f016df76339f5984c5ceeb5be2b8c73f63eec1bbbad3098074f3`.
+Exact build, package, installation and fresh-runtime evidence is in
+`.local/evidence/plugin-visual-reload-20261011/`.
+
+**The existing chat connection has not reloaded:** its available tools still
+lack both new tools. Computer Use blocks access to
+the Codex app, and the supported CLI control socket belongs to a separate
+managed daemon rather than this desktop's stdio runtime. No desktop restart or
+current-chat reload is claimed. Quit and reopen Codex, then reopen this chat to
+load the installed plugin, as directed by the
+[official local-plugin update guidance](https://developers.openai.com/plugins/build/plugins).
+Actual current-chat invocation/download acceptance, cross-platform CI and
+publisher signing/notarization remain open.
+
 ## Visual workflow priorities — completed native preview, 2026-10-11
 
 Implemented the four authorized priorities from the local `../text-to-cad`
