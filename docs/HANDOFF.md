@@ -9,6 +9,15 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — active, 2026-10-10
 
+The shared viewer now accepts the section report's optional exact endpoint and
+closure fields while retaining strict coordinate, type and unknown-field
+rejection. Historical reports without those fields remain supported. The final
+affected `live_ui`, `live_mcp_flow` and `webgl_renderer` CTests passed **3/3 in
+11.82 s**; direct renderer and UI runs passed **119** and **367 checks**. An earlier
+consistent Mac checkpoint passed 69/71 selected suites; both failures were this
+viewer mismatch and are covered by the corrected run. Full branch acceptance
+still awaits the independent signed-moment centroid fix and final rerun.
+
 Final integration checkpoint: the official **MCP SDK 2.3.0 passed 1,403
 interoperability checks**, including native stdio framing, current closed
 schemas, jobs, saved-source history, resource bytes and section geometry.

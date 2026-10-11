@@ -222,7 +222,7 @@ test('presentation rejects non-unit directions, unknown/duplicate owners, arbitr
 function sectionSettings(offset=.25) {const value=defaultPresentation();value.clip={normal:[0,0,1],offset_mm:offset,keep:'negative'};return value;}
 function capResult(data=base,offset=.25,owner=null) {
   const positions=flat.map(([x,y])=>[x,y,offset]),lengths=[2,Math.sqrt(8),2],boundary=lengths.reduce((a,b)=>a+b,0);
-  const curves=positions.map((a,i)=>{const b=positions[(i+1)%3];return {id:'section-'+(i+1),part_id:owner,solid_index:1,curve_kind:'line',length_mm:lengths[i],center_mm:a.map((v,k)=>(v+b[k])/2),bounds_mm:{min:a.map((v,k)=>Math.min(v,b[k])),max:a.map((v,k)=>Math.max(v,b[k]))},degenerate:false,points:[a,b]};});
+  const curves=positions.map((a,i)=>{const b=positions[(i+1)%3];return {id:'section-'+(i+1),part_id:owner,solid_index:1,curve_kind:'line',length_mm:lengths[i],center_mm:a.map((v,k)=>(v+b[k])/2),bounds_mm:{min:a.map((v,k)=>Math.min(v,b[k])),max:a.map((v,k)=>Math.max(v,b[k]))},degenerate:false,points:[a,b],closed:false,endpoints_mm:[a.slice(),b.slice()]};});
   return {document_id:data.document_id,revision:data.revision,evaluation_id:data.evaluation_id,feature_id:data.feature_id,kernel_version:'8.0.1',model_sha256:'a'.repeat(64),native_build:'native-test-build',
     report:{schema_version:1,units:'mm',action:'section',method:'native_BRep_planar_section',coordinate_space:'committed_source_pose',plane_coordinate_space:'displayed_world_mm',coverage:owner?'explicit_leaf_subset':'feature_solids',area_semantics:'sum_of_solid_sections',plane:{normal:[0,0,1],offset_mm:offset},explode:{distance_mm:0,directions:[]},
       sections:[{part_id:owner,source_plane_offset_mm:offset,displacement_mm:[0,0,0],area_mm2:2,boundary_length_mm:boundary,region_count:1,curve_count:3,contact_points:[],status:'area'}],regions:[{id:'cap-1',part_id:owner,solid_index:1,area_mm2:2,perimeter_mm:boundary,center_mm:[-1/3,-1/3,offset],wire_count:1}],curves,
@@ -256,10 +256,15 @@ test('native section rejects stale identity, unsafe fields, malformed geometry a
     r=>r.report.regions[0].part_id='missing',r=>r.report.mesh.triangle_regions[0]='face-1',r=>r.report.regions[0].id='face-1',r=>r.report.area_mm2=3,
     r=>r.report.sections[0].displacement_mm[0]=1,r=>r.report.curves[0].center_mm[2]=.5,r=>r.report.curves[0].points[0][0]=Infinity,r=>r.report.mesh.triangles[0][0]=100,
     r=>r.report.mesh.positions=Array(200001).fill([0,0,.25]),r=>r.report.curves[0].points=Array(200001).fill([0,0,.25]),r=>r.report.sections[0].contact_points=Array(10001).fill([0,0,.25]),
+    r=>r.report.curves[0].closed='yes',r=>r.report.curves[0].endpoints_mm=[[0,0,.25]],r=>r.report.curves[0].endpoints_mm[0][2]=.5,r=>r.report.curves[0].endpoints_mm[0][0]=Infinity,
     r=>r.report.script='bad',r=>r.report.mesh.script='bad',r=>r.report.curves[0].script='bad',r=>r.report.coverage='all_assembly_leaves',r=>r.report.regions[0].wire_count=0]) {
     const invalid=capResult();mutate(invalid);assert.throws(()=>validateSection(invalid,full,value));
   }
   assert.throws(()=>validateSection(capResult(),full,defaultPresentation()));
+});
+test('historical native sections remain valid without optional exact endpoint metadata',()=>{
+  const result=capResult();for(const curve of result.report.curves){delete curve.closed;delete curve.endpoints_mm;}
+  const model=withSection(base,result);assert.equal(model.section.indices.length,3);assert.equal(model.section.edges.length,3);
 });
 test('finite unused OCCT triangulation vertices remain qualified without drawing or picking them',()=>{
   const result=capResult();result.report.mesh.positions.push([2,2,.25]);const model=withSection(base,result);assert.equal(model.section.positions.length,9);assert.equal(model.section.indices.length,3);
