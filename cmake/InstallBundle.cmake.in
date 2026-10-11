@@ -6,6 +6,12 @@ if(POLICY CMP0207)
   cmake_policy(SET CMP0207 NEW)
 endif()
 set(executable "${root}/bin/agent-3d-cad@CMAKE_EXECUTABLE_SUFFIX@")
+# Installing cannot upgrade a stale binary's source claim by reconfiguring alone.
+include("@CMAKE_CURRENT_SOURCE_DIR@/cmake/SourceIdentity.cmake")
+agentcad_verify_source_stamp("@CMAKE_CURRENT_SOURCE_DIR@" "@AGENTCAD_SOURCE_MANIFEST_PATH@"
+  "@AGENTCAD_SOURCE_SHA256@" "@CMAKE_CURRENT_BINARY_DIR@/generated/build-source-$<CONFIG>.json"
+  "$<TARGET_FILE:agent-3d-cad>" build_identity)
+set(source_hash "@AGENTCAD_SOURCE_SHA256@")
 set(notices "@AGENTCAD_NOTICE_DIRECTORY@")
 foreach(required occt/LICENSE_LGPL_21.txt occt/OCCT_LGPL_EXCEPTION.txt
     occt/PatchOcctHlr.cmake occt/OCCT-HLR-PATCH.md
@@ -206,6 +212,8 @@ foreach(file IN LISTS packaged_files)
   endif()
 endforeach()
 string(APPEND manifest "\n  ]\n}\n")
+string(JSON manifest SET "${manifest}" source_identity "{\"format_version\":1,\"algorithm\":\"sha256-file-list-v1\",\"sha256\":\"${source_hash}\",\"manifest\":\"share/agent-3d-cad/source-inputs.sha256\"}")
+string(JSON manifest SET "${manifest}" build_identity "${build_identity}")
 string(JSON manifest SET "${manifest}" occt_linkage "\"@AGENTCAD_OCCT_LINKAGE@\"")
 string(JSON manifest SET "${manifest}" occt_modifications "[\"${hlr_modification}\"]")
 string(JSON manifest SET "${manifest}" occt_hlr_sdk_sha256 "\"${selected_hlr_hash}\"")

@@ -1,3 +1,57 @@
+# Stamp actual production bytes and bind them to the successfully linked binary.
+# A compile-definition change forces relinking even for recipe-only input edits.
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SourceIdentity.cmake")
+agentcad_source_manifest("${CMAKE_CURRENT_SOURCE_DIR}" AGENTCAD_SOURCE_MANIFEST)
+string(SHA256 AGENTCAD_SOURCE_SHA256 "${AGENTCAD_SOURCE_MANIFEST}")
+set(AGENTCAD_SOURCE_MANIFEST_PATH "${CMAKE_CURRENT_BINARY_DIR}/generated/source-inputs.sha256")
+file(WRITE "${AGENTCAD_SOURCE_MANIFEST_PATH}" "${AGENTCAD_SOURCE_MANIFEST}")
+target_compile_definitions(agent-3d-cad PRIVATE AGENTCAD_SOURCE_IDENTITY="${AGENTCAD_SOURCE_SHA256}")
+function(agentcad_json_string output value)
+  string(REPLACE "\\" "\\\\" value "${value}")
+  string(REPLACE "\"" "\\\"" value "${value}")
+  string(REPLACE "\n" "\\n" value "${value}")
+  string(REPLACE "\r" "\\r" value "${value}")
+  string(REPLACE "\t" "\\t" value "${value}")
+  set(${output} "\"${value}\"" PARENT_SCOPE)
+endfunction()
+set(AGENTCAD_BUILD_SETTINGS "{\"format_version\":1}")
+foreach(field IN ITEMS source_sha256 cache_identity compiler_id compiler_version configuration system architecture osx_architectures deployment_target cxx_flags configuration_flags)
+  if(field STREQUAL "source_sha256")
+    set(value "${AGENTCAD_SOURCE_SHA256}")
+  elseif(field STREQUAL "cache_identity")
+    set(value "${cache_identity}-$<CONFIG>")
+  elseif(field STREQUAL "compiler_id")
+    set(value "${CMAKE_CXX_COMPILER_ID}")
+  elseif(field STREQUAL "compiler_version")
+    set(value "${CMAKE_CXX_COMPILER_VERSION}")
+  elseif(field STREQUAL "configuration")
+    set(value "$<CONFIG>")
+  elseif(field STREQUAL "system")
+    set(value "${CMAKE_SYSTEM_NAME}")
+  elseif(field STREQUAL "architecture")
+    set(value "${CMAKE_SYSTEM_PROCESSOR}")
+  elseif(field STREQUAL "osx_architectures")
+    set(value "${CMAKE_OSX_ARCHITECTURES}")
+  elseif(field STREQUAL "deployment_target")
+    set(value "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  elseif(field STREQUAL "cxx_flags")
+    set(value "${CMAKE_CXX_FLAGS}")
+  else()
+    set(value "$<$<CONFIG:Debug>:${CMAKE_CXX_FLAGS_DEBUG}>$<$<CONFIG:Release>:${CMAKE_CXX_FLAGS_RELEASE}>$<$<CONFIG:RelWithDebInfo>:${CMAKE_CXX_FLAGS_RELWITHDEBINFO}>$<$<CONFIG:MinSizeRel>:${CMAKE_CXX_FLAGS_MINSIZEREL}>")
+  endif()
+  agentcad_json_string(encoded "${value}")
+  string(JSON AGENTCAD_BUILD_SETTINGS SET "${AGENTCAD_BUILD_SETTINGS}" "${field}" "${encoded}")
+endforeach()
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/build-settings-$<CONFIG>.json" CONTENT "${AGENTCAD_BUILD_SETTINGS}\n")
+add_custom_command(TARGET agent-3d-cad POST_BUILD
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}"
+    "-DINPUT_MANIFEST=${AGENTCAD_SOURCE_MANIFEST_PATH}"
+    "-DSETTINGS_FILE=${CMAKE_CURRENT_BINARY_DIR}/generated/build-settings-$<CONFIG>.json"
+    "-DEXECUTABLE=$<TARGET_FILE:agent-3d-cad>"
+    "-DOUTPUT_FILE=${CMAKE_CURRENT_BINARY_DIR}/generated/build-source-$<CONFIG>.json"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/StampSource.cmake" VERBATIM)
+install(FILES "${AGENTCAD_SOURCE_MANIFEST_PATH}" DESTINATION share/agent-3d-cad)
+
 # Portable archives need no developer SDK, compiler or scripts to execute a
 # model. Modified dependency sources accompany the notices; dependency inspection
 # happens while installing.
