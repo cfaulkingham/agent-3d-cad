@@ -100,9 +100,49 @@ An affine-scaled analytic cylinder exposed inaccurate Gauss-only volume
 integration in OCCT despite its small reported error estimate. For radii 10/15 mm
 and height 5 mm, analytic volume is `750π = 2356.1944901923448 mm³`.
 At requested relative epsilon 1e-9, Gauss-only reported `2356.1941555768203`,
-while Gauss-Kronrod reported `2356.1944898849015`. The summary now uses
-Gauss-Kronrod for Bezier/B-spline boundary surfaces; strict analytic tests remain
+while Gauss-Kronrod reported `2356.1944898849015`. The integrated summary uses
+Gauss-Kronrod per rational support face, fixed-degree Gauss for planar faces
+bounded only by lines, and adaptive Gauss for other polynomial/analytic faces.
+Exact knot spans and an exterior common reference per closed solid keep rational first-moment
+integration within the unchanged worker budget. Strict analytic tests remain
 unchanged. Exact geometry, not mesh integration, determines the reported mass.
+
+OCCT's normalized property accumulator loses nonzero first moments when an
+intermediate signed mass becomes zero. The summary therefore accumulates signed
+mass and first moments with compensated sums, dividing only after the complete
+positive material mass is validated. A 10 by 20 by 30 mm box independently checks
+the analytic centroid `[5,10,15]` through native, snapshot, worker, STEP import
+and source-deleted readback paths; the prior result was `[1.25,7.5,15]`.
+
+An individual curved face can also have zero signed mass and nonzero first
+moments, which OCCT's normalized per-face result cannot expose. The complete
+solid is retried at up to 16 nearby exterior common references when that occurs.
+A planar face through the reference is accepted only when its point flux is
+identically zero. Unresolved conditioning returns explicit `kernel_failure`.
+The cubic roof `z=(2x/3-1)^3` over `x=0..3`, `y=0..1`, with bottom `z=-1`, has
+analytic mass 3 and first moments `27/5`, `3/2`, `-9/7`. Its regression deliberately
+produces a zero-mass top-face contribution and verifies recovery, including an
+independent STEP reader. No centroid is guessed and no tolerance is increased.
+
+Disconnected solid occurrences integrate near their own bounds before their
+positive masses and first moments are combined with compensated sums. One
+assembly-wide reference caused 7.28e-5 mm centroid drift for two 1 mm cubes at
+X=0 and X=1e6 mm; local integration yields the analytic X centroid 500000.5 mm.
+Overlapping/coincident instances retain their separate material contributions.
+Independent regressions cover distant and unequal-size solids, reversed instance
+order, rotated nested assemblies, snapshots, workers and cold STEP reconstruction.
+
+The numerical increment `2304c65`, integrated as `79e448c`, passed its final
+seven focused suites in **47.46 s**, including **459 parity-solid checks**, artifact native/MCP
+centroids, text placement, surface thickening, transformed rational assemblies
+and performance checks. The curved-pipe build and summary took **0.388 s** and
+its ordinary create call passed the unchanged 30-second worker limit.
+
+The local-solid increment `6e835de`, integrated as `1f766bb`, passed **12/12
+focused suites in 67.18 s**, including **579 parity-solid checks**, STEP import,
+all four assembly suites, surfaces, text, artifacts and performance. Its pipe
+build/summary took **0.337 s**, and the separated-cube centroid is exact at
+floating precision. Complete integrated acceptance is recorded in HANDOFF.
 
 `parity_solids` tests analytic volumes and bounds, signed draft/twist geometry,
 explicit chamfer side, annular and pointed lofts, explicit multiple-hole
@@ -112,7 +152,7 @@ components (including remapped reference faces). The independent developer scrip
 `tests/parity_solids_schema_tests.py` checks live Draft 2020-12 contracts and actual
 native calls. Actual executed test evidence is recorded in the integration handoff.
 
-## Executed evidence — 2026-10-10
+## Historical incremental evidence — 2026-10-10
 
 macOS arm64, pinned OCCT 8.0.1 / FreeType 2.14.3, Release build:
 
