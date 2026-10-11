@@ -1,7 +1,7 @@
 """Offline production-byte and successful-link identity checks; no Git or SDK needed."""
 import hashlib
 import json
-from pathlib import Path
+from pathlib import Path, PurePath, PureWindowsPath
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +13,16 @@ checks = 0
 def sha(value):
     return hashlib.sha256(value).hexdigest()
 
+def cmake_literal(value):
+    # Generated CMake is code: native Windows backslashes are escapes inside
+    # quoted arguments. Bracket arguments also retain literal ${...}, quotes and
+    # semicolons; choose a delimiter that cannot close within the path.
+    value = value.as_posix() if isinstance(value, PurePath) else str(value)
+    equals = ''
+    while ']' + equals + ']' in value:
+        equals += '='
+    return '[' + equals + '[' + value + ']' + equals + ']'
+
 def run(args, expected=None, tool='cmake'):
     global checks
     result = subprocess.run([tool, *args], capture_output=True, text=True, timeout=120)
@@ -21,8 +31,25 @@ def run(args, expected=None, tool='cmake'):
     checks += 1
     return result
 
+# Exercise Windows path syntax on every developer platform. No Windows file or
+# toolchain is required: CMake parses then writes the literal back as bytes.
+with tempfile.TemporaryDirectory(prefix='cad-cmake-path-literals-') as temp:
+    root = Path(temp)
+    broken = root/'broken.cmake'
+    broken.write_text('set(captured "' + str(PureWindowsPath(r'C:\Users\runner\source')) + '")\n')
+    run(['-P', str(broken)], 'Invalid character escape')
+    for index, path in enumerate((
+            PureWindowsPath(r'C:\Users\runner\source with spaces\${DO_NOT_EXPAND}\input.txt'),
+            PureWindowsPath(r'\\server\share\folder with spaces\bracket]]and]=].txt'),
+            PureWindowsPath(r'C:\temp\new\read\trace.txt'))):
+        script = root/f'roundtrip-{index}.cmake'; output = root/f'roundtrip-{index}.txt'
+        script.write_text(f'set(captured {cmake_literal(path)})\n'
+                          f'file(WRITE {cmake_literal(output)} "${{captured}}")\n')
+        run(['-P', str(script)])
+        assert output.read_bytes() == path.as_posix().encode(); checks += 1
+
 with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
-    root = Path(temp); source = root/'source'; source.mkdir()
+    root = Path(temp); source = root/'source with spaces'; source.mkdir()
     for directory in ('src', 'include', 'web', 'cmake', 'third_party'):
         (source/directory).mkdir()
         (source/directory/'input.txt').write_bytes(('Exact '+directory+'\r\n').encode())
@@ -34,7 +61,9 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
     manifest = generated/'source-inputs.sha256'; settings = generated/'settings.json'; stamp = generated/'build-source.json'; exe = root/'native'
     exe.write_bytes(b'Linked native fixture bytes, not executed\n')
     collect = root/'collect.cmake'
-    collect.write_text(f'include("{source}/cmake/SourceIdentity.cmake")\nagentcad_source_manifest("{source}" content)\nfile(WRITE "{manifest}" "${{content}}")\n')
+    collect.write_text(f'include({cmake_literal(source/"cmake/SourceIdentity.cmake")})\n'
+                       f'agentcad_source_manifest({cmake_literal(source)} content)\n'
+                       f'file(WRITE {cmake_literal(manifest)} "${{content}}")\n')
     run(['-P', str(collect)])
     original = manifest.read_bytes(); digest = sha(original)
     inspection = generated/'inspection.sha256'
@@ -49,7 +78,9 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
     run(stamp_args)
     record = json.loads(stamp.read_text()); assert record['executable_sha256']==sha(exe.read_bytes()) and record['source_sha256']==digest; checks += 1
     verify = root/'verify.cmake'
-    verify.write_text(f'include("{source}/cmake/SourceIdentity.cmake")\nagentcad_verify_source_stamp("{source}" "{manifest}" "{digest}" "{stamp}" "{exe}" result)\n')
+    verify.write_text(f'include({cmake_literal(source/"cmake/SourceIdentity.cmake")})\n'
+                      f'agentcad_verify_source_stamp({cmake_literal(source)} {cmake_literal(manifest)} '
+                      f'{cmake_literal(digest)} {cmake_literal(stamp)} {cmake_literal(exe)} result)\n')
     run(['-P',str(verify)])
     saved = (source/'src/input.txt').read_bytes(); (source/'src/input.txt').write_bytes(saved+b'changed')
     before = stamp.read_bytes(); run(stamp_args,'Production source changed during build'); assert stamp.read_bytes()==before; checks += 1
@@ -65,7 +96,7 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
     manifest.write_bytes(original+b'0'*64+b'  src/fabricated.cpp\n'); run(['-P',str(verify)],'Production source changed after configure/build'); manifest.write_bytes(original)
     # Neither Git metadata nor the absolute root enters the production identity.
     (source/'.git').mkdir(); (source/'.git/HEAD').write_text('irrelevant revision\n'); run(['-P',str(collect)]); assert manifest.read_bytes()==original; checks += 1
-    relocated=root/'relocated'; shutil.copytree(source,relocated); collect.write_text(collect.read_text().replace(str(source),str(relocated))); run(['-P',str(collect)]); assert manifest.read_bytes()==original; checks += 1
+    relocated=root/'relocated'; shutil.copytree(source,relocated); collect.write_text(collect.read_text().replace(source.as_posix(),relocated.as_posix())); run(['-P',str(collect)]); assert manifest.read_bytes()==original; checks += 1
     run(['-P',str(verify)])
 
 # CPack runs the generated installation in an embedded CMake interpreter. It
@@ -73,7 +104,7 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
 # This NONE-language project packages labelled fixture bytes without a compiler,
 # native SDK or runtime execution; it uses the actual install verifier and CPack.
 with tempfile.TemporaryDirectory(prefix='cad-source-cpack-') as temp:
-    root=Path(temp); source=root/'source'; source.mkdir(); build=root/'build'
+    root=Path(temp); source=root/'source with spaces'; source.mkdir(); build=root/'build'
     (source/'cmake').mkdir(); (source/'src').mkdir()
     (source/'VERSION').write_text('1.0.0\n')
     (source/'src/input.txt').write_text('Immutable production fixture input\n')
