@@ -7,6 +7,58 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Main integration verification — 2026-10-11
+
+Before the requested merge into `main`, rebuilt completed source `5e60e0b` and
+passed **73/73 CTests in 299.41 seconds**, **1,864 official SDK checks**
+(26.216/19.170 seconds primary wall/Python CPU; reopened 3.799/3.150),
+**49 source/build identity checks**, **113 offline publisher checks**, nine
+schema-validator regressions and three SDK deadline regressions. The executable
+retains SHA-256 `9f96536a6b4a472bc11fe7ff9888ef375a2bd2ae8db11f7dbb23172f0f256904`.
+The committed workflow parses as YAML and all 28 directly referenced scripts
+exist. Evidence is in `.local/evidence/main-merge-20261011/`.
+
+At the user's direction, the pending two-line schema-output CI hook is excluded
+from this merge and preserved locally; its script and related source edits are
+unfinished in the separate `parity-sheet-metal` worktree. The saved patch is
+`pending-ci.patch` in the evidence directory. Current-source cross-platform CI,
+publisher signing and actual host acceptance remain pending as detailed below.
+
+## Local plugin rebuilt and installed — 2026-10-11
+
+At the user's request, rebuilt the current native source at `5e60e0b` with the
+existing patched OCCT 8.0.1 SDK and installed `0.1.0-preview.2` into the enabled
+`agent-cad@agent-cad-local` registration. Source is
+`~/Applications/Agent3DCAD/chatgpt-plugin-preview2-reload-20261011`; cache is
+`~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.2`.
+Modern and legacy host manifests retain the existing Documents/Agent3DCAD
+workspace and use a unique contained native launcher. Previous source/cache and
+a mode-0600 configuration backup remain available. The pre-existing CI workflow
+edit was preserved.
+
+Verification: **14/14 targeted CTests passed in 47.58 seconds** (installer,
+embedded assets, notices, protocol, CLI, renamed workers, viewer/live bridge,
+service and viewer UI/renderer flows). Packaged smoke passed full provenance,
+empty-PATH discovery, create/edit/reopen/history, STEP inspection and
+STEP/STL/3MF/PDF/SVG/four-DXF exports. Installed source and cache match all
+**420 inventoried files plus provenance**. Fresh ChatGPT `0.144.0-alpha.4` and
+Codex `0.162.0-alpha.17.2` runtimes discover both skills and **31 tools**; all
+input/output schemas match the native catalog and independently validate.
+All **108 saved model files** and unrelated parsed host settings are unchanged.
+The packaged executable SHA-256 is
+`8ef4bfbe83ba32b0be73d99e6d1203eebabdefc40ca8ea9e871a18eea8e10592`.
+Evidence and reproducible install/runtime probes are in
+`.local/evidence/local-plugin-reload-20261011/`.
+
+**Existing host reload remains pending.** Process inspection still found the
+open Codex app's preview.1 CAD connections after installation. Computer-use
+access to the Codex app is blocked by the tool's safety restriction; the exposed
+CLI control socket belongs to a separate managed daemon, not the desktop's
+stdio runtime. No desktop restart or current-chat reload is claimed. Quit and
+reopen the host before testing preview.2 in existing chats. No Claude extension,
+standalone app, release/tag or publisher signing was changed; actual user host
+acceptance is the next step.
+
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
 Published `6dc4b6f8323569a49629b49df31a1948066c6cf9` completed
