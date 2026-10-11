@@ -92,6 +92,8 @@ def input_bundle(root, arch, version):
             slices = native_slices(file)
             if set(slices) != {arch}:
                 raise ValueError('Input native image contains an inconsistent slice set')
+            if slices[arch]['filetype'] != (2 if path == binary else 6):
+                raise ValueError('Native executable/library role differs from bundle path')
             native[path] = slices[arch]
     if not native or len(native) > 512:
         raise ValueError('Native image count exceeds composition budget')
@@ -102,9 +104,10 @@ def input_bundle(root, arch, version):
 
 def compose(arm64, x64, destination, version):
     roots = {'arm64': Path(arm64).resolve(), 'x64': Path(x64).resolve()}
-    destination = Path(destination).absolute()
-    if destination.exists() or destination.is_symlink() or roots['arm64'] == roots['x64']:
+    requested = Path(destination).absolute()
+    if requested.exists() or requested.is_symlink() or roots['arm64'] == roots['x64']:
         raise ValueError('Composition needs distinct inputs and a new output directory')
+    destination = requested.resolve(strict=False)
     if any(destination.is_relative_to(r) or r.is_relative_to(destination) for r in roots.values()):
         raise ValueError('Composition output cannot overlap an input')
     inputs = {a: input_bundle(roots[a], a, version) for a in ARCHES}

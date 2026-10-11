@@ -22,7 +22,8 @@ manifest = {
         'command': '${__dirname}/' + binary, 'args': ['serve', '--default-workspace', '--workspace-setting', '${user_config.workspace}']}},
     'compatibility': {'platforms': ['darwin' if system == 'Darwin' else 'win32']},
     # Informational provenance only: MCPB 0.3 has no CPU selection constraint.
-    '_meta': {'org.agentcad.native': {'system': system, 'architecture': arch, 'architecture_selection': 'distribution_required'}},
+    '_meta': {'org.agentcad.native': {'system': system, 'architecture': arch,
+        'architecture_selection': 'native_universal' if arch == 'universal' else 'distribution_required'}},
     'user_config': {'workspace': {'type': 'directory', 'title': 'Project folder (optional)',
         'description': 'Ready to use in Documents/Agent CAD. Change this only to reopen an existing CAD workspace. Projects remain when the extension is updated or removed.',
         # Claude 2.26454.2 substitutes this value into args but does not expand

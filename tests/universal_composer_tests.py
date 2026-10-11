@@ -94,6 +94,16 @@ with tempfile.TemporaryDirectory(prefix='cad-universal-compose-') as temporary:
     fails(lambda:composer.compose(arm,x64,output,version),'new output')
     fails(lambda:composer.compose(x64,arm,root/'swapped',version),'Expected a verified thin')
     fails(lambda:composer.compose(arm,arm,root/'same',version),'distinct inputs')
+    alias=root/'aliased-input';alias.symlink_to(arm,target_is_directory=True)
+    before={p.relative_to(arm).as_posix():validation.sha(p) for p in arm.rglob('*') if p.is_file()}
+    fails(lambda:composer.compose(arm,x64,alias/'output',version),'overlap an input')
+    check(before=={p.relative_to(arm).as_posix():validation.sha(p) for p in arm.rglob('*') if p.is_file()},'Aliased overlap leaves original input unchanged')
+    executable=x64/'bin/agent-3d-cad';original=executable.read_bytes()
+    executable.write_bytes((x64/'lib/libfreetype.dylib').read_bytes());inventory(x64,provenances['x64'])
+    fails(lambda:composer.compose(arm,x64,root/'library-entrypoint',version),'role differs');executable.write_bytes(original);inventory(x64,provenances['x64'])
+    dependency=x64/'lib/libfreetype.dylib';original=dependency.read_bytes()
+    dependency.write_bytes(executable.read_bytes());inventory(x64,provenances['x64'])
+    fails(lambda:composer.compose(arm,x64,root/'executable-dependency',version),'role differs');dependency.write_bytes(original);inventory(x64,provenances['x64'])
     failures=[('missing-source',lambda p:p.pop('source_identity'),'production source identity'),
               ('source-hash',lambda p:p['source_identity'].update(sha256='0'*64),'production source identity'),
               ('source-build',lambda p:p['build_identity'].update(source_sha256='0'*64),'build/source'),

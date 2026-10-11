@@ -164,6 +164,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/source_identity_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/universal_validation_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           if ($IsMacOS) {
             python tests/universal_composer_tests.py
             if ($LASTEXITCODE) { exit $LASTEXITCODE }

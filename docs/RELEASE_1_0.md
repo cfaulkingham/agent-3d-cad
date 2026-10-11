@@ -98,7 +98,9 @@ Run the complete journey in a fresh host profile on each supported host/platform
    and verify saved projects remain. Reinstall and reopen them.
 7. Verify publisher signing/notarization as applicable and the actual directory
    install/update route. Resolve CPU selection so users do not need architecture
-   knowledge; a macOS universal package or host-selected build is still planned.
+   knowledge. The native macOS universal composer is implemented; the same
+   composed archives require real ARM/Intel runtime and host installation
+   evidence. See [LOCAL_PACKAGE_ACCEPTANCE.md](LOCAL_PACKAGE_ACCEPTANCE.md).
 
 Record failures as unfinished work. Unit tests, SDK interoperability and native
 package smoke are prerequisites; they do not substitute for these host checks.
