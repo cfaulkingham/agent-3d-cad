@@ -163,6 +163,42 @@ with tempfile.TemporaryDirectory(prefix='cad-publisher-fixture-') as temporary:
             '--input-manifest-sha256', manifest_hash, '--source-sha256', source_hash, '--identity-sha1', '0' * 40,
             '--team-id', 'ABCDEFGHIJ', '--identifier-prefix', 'com.example.fixture'], capture_output=True, text=True)
         check(result.returncode != 0 and '--allow-apple-network' in result.stderr and not (root / 'blocked').exists(), 'Explicit timestamp-network boundary')
+        # A real resource can change after the approved input has validated but
+        # before the first snapshot. Reject that captured copy before any signer
+        # call; an identity-lookup stub is not successful publisher evidence.
+        resource = core / composer.HLR.parent / 'OCCT-HLR-PATCH.md'
+        resource_bytes = resource.read_bytes()
+        original_manifest = (core / validation.MANIFEST).read_bytes()
+        normal_core, normal_command = publisher.core, publisher.command
+        for rewrite_manifest in ([False, True] if core != universal else [False]):
+            mutated, signer_calls = [], []
+            def mutate_after_validation(bundle, *args, **kwargs):
+                checked = normal_core(bundle, *args, **kwargs)
+                if Path(bundle).resolve() == core.resolve() and not mutated:
+                    resource.write_bytes(resource_bytes + b'Changed after approved input validation.\n')
+                    if rewrite_manifest:
+                        changed = json.loads(original_manifest)
+                        next(item for item in changed['files'] if item['path'] == resource.relative_to(core).as_posix())['sha256'] = validation.sha(resource)
+                        publisher.write_json(core / validation.MANIFEST, changed)
+                    mutated.append(True)
+                return checked
+            def reject_signer(*args, **kwargs):
+                if args[:2] == ('/usr/bin/codesign', '--force'):
+                    signer_calls.append(args)
+                    raise AssertionError('Unapproved captured bytes reached the signer')
+                return normal_command(*args, **kwargs)
+            try:
+                with patch.object(publisher, 'core', side_effect=mutate_after_validation), \
+                     patch.object(publisher, 'selected_identity', return_value='offline lookup only'), \
+                     patch.object(publisher, 'command', side_effect=reject_signer):
+                    fails(lambda: publisher.sign(core, root / 'capture-rejected', manifest_hash, source_hash,
+                          '0' * 40, 'ABCDEFGHIJ', 'com.example.fixture'), 'approved core' if rewrite_manifest else 'integrity failure')
+                check(mutated == [True] and not signer_calls, 'Changed captured resource rejected before every signer call')
+                check(not (root / 'capture-rejected').exists() and not list(root.glob('.publisher-*')), 'Rejected capture publishes nothing and removes staging')
+            finally:
+                resource.write_bytes(resource_bytes)
+                (core / validation.MANIFEST).write_bytes(original_manifest)
+            check(publisher.snapshot(core) == before, 'Capture regression restores exact fixture bytes and modes')
         # A real offline ad-hoc replacement is not acceptable publisher signing.
         # Bypass only the preflight identity lookup, never its signature audit.
         normal = publisher.command

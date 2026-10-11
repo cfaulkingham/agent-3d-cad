@@ -194,6 +194,10 @@ def sign(root, output, manifest_hash, source_hash, fingerprint, team, prefix):
         shutil.copytree(root, copied, symlinks=False)
         if snapshot(copied) != original:
             raise ValueError('Input changed while capturing publisher copy')
+        # The first snapshot follows input validation. Recheck the private copy
+        # against both approved hashes before signing can refresh its inventory;
+        # otherwise an intervening resource change could become the baseline.
+        provenance, native = core(copied, manifest_hash, source_hash)
         signatures, signed = {}, {}
         for path in sorted(native, key=lambda p: (p == 'bin/agent-3d-cad', p)):
             identifier = code_identifier(prefix, path)
