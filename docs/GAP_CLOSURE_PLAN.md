@@ -57,6 +57,12 @@ zero valid identities. Installed ChatGPT app metadata combines the ChatGPT name
 with `com.openai.codex`; the intended acceptance target is being clarified.
 These external prerequisites remain open alongside the native completion gaps below.
 
+The user subsequently confirmed `/Applications/ChatGPT.app` as the target and
+authorized publication. Commit `1fe590a` is published on the integration branch;
+[CI run 50](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38099409378)
+started all five platform lanes. Results remain pending.
+
+
 Numerical integration required independent corrections. `450656f` selects
 rational quadrature per support face; `6d82d1f` corrects exact planar polygon
 moments, and `fc25da3` conditions rational first moments away from symmetry

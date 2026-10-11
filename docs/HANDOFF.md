@@ -9,6 +9,16 @@ signing/notarization and remaining host validation are still open.
 
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
+The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
+authorized branch publication for CI. `1fe590adf6ca04dcc8d9ac0c9414aba88016b55e`
+is now published on `codex/build123d-gap-closure`; the five-platform workflow
+[run 50](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38099409378)
+has started. It is current-source execution in progress, not passing evidence.
+No host plugin registration has changed. The CI recipe now adds all eight
+actual-call modeling schema audits plus artifact SDK/flow schema validation on
+each native platform. YAML parsing and referenced-script inventory pass; the
+expanded recipe is not yet executed in CI.
+
 Original-scope completion audit at `2cdf20d` reopened concrete native workflows:
 constrained point/common tangency and fixed-radius arcs, inverted full-round and
 general curved hull inputs; differently parameterized/rational/closed Gordon

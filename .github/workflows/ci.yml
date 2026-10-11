@@ -120,6 +120,26 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_smoke.py $exe $fixture
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          # Exercise every modeling family through actual discovered contracts
+          # on the same native platform as its geometry and persistence tests.
+          $modelSchemaChecks = @(
+            'modeling_gap_schema_tests.py',
+            'authoring_schema_tests.py',
+            'parity_solids_schema_tests.py',
+            'parity_sheet_schema_tests.py',
+            'parity_surfaces_schema_tests.py',
+            'parity_curves_schema_tests.py',
+            'parity_authoring_schema_tests.py',
+            'mesh_reconstruction_schema_tests.py'
+          )
+          foreach ($check in $modelSchemaChecks) {
+            python (Join-Path 'tests' $check) $exe
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          python tests/artifact_mcp_sdk_smoke.py $exe (Join-Path $PWD 'build/artifact-sdk-evidence.json')
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/artifact_schema_tests.py (Join-Path $PWD 'build/artifact-flow-evidence.json')
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/robot_export_test.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Installer and client configuration checks
