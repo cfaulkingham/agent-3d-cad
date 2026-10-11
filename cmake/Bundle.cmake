@@ -1,7 +1,7 @@
 # Stamp actual production bytes and bind them to the successfully linked binary.
 # A compile-definition change forces relinking even for recipe-only input edits.
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/SourceIdentity.cmake")
-agentcad_source_manifest("${CMAKE_CURRENT_SOURCE_DIR}" AGENTCAD_SOURCE_MANIFEST)
+agentcad_source_manifest("${CMAKE_CURRENT_SOURCE_DIR}" AGENTCAD_SOURCE_MANIFEST TRACK_CONFIGURE)
 string(SHA256 AGENTCAD_SOURCE_SHA256 "${AGENTCAD_SOURCE_MANIFEST}")
 set(AGENTCAD_SOURCE_MANIFEST_PATH "${CMAKE_CURRENT_BINARY_DIR}/generated/source-inputs.sha256")
 file(WRITE "${AGENTCAD_SOURCE_MANIFEST_PATH}" "${AGENTCAD_SOURCE_MANIFEST}")
