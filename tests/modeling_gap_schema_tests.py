@@ -7,6 +7,7 @@ No Python dependency is added to the native service or distributed bundles.
 --available-only runs only discoverable models for intermediate binary confidence;
 it omits the combined lifecycle assertions and is not final acceptance evidence.
 """
+import base64
 import copy
 import hashlib
 import json
@@ -55,9 +56,18 @@ def rejected(tool, kind, value):
           f"{tool} {kind} accepted an invalid contract: {json.dumps(value)}")
 
 
-def dereference(schema, root):
-    while "$ref" in schema:
+def discovery_field(schema, root, field):
+    """Read discovery structure without discarding Draft 2020-12 ref siblings.
+
+    This is introspection only; all acceptance checks use the untouched native
+    catalog through Draft202012Validator. Never flatten or merge its assertions.
+    """
+    seen = set()
+    while field not in schema:
+        check("$ref" in schema, f"Discovery schema supplies {field}")
         reference = schema["$ref"]
+        check(reference not in seen, "Discovery lookup has no reference cycle")
+        seen.add(reference)
         check(reference.startswith("#"), "Discovery references stay local")
         if reference.startswith("#/"):
             schema = root
@@ -68,7 +78,7 @@ def dereference(schema, root):
                        if isinstance(body, dict) and body.get("$anchor") == reference[1:]]
             check(len(matches) == 1, "Discovery anchor resolves uniquely")
             schema = matches[0]
-    return schema
+    return schema[field]
 
 
 def same_geometry(left, right):
@@ -83,12 +93,12 @@ def same_geometry(left, right):
 
 
 create_schema = tools["cad_create"]["inputSchema"]
-model_schema = dereference(create_schema["properties"]["model"], create_schema)
-feature_schema = dereference(model_schema["properties"]["features"]["items"], create_schema)
+model_properties = discovery_field(create_schema["properties"]["model"], create_schema, "properties")
+feature_schema = discovery_field(model_properties["features"], create_schema, "items")
 discovered = set()
-for alternative in feature_schema["oneOf"]:
-    alternative = dereference(alternative, create_schema)
-    discriminator = alternative["properties"]["type"]
+for alternative in discovery_field(feature_schema, create_schema, "oneOf"):
+    properties = discovery_field(alternative, create_schema, "properties")
+    discriminator = properties["type"]
     discovered.update([discriminator["const"]] if "const" in discriminator else discriminator["enum"])
 
 
@@ -223,6 +233,69 @@ cases["closed_surface_shell"] = model([*box_patches, closed])
 cases["surface_solid"] = model([*box_patches, closed, {"id": "result", "type": "surface_solid", "input": "shell"}])
 cases["open_surface_shell"] = model([box_patches[0], box_patches[2], {**closed, "inputs": ["bottom", "front"], "closed": False}])
 
+
+# Complete parity coverage is deliberately part of the combined suite: every
+# discovered feature must survive create/read/query and unknown-field rejection.
+for kind, options in {
+    "scale": {"origin": [1, 2, 3], "factors": [2, 3, .5]},
+    "draft": {"faces": face("stock", (1, 0, 0)), "angle_deg": 5,
+              "direction": [0, 0, 1], "neutral_plane": plane()},
+}.items():
+    cases[kind] = model([stock, {"id": "result", "type": kind, "input": "stock", **options}])
+cases["twist_extrude"] = model([sketch(width=4, height=2),
+    {"id": "result", "type": "twist_extrude", "input": "profile", "distance": -10,
+     "angle_deg": 90, "center": [1, 1, 0]}])
+weighted = {"id": "curve", "type": "curve", "path": {"type": "wire", "segments": [
+    {"type": "bezier", "points": [[2, 0, 0], [2, 2, 0], [0, 2, 0]], "weights": [1, math.sqrt(.5), 1]}]}}
+cases["curve"] = model([weighted])
+cases["curve_helix"] = model([{"id": "result", "type": "curve_helix", "frame": plane(),
+    "radius": 2, "pitch": 3, "turns": 1.5}])
+for kind, options in {
+    "curve_trim": {"start": .2, "end": .8},
+    "curve_tangent_line": {"position": .5, "length": 2},
+}.items():
+    cases[kind] = model([weighted, {"id": "result", "type": kind, "input": "curve", **options}])
+cases["curve_tangent_arc"] = model([{"id": "curve", "type": "curve", "path": wire((0, 0, 0), (2, 0, 0))},
+    {"id": "result", "type": "curve_tangent_arc", "input": "curve", "position": 1, "end": [3, 1, 0]}])
+cases["curve_extract"] = model([stock, {"id": "result", "type": "curve_extract", "input": "stock",
+    "edges": edge("stock", (10, 0, 0))}])
+for name, features in {
+    "sketch_hull": [sketch("left", radius=1), sketch("right", radius=1, origin=(4, 0, 0)),
+        {"id": "derived", "type": "sketch_hull", "inputs": ["left", "right"], "workplane": plane()}],
+    "sketch_trace": [weighted, {"id": "derived", "type": "sketch_trace", "input": "curve", "workplane": plane(), "width": .4}],
+    "sketch_full_round": [sketch(width=10, height=4),
+        {"id": "derived", "type": "sketch_full_round", "input": "profile", "edges": edge("profile", (10, 2, 0))}],
+}.items():
+    cases[name] = model([*features, {"id": "result", "type": "extrude", "input": "derived", "distance": 1}])
+
+def segments(points):
+    return [wire(p, points[(i+1) % len(points)])["segments"][0] for i, p in enumerate(points)]
+
+cases["surface_fill"] = model([{"id": "result", "type": "surface_fill", "tolerance": 1e-5,
+    "boundaries": [{"curve": c, "continuity": "C0"} for c in segments([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]])]}])
+cases["surface_gordon"] = model([{"id": "result", "type": "surface_gordon",
+    "u_curves": [wire((0, y, 0), (10, y, 0))["segments"][0] for y in (0, 10)],
+    "v_curves": [wire((x, 0, 0), (x, 10, 0))["segments"][0] for x in (0, 10)],
+    "u_parameters": [0, 1], "v_parameters": [0, 1], "tolerance": 1e-6}])
+cylindrical = {"id": "patch", "type": "surface_bezier",
+    "control_points": [[[10, 0, 0], [10, 0, 5]], [[10, 10, 0], [10, 10, 5]], [[0, 10, 0], [0, 10, 5]]],
+    "weights": [[1, 1], [math.sqrt(.5)]*2, [1, 1]]}
+for kind, path in {
+    "curve_project": wire((15, 2, 2), (15, 8, 2)),
+    "surface_project": {"type": "wire", "segments": segments([[15, 2, 1], [15, 8, 1], [15, 8, 4], [15, 2, 4]])},
+}.items():
+    cases[kind] = model([cylindrical, {"id": "curve", "type": "curve", "path": path},
+        {"id": "result", "type": kind, "input": "curve", "target": "patch",
+         "faces": {"type": "geometric", "feature_id": "patch", "surface_kind": "bezier", "expected_count": 1},
+         "direction": [-1, 0, 0]}])
+font_bytes = (Path(__file__).parent / "fixtures" / "authoring-test.ttf").read_bytes()
+cases["text_on_path"] = model([
+    {"id": "letters", "type": "sketch", "workplane": plane(), "profile": {"type": "text", "text": "BB", "height": 10,
+        "font": {"content_base64": base64.b64encode(font_bytes).decode(), "sha256": hashlib.sha256(font_bytes).hexdigest()}}},
+    {"id": "path", "type": "curve", "path": wire((10, 20, 0), (110, 20, 0))},
+    {"id": "placed", "type": "text_on_path", "input": "letters", "path": "path", "start": 5, "offset": 2},
+    {"id": "result", "type": "extrude", "input": "placed", "distance": 3}])
+
 if available_only:
     available_validator = Draft202012Validator(create_schema)
     skipped = [name for name, intent in cases.items()
@@ -259,7 +332,7 @@ with tempfile.TemporaryDirectory(prefix="cad-modeling-gap-schema-") as directory
     for name, intent in cases.items():
         records[name] = invoke("cad_create", {"document_id": name, "model": intent})
         covered.update(f["type"] for f in intent["features"])
-        saved = invoke("cad_read", {"document_id": name})
+        saved = invoke("cad_read", {"document_id": name, "revision": records[name]["revision"]})
         check(saved["model"] == intent, f"{name} saves exact editable intent")
         query = invoke("cad_query", {"document_id": name, "revision": 1})
         check(same_geometry(query["summary"], records[name]["summary"]), f"{name} query reproduces committed geometric summary within native tolerance")
@@ -267,16 +340,18 @@ with tempfile.TemporaryDirectory(prefix="cad-modeling-gap-schema-") as directory
             bad = copy.deepcopy(intent)
             next(f for f in bad["features"] if f["id"] == feature["id"])["unknown"] = True
             rejected("cad_create", "inputSchema", {"document_id": "invalid", "model": bad})
-    exported = invoke("cad_export", {"document_id": "transform", "revision": 1, "format": "step"})
-    content = Path(exported["path"]).read_text()
-    imported = model([{"id": "result", "type": "import_step", "content": content,
-        "sha256": hashlib.sha256(content.encode()).hexdigest()}])
-    invoke("cad_create", {"document_id": "import_step", "model": imported})
-    invoke("cad_read", {"document_id": "import_step"})
-    covered.add("import_step")
+    for kind, source in (("import_step", "transform"), ("import_step_surface", "bezier")):
+        exported = invoke("cad_export", {"document_id": source, "revision": 1, "format": "step"})
+        content = Path(exported["path"]).read_text()
+        imported = model([{"id": "result", "type": kind, "content": content,
+            "sha256": hashlib.sha256(content.encode()).hexdigest()}])
+        receipt = invoke("cad_create", {"document_id": kind, "model": imported})
+        saved = invoke("cad_read", {"document_id": kind, "revision": receipt["revision"]})
+        check(saved["model"] == imported, f"{kind} preserves exact captured source and hash")
+        covered.add(kind)
     check(discovered == covered, f"Actual combined calls cover every discovered feature kind; missing={discovered-covered}, extra={covered-discovered}")
     if available_only:
-        print(f"Intermediate available-schema confidence: {checks} checks / {len(cases)+1} models / {len(covered)} feature kinds")
+        print(f"Intermediate available-schema confidence: {checks} checks / {len(cases)+2} models / {len(covered)} feature kinds")
         print(f"Skipped undiscovered models: {', '.join(skipped)}; combined lifecycle not tested")
         raise SystemExit(0)
 
@@ -420,4 +495,4 @@ with tempfile.TemporaryDirectory(prefix="cad-modeling-gap-schema-") as directory
         bad_context["resolved_selection"]["selector"]["unknown"] = True
         rejected("cad_viewer", "outputSchema", bad_context)
 
-print(f"Modeling gap schemas: {checks} checks / {len(cases)+1} models / {len(covered)} feature kinds / {len(tools)} tools")
+print(f"Modeling gap schemas: {checks} checks / {len(cases)+2} models / {len(covered)} feature kinds / {len(tools)} tools")

@@ -64,7 +64,7 @@ try{
  check(Math.abs(stepExact.volume_mm3-6000)<=1e-6&&Math.abs(stepExact.area_mm2-2200)<=1e-6&&
   stepExact.center_of_mass_mm.every((v,i)=>Math.abs(v-[5,10,15][i])<=1e-9)&&
   stepExact.bounds_mm.min.every(v=>Math.abs(v)<=1e-9)&&
-  stepExact.bounds_mm.max.every((v,i)=>Math.abs(v-[10,20,30][i])<=1e-9),'STEP viewer preserves analytic volume, area, centroid and bounds');
+  stepExact.bounds_mm.max.every((v,i)=>Math.abs(v-[10,20,30][i])<=1e-9),'STEP viewer preserves analytic volume, area, centroid and bounds: '+JSON.stringify(stepExact));
  const done=await job(input('nested-stored.3mf','3mf','file'),'artifact_job');check(done.state==='succeeded'&&done.result.read_only&&!done.document_id,'durable artifact job succeeds without fake document_id');
  const bad=await job({...input('triangle.stl','stl','mm'),expected_sha256:'0'.repeat(64)},'artifact_bad');check(bad.state==='failed'&&bad.error.code==='artifact_mismatch','durable source mismatch remains explicit failure');
  // A large valid ASCII STL exercises parser checkpoints in the real worker.
