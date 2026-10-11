@@ -89,6 +89,71 @@ void filling(const fs::path& root){Json boundary=Json::array();for(const auto& c
  auto open=d;open["features"][0]["boundaries"].erase(3);fails("invalid_model",[&]{BuiltModel invalid(open);});
 }
 
+void filling_support_intent(const fs::path& root) {
+  const auto constraints_for=[](const Json& topology,const std::string& input,const std::vector<std::array<double,3>>& centers) {
+    Json constraints=Json::array();
+    for(const auto& center:centers)for(const auto& edge:topology.at("edges")) {
+      const auto point=edge.at("center_mm").get<std::array<double,3>>();
+      if(std::hypot(point[0]-center[0],point[1]-center[1],point[2]-center[2])<1e-6)
+        constraints.push_back({{"input",input},{"edge",edge.at("selector")},{"face",topology.at("faces")[0].at("selector")},{"continuity","G1"}});
+    }
+    require(constraints.size()==centers.size(),"Fill intent has uniquely ordered boundary selectors");return constraints;
+  };
+  auto d=model(Json::array({plane()}),"patch");
+  const auto constraints=constraints_for(BuiltModel(d).topology(),"patch",{{5,0,0},{10,10,0},{5,20,0},{0,10,0}});
+  Json fill={{"id","fill"},{"type","surface_fill"},{"boundaries",constraints},{"tolerance",1e-5},{"angular_tolerance",1e-3}};
+  d["features"].push_back(fill);d["output"]="fill";
+  for(bool reverse:{false,true}) {
+    auto oriented=d;if(reverse){std::reverse(oriented["features"][1]["boundaries"].begin(),oriented["features"][1]["boundaries"].end());for(auto& edge:oriented["features"][1]["boundaries"])edge["reverse"]=true;}
+    auto face=independent_step(BuiltModel(oriented),root/(reverse?"fill-reversed.step":"fill-forward.step"));
+    const auto support=TopoDS::Face(TopExp_Explorer(face,TopAbs_FACE).Current());
+    double u0,u1,v0,v1;BRepTools::UVBounds(support,u0,u1,v0,v1);GeomLProp_SLProps normal(BRep_Tool::Surface(support),(u0+u1)/2,(v0+v1)/2,1,1e-9);
+    require(normal.IsNormalDefined(),"STEP fill has a defined normal");
+    const auto z=normal.Normal().Z()*(support.Orientation()==TopAbs_REVERSED?-1:1);near(z,reverse?-1:1,1e-8);
+    oriented["features"].push_back({{"id","body"},{"type","thicken"},{"input","fill"},{"thickness",2}});oriented["output"]="body";
+    const auto summary=BuiltModel(oriented).summary();near(summary.at("volume_mm3"),400,1e-5);
+    near(summary.at("bounds_mm").at("min")[2],reverse?-2:0,1e-5);near(summary.at("bounds_mm").at("max")[2],reverse?0:2,1e-5);
+  }
+  // A point off the support is an achievable interior bulge. It must reach the
+  // general plate solver, not be erased by returning the selected planar face.
+  for(const auto* continuity:{"G1","G2"}) {
+    auto bulged=d;bulged["features"][1]["points"]={{5,10,.1}};bulged["features"][1]["curvature_tolerance"]=1e-3;
+    for(auto& boundary:bulged["features"][1]["boundaries"])boundary["continuity"]=continuity;
+    BuiltModel bulge(bulged);require(bulge.summary().at("area_mm2").get<double>()>200.001,"Off-support interior point changes the fill geometry");
+    const auto bulge_shape=independent_step(bulge,root/(std::string("fill-interior-bulge-")+continuity+".step"));
+    const auto surface=BRep_Tool::Surface(TopoDS::Face(TopExp_Explorer(bulge_shape,TopAbs_FACE).Current()));
+    GeomAPI_ProjectPointOnSurf projection(gp_Pnt(5,10,.1),surface);
+    require(projection.IsDone()&&projection.NbPoints()>0&&projection.LowerDistance()<1e-5,"Independent STEP preserves the authored off-support interior point");
+    for(int side=0;side<4;++side)for(int sample=0;sample<=16;++sample) {
+      const double t=sample/16.0;const gp_Pnt point(side%2? (side==1?10:0):10*t,side%2?20*t:(side==0?0:20),0);
+      GeomAPI_ProjectPointOnSurf boundary(point,surface);require(boundary.IsDone()&&boundary.NbPoints()>0&&boundary.LowerDistance()<1e-5,"STEP bulge preserves its entire rectangular boundary");
+      double u,v;boundary.LowerDistanceParameters(u,v);GeomLProp_SLProps props(surface,u,v,2,1e-9);require(props.IsNormalDefined(),"STEP bulge boundary normal exists");
+      require(std::acos(std::clamp(std::abs(props.Normal().Z()),0.0,1.0))<1e-3,"General-solver STEP boundary retains planar G1 support");
+      if(std::string(continuity)=="G2") {require(props.IsCurvatureDefined(),"General-solver STEP G2 curvature exists");require(std::max(std::abs(props.MinCurvature()),std::abs(props.MaxCurvature()))<1e-3,"General-solver STEP boundary retains both planar support curvatures");}
+    }
+    near(BuiltModel(bulged,bulge.snapshot()).summary().at("area_mm2"),bulge.summary().at("area_mm2"),1e-6);
+  }
+  // Selecting only the outer boundary of a holed support explicitly fills that
+  // loop; the unrelated inner trim must not be copied into the new face.
+  auto trimmed=model(Json::array({plane(),{{"id","trimmed"},{"type","surface_trim"},{"input","patch"},{"boundary",polygon({{.1,.1},{.9,.1},{.9,.9},{.1,.9}})},{"holes",Json::array({polygon({{.4,.4},{.6,.4},{.6,.6},{.4,.6}})})}}}),"trimmed");
+  auto outer=fill;outer["boundaries"]=constraints_for(BuiltModel(trimmed).topology(),"trimmed",{{5,2,0},{9,10,0},{5,18,0},{1,10,0}});
+  trimmed["features"].push_back(outer);trimmed["output"]="fill";near(BuiltModel(trimmed).summary().at("area_mm2"),128,1e-4);
+  // A common result tangent plane cannot match orthogonal supports at the exact
+  // same corner within 1e-3 rad. This is a geometric contradiction, not a test
+  // that relies on one particular native solver failing to converge.
+  auto vertical=plane();vertical["id"]="vertical";vertical["control_points"]={{{0,0,0},{0,0,5}},{{10,0,0},{10,0,5}}};
+  auto conflicting=model(Json::array({plane(),vertical}),"patch");
+  const auto bottom=constraints_for(BuiltModel(model(Json::array({vertical}),"vertical")).topology(),"vertical",{{5,0,0}});
+  auto impossible=fill;impossible["boundaries"][0]=bottom[0];conflicting["features"].push_back(impossible);conflicting["output"]="fill";
+  const auto failure=fails("invalid_shape",[&]{BuiltModel rejected(conflicting);});require(failure.details.at("support_angle_rad").get<double>()>1.5,"Contradictory support planes are measured directly");
+  Service service(root/"fill-intent-worker");const auto created=service.call("cad_create",{{"document_id","fill"},{"model",model(Json::array({plane(),vertical}),"patch")}});
+  const auto before=service.call("cad_read",{{"document_id","fill"},{"revision",created.at("revision")}});
+  fails("invalid_shape",[&]{service.call("cad_apply",{{"document_id","fill"},{"expected_revision",created.at("revision")},{"operations",Json::array({{{"op","add_feature"},{"feature",impossible}},{{"op","set_output"},{"feature_id","fill"}}})}});});
+  require(service.call("cad_read",{{"document_id","fill"}})==before,"Contradictory worker fill preserves the complete prior revision");
+  auto exact=d;const auto receipt=service.call("cad_create",{{"document_id","exact"},{"model",exact}});near(receipt.at("summary").at("area_mm2"),200,1e-5);
+  require(service.call("cad_read",{{"document_id","exact"},{"revision",receipt.at("revision")}}).at("model")==exact,"Exact-support fill preserves every authored constraint in source");
+}
+
 void nonplanar_continuity(const fs::path& root,double position_tolerance=1e-5) {
   const auto patch=cylindrical();BuiltModel support(model(Json::array({patch}),"patch"));const auto topology=support.topology();
   std::vector<Json> edges=topology.at("edges").get<std::vector<Json>>();
@@ -97,6 +162,7 @@ void nonplanar_continuity(const fs::path& root,double position_tolerance=1e-5) {
   Json boundaries=Json::array();for(const auto& edge:edges)boundaries.push_back({{"input","patch"},{"edge",edge.at("selector")},{"face",topology.at("faces")[0].at("selector")},{"continuity","G2"}});
   const auto d=model(Json::array({patch,{{"id","fill"},{"type","surface_fill"},{"boundaries",boundaries},{"tolerance",position_tolerance},{"angular_tolerance",1e-3},{"curvature_tolerance",1e-3},{"points",{{std::sqrt(50),std::sqrt(50),2.5}}}}}),"fill");
   BuiltModel filled(d);const auto shape=independent_step(filled,root/(position_tolerance<1e-5?"cylinder-G2-refined.step":"cylinder-G2.step"));const auto face=TopoDS::Face(TopExp_Explorer(shape,TopAbs_FACE).Current());const auto surface=BRep_Tool::Surface(face);
+  GProp_GProps exact_area;BRepGProp::SurfaceProperties(shape,exact_area,1e-10);near(exact_area.Mass(),25*std::numbers::pi,1e-7);
   double max_distance=0,max_angle=0,max_curvature=0;
   // Independent analytic quarter-cylinder oracle after a fresh STEP read.
   // Boundary continuity does not constrain the whole interior to a cylinder.
@@ -225,4 +291,4 @@ void reversed_projection_orientation(const fs::path& root) {
 }
 void rollback(const fs::path& root){auto d=model(Json::array({plane()}),"patch");Service service(root/"rollback");service.call("cad_create",{{"document_id","surface"},{"model",d}});const auto before=service.call("cad_read",{{"document_id","surface"}});const auto bad=Json{{"id","trimmed"},{"type","surface_trim"},{"input","patch"},{"boundary",polygon({{-.1,.1},{.9,.1},{.9,.9},{-.1,.9}})}};fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","surface"},{"expected_revision",1},{"operations",Json::array({{{"op","add_feature"},{"feature",bad}},{{"op","set_output"},{"feature_id","trimmed"}}})}});});require(service.call("cad_read",{{"document_id","surface"}})==before,"Failed worker surface edit preserves committed revision and bytes");}
 }
-int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);nonplanar_continuity(temp.path);nonplanar_continuity(temp.path,1e-6);component_capture(temp.path);networks(temp.path);projections(temp.path);generalized_networks(temp.path);projection_branches(temp.path);reversed_projection_orientation(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(){try{configure_kernel_logging();set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Temp temp;crown(temp.path);mixed_volume();polygon_volume();imports(temp.path);trims(temp.path);filling(temp.path);filling_support_intent(temp.path);nonplanar_continuity(temp.path);nonplanar_continuity(temp.path,1e-6);component_capture(temp.path);networks(temp.path);projections(temp.path);generalized_networks(temp.path);projection_branches(temp.path);reversed_projection_orientation(temp.path);rollback(temp.path);std::cout<<checks<<" surface parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.code<<": "<<e.what()<<" "<<e.details.dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

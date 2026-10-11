@@ -55,7 +55,18 @@ must connect in order and close explicitly; no missing edge is synthesized.
 C0 passes through the edge, G1 additionally matches the support tangent plane,
 and G2 additionally matches curvature. Unsupported/ambiguous references fail.
 
-The variational filling solver is approximate within explicit tolerances. Its
+When every constraint selects the complete single boundary wire of the same
+explicit support face, an exact private copy is tried first. Each boundary edge
+must occur exactly once, with consistent authored winding. All interior points
+must lie on that trimmed face within the positional tolerance, and the same
+independent validity and continuity checks apply. Reversed winding reverses the
+result face and its signed thickening direction. Partial boundaries, holes,
+repeated seam edges, mixed supports and off-support points use the general
+solver; an interior point requesting a bulge is preserved. At exactly coincident
+neighboring G1/G2 endpoints, support tangent planes farther apart than twice the
+angular tolerance are rejected as geometrically incompatible before solving.
+
+The general variational filling solver is approximate within explicit tolerances. Its
 reported positional/angular/curvature errors are checked, then the constructed
 surface is independently sampled against every boundary for position, tangent
 plane and the curvature tensor, including its principal directions. Conflicting
@@ -80,8 +91,14 @@ OCCT 8.0.1's `GeomPlate_BuildPlateSurface::Perform` exits at its iteration limit
 even when `VerifSurface` reports unmet objectives. `BRepFill_Filling` reports that
 plate error and separately approximates the plate as a spline, so completion
 alone establishes neither curve interpolation nor continuity. The original
-1e-5 mm cylinder regression remains unchanged, with an additional 1e-6 mm case
-checking the refined result independently after STEP.
+1e-5 mm cylinder regression retains its public tolerances, alongside the 1e-6 mm
+case. Both now verify the fully constrained exact-support result independently
+after STEP. Linux CI demonstrated why refinement alone is insufficient: the
+same exact-cylinder constraints produced plate positional errors of 1.508e-5 mm
+and then 3.579e-5 mm on the denser retry. Separate G1/G2 interior-bulge regressions
+exercise the general solver and independently check the boundary and interior
+point after STEP. General fills remain bounded numerical solves; exact support
+reuse is not a claim that every solvable constraint set will converge.
 
 The pinned OCCT 8.0.1 call path is `BRepOffsetAPI_MakeFilling::Add` →
 `BRepFill_Filling::Build` / `AddConstraints` → `BRepFill_CurveConstraint` →

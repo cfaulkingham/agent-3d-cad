@@ -1623,11 +1623,27 @@ TopoDS_Face filling_surface_attempt(const Json& feature,const Json& parameters,c
   }
   if(previous.Distance(start)>tolerance)throw Error("invalid_model","Filling boundary must close explicitly; no missing edges are synthesized");
   if(feature.contains("points"))for(const auto& p:feature.at("points"))filling.Add(parameter_point(p,parameters));
-  filling.Build();built=true;if(!filling.IsDone())throw Error("kernel_failure","Constrained surface filling did not converge");
-  // OCCT 8.0.1's indexed G0Error accessor throws on valid C0 constraints;
-  // use the algorithm's global maximum, followed by independent boundary checks.
-  if(filling.G0Error()>tolerance||filling.G1Error()>angular||filling.G2Error()>curvature)throw Error("invalid_shape","Filling does not satisfy its explicit continuity tolerances",{{"distance_error_mm",filling.G0Error()},{"angular_error_rad",filling.G1Error()},{"curvature_error_per_mm",filling.G2Error()}});
-  const auto face=TopoDS::Face(filling.Shape());check_surface_shape(face);const auto result=BRep_Tool::Surface(face);
+  // Coincident endpoints of neighboring G1/G2 constraints need one common
+  // tangent plane. The unsigned normal angle is a metric on unoriented planes,
+  // so an angle greater than twice the public bound is provably incompatible.
+  // Do not infer this for merely nearby endpoints: a small bridging region can
+  // legitimately change its tangent plane between distinct positions.
+  for(std::size_t i=0;i<constraints.size();++i) {
+    const auto& a=constraints[i];const auto& b=constraints[(i+1)%constraints.size()];
+    if(a.order==GeomAbs_C0||b.order==GeomAbs_C0)continue;
+    const auto end=BRep_Tool::Pnt(TopExp::LastVertex(a.edge,true)),begin=BRep_Tool::Pnt(TopExp::FirstVertex(b.edge,true));
+    if(!end.IsEqual(begin,0.0))continue;
+    const auto normal=[&](const TopoDS_Face& support,const gp_Pnt& point) {
+      const auto surface=BRep_Tool::Surface(support);GeomAPI_ProjectPointOnSurf projection(point,surface);
+      if(!projection.IsDone()||projection.NbPoints()==0)throw Error("invalid_shape","Cannot verify filling endpoint support continuity");
+      double u,v;projection.LowerDistanceParameters(u,v);GeomLProp_SLProps props(surface,u,v,1,1e-9);
+      if(!props.IsNormalDefined())throw Error("invalid_shape","Filling endpoint support normal is undefined");return props.Normal();
+    };
+    const double angle=std::acos(std::clamp(std::abs(normal(a.face,end).Dot(normal(b.face,begin))),0.0,1.0));
+    if(angle>2*angular+1e-10)throw Error("invalid_shape","Coincident filling boundaries have incompatible tangent planes",{{"boundary_index",i},{"next_boundary_index",(i+1)%constraints.size()},{"support_angle_rad",angle},{"angular_tolerance_rad",angular}});
+  }
+  const auto verify=[&](const TopoDS_Face& face) {
+  check_surface_shape(face);const auto result=BRep_Tool::Surface(face);
   if(feature.contains("points"))for(const auto& p:feature.at("points")){BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(parameter_point(p,parameters)).Vertex(),face);if(!distance.IsDone()||distance.Value()>tolerance)throw Error("invalid_shape","Filling interior point constraint is not satisfied on the resulting face",{{"distance_mm",distance.IsDone()?distance.Value():-1}});}
   // Independently interrogate constructed geometry. Kernel completion alone can
   // silently ignore incompatible tangent/curvature constraints.
@@ -1647,6 +1663,41 @@ TopoDS_Face filling_surface_attempt(const Json& feature,const Json& parameters,c
         if(std::abs(ka[0]-kb[0])>curvature||std::abs(ka[1]-kb[1])>curvature||tensor_error>curvature)throw Error("invalid_shape","Filling curvature verification failed",{{"boundary_index",i},{"sample_index",n},{"result_curvatures",ka},{"support_curvatures",kb},{"normal_dot",dot},{"curvature_tensor_error_per_mm",tensor_error}});}
     }
   }
+  };
+  // A complete boundary of one explicitly selected support already defines an
+  // exact candidate. OCCT 8.0.1's plate solver can stop at its iteration bound
+  // and its denser retries may worsen conditioning even for an exact cylinder.
+  // Reuse only our private copy, and only when every edge of its sole wire is
+  // covered once with consistent authored winding. Holes, seams, partial loops
+  // and mixed supports stay on the general constrained-solve path.
+  TopoDS_Face exact=constraints.front().face;bool eligible=!exact.IsNull();
+  for(const auto& c:constraints)if(c.face.IsNull()||!c.face.IsEqual(exact))eligible=false;
+  if(eligible) {
+    std::size_t wires=0;for(TopoDS_Iterator it(exact);it.More();it.Next())if(it.Value().ShapeType()==TopAbs_WIRE)++wires;
+    std::vector<TopoDS_Edge> edges;for(TopExp_Explorer it(exact,TopAbs_EDGE);it.More();it.Next())edges.push_back(TopoDS::Edge(it.Current()));
+    if(wires!=1||edges.size()!=constraints.size())eligible=false;
+    int winding=0;std::vector<bool> used(edges.size(),false);
+    for(const auto& c:constraints) {
+      int match=-1;for(std::size_t j=0;j<edges.size();++j)if(c.edge.IsSame(edges[j])){if(match!=-1){eligible=false;break;}match=static_cast<int>(j);}
+      if(match<0||used[match]){eligible=false;break;}used[match]=true;
+      if((c.edge.Orientation()!=TopAbs_FORWARD&&c.edge.Orientation()!=TopAbs_REVERSED)||
+         (edges[match].Orientation()!=TopAbs_FORWARD&&edges[match].Orientation()!=TopAbs_REVERSED)){eligible=false;break;}
+      const int direction=c.edge.Orientation()==edges[match].Orientation()?1:-1;
+      if(winding&&winding!=direction){eligible=false;break;}winding=direction;
+    }
+    // Check the trimmed face, not its unbounded supporting surface. An interior
+    // point requesting a bulge must reach the general solver unchanged.
+    if(eligible&&feature.contains("points"))for(const auto& p:feature.at("points")) {
+      BRepExtrema_DistShapeShape distance(BRepBuilderAPI_MakeVertex(parameter_point(p,parameters)).Vertex(),exact);
+      if(!distance.IsDone()||distance.Value()>tolerance){eligible=false;break;}
+    }
+    if(eligible){if(winding<0)exact.Reverse();verify(exact);return exact;}
+  }
+  filling.Build();built=true;if(!filling.IsDone())throw Error("kernel_failure","Constrained surface filling did not converge");
+  // OCCT 8.0.1's indexed G0Error accessor throws on valid C0 constraints;
+  // use the algorithm's global maximum, followed by independent boundary checks.
+  if(filling.G0Error()>tolerance||filling.G1Error()>angular||filling.G2Error()>curvature)throw Error("invalid_shape","Filling does not satisfy its explicit continuity tolerances",{{"distance_error_mm",filling.G0Error()},{"angular_error_rad",filling.G1Error()},{"curvature_error_per_mm",filling.G2Error()}});
+  const auto face=TopoDS::Face(filling.Shape());verify(face);
   return face;
 }
 TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std::map<std::string,FeatureGeometry>& sources) {
