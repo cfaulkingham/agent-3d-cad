@@ -7,6 +7,26 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Local build cleanup — 2026-10-11
+
+At the user's request, removed 17 older package/staging directories, five bundle
+check trees, eight scratch-build/smoke-output directories and 58 compiled test,
+fixture and benchmark executables. `build/` decreased from **8.961 GiB to
+0.897 GiB**. Retained the main executable, library, CMake files, generated assets,
+and both `visual-workflow-20261011` and `plugin-visual-reload-20261011` packages.
+Archived 20 evidence JSON/log files (about 5.1 MiB), retaining their original
+relative paths under `.local/evidence/build-cleanup-20261011/build/`; historical
+references below to removed build evidence now resolve there. The exact removal
+list, archive mapping and SHA-256 verification are in that directory's
+`cleanup.json`.
+
+Verification: all 88 removal targets are absent, retained top-level build files
+have unchanged SHA-256 hashes, retained package sizes are unchanged, and all
+archived files match their original hashes. `build/agent-3d-cad --version` succeeds
+with preview.2 and OCCT 8.0.1. No CTests were rerun for this output-only cleanup;
+run `cmake --build build --parallel 4` before the next CTest run to regenerate
+the removed executables. Installed plugins and saved user projects are unchanged.
+
 ## Visual workflow plugin rebuilt and installed — 2026-10-11
 
 At the user's request, rebuilt merged `main` at `7b94725f1cbaf41de1430f769f29d00a18ef49d0`
