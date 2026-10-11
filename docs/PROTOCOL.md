@@ -98,9 +98,9 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `sketch_offset` | `input`, signed `distance` | Optional `join: arc|intersection` |
 | `sketch_fillet`, `sketch_chamfer` | `input`, `radius` or `distance`, `vertices` | All eligible corners or an expected-count geometric point selector |
 | `sketch_transform`, `sketch_instance` | `input` | Optional `translation`, `rotation` |
-| `sketch_hull` | `inputs`, `workplane` | Exact convex hull of planar line/circular-arc inputs |
+| `sketch_hull` | `inputs`, `workplane` | Exact line/circle hull path; bounded native-curve contacts for general curves, optional `contact_tolerance`; see [PARITY_CURVES.md](PARITY_CURVES.md) |
 | `sketch_trace` | `input`, `workplane`, `width` | Constant-width planar curve stroke with flat ends |
-| `sketch_full_round` | `input`, `edges` | Convex tangent end cap across three adjacent straight edges |
+| `sketch_full_round` | `input`, `edges` | Tangent end cap across three adjacent straight edges; optional `invert:true` selects the inward arc |
 | `sketch_mirror`, `mirror` | `input`, `plane` | Exact sketch or solid reflection in an explicit workplane |
 | `sketch_face` | `input`, `faces` | Selected coplanar solid faces as a sketch |
 | `sketch_projection` | `input`, `faces`, `workplane` | Exact orthogonal projection of planar solid-face boundaries |
@@ -115,6 +115,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `curve_extract` | `input`, `edges` | Exactly one source-qualified geometric edge as a curve |
 | `curve_trim` | `input`, `start`, `end` | Exact trim using normalized arc-length fractions |
 | `curve_tangent_line`, `curve_tangent_arc` | `input`, `position`, respectively `length` or `end` | Explicit start tangent; optional reversal |
+| `curve_constrained_line`, `curve_constrained_arc` | `workplane`, `constraints`, `solution`; arc also `radius` | Two point/qualified-edge constraints; choose a unique native solution by its finite arc-length midpoint; see [PARITY_CURVES.md](PARITY_CURVES.md) |
 | `curve_project`, `surface_project` | `input`, `target`, `faces`, `direction` | One selected curved face; optional forward `branch: unique|nearest|farthest` (default unique); projected wire or closed region |
 | `import_step_surface` | `content`, `sha256` | Explicit captured nonmaterial STEP faces/shells |
 | `surface_shell` | `inputs`, `tolerance`, `closed` | Connected manifold sewing with explicit closure claim |

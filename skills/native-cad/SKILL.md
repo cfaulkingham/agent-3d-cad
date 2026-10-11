@@ -116,12 +116,18 @@ executing caller code or calculating every relationship outside the model.
 `curve_helix` preserves a declared frame, radius, pitch, turns and handedness.
 Rational Bezier weights remain editable intent. `curve_tangent_line` and
 `curve_tangent_arc` construct from a selected arc-length station and its tangent.
+`curve_constrained_line` and `curve_constrained_arc` solve two explicit point/edge
+constraints in a workplane. The arc adds a radius; `solution.point` selects the
+finite result by its arc-length midpoint. Read PARITY_CURVES.md for finite-contact,
+qualifier and ambiguity rules before authoring these bounded native constraints.
 Use `cad_query kind:"curve"` for native arc-length points, oriented tangents and
 curvature; `curve_trim` retains exact segments between normalized fractions.
 `curve_extract` requires a unique geometric edge rule. `sketch_hull`,
 `sketch_trace` and `sketch_full_round` produce editable planar regions for later
 extrusion. Check PARITY_CURVES.md for input bounds; these helpers do not imply a
 general sketch constraint solver.
+General hull inputs retain their native curve intervals with bounded numerical
+contact verification. `sketch_full_round invert:true` requests an inward cap.
 
 Use `shell` with signed `thickness` and explicit geometric `faces` selectors;
 `faces: []` creates a sealed cavity. `offset` independently offsets source
@@ -155,6 +161,9 @@ bends. Attach to source `edge` selectors, a prior flange `parent` plus named
 blank region. Opposite bend pairs form jogs; `hem: true` permits exact ±180°
 open hems. Optional rectangular `relief`, straight-leg `miter`, and developed
 `cuts` preserve their exact formed/flat intent, including cuts through bends.
+An internal fold-line `jog` supplies a return bend ID, offset, moving depth and
+explicit `carry` roots to move a captured far panel and its attached flange trees.
+Read PARITY_SHEET_METAL.md for blank coverage and unperforated-strip requirements.
 `sheet_unfold` derives a solid blank from the preserved recipe. Inspect
 `summary.sheet_metal`; K-factor is an explicit engineering input, and non-midplane
 K factors produce distinct modeled formed/flat volumes. A hem's tangent-based
@@ -167,9 +176,12 @@ manifold sewing with an explicit closure claim. Surface outputs have area and
 zero solid volume. `surface_solid` explicitly materializes a closed shell;
 `thicken` requires an open patch. Solid creation is required for assembly or
 manufacturing material. `surface_fill` supports qualified C0/G1/G2 boundary
-constraints; `surface_gordon` interpolates compatible polynomial curve networks.
+constraints; `surface_gordon` uses geometric crossings to interpolate curve
+networks with different parameterizations, rational/closed/periodic profiles and
+point endpoints. General networks use a bounded, verified spline approximation.
 `curve_project`/`surface_project` project onto a uniquely selected curved face
-in a declared direction, rejecting ambiguous intersections. Surface STEP import
+in a declared direction; `branch:nearest|farthest` chooses a complete forward-ray
+sheet. The default `unique` rejects ambiguous intersections. Surface STEP import
 uses explicit `geometry:"surface"` and retains zero material volume. See
 SURFACES.md and PARITY_SURFACES.md for construction and projection limits.
 

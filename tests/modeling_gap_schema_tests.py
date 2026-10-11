@@ -259,6 +259,21 @@ cases["curve_tangent_arc"] = model([{"id": "curve", "type": "curve", "path": wir
     {"id": "result", "type": "curve_tangent_arc", "input": "curve", "position": 1, "end": [3, 1, 0]}])
 cases["curve_extract"] = model([stock, {"id": "result", "type": "curve_extract", "input": "stock",
     "edges": edge("stock", (10, 0, 0))}])
+cases["curve_constrained_line"] = model([sketch("circle", radius=1),
+    {"id": "result", "type": "curve_constrained_line", "workplane": plane(),
+     "constraints": [{"edge": {"type": "geometric", "feature_id": "circle",
+                               "curve_kind": "circle", "expected_count": 1}},
+                     {"point": [2, 0, 0]}],
+     "solution": {"point": [1.25, math.sqrt(3)/4, 0], "tolerance": 1e-6}}])
+cases["curve_constrained_arc"] = model([
+    {"id": "x", "type": "curve", "path": wire((-2, 0, 0), (2, 0, 0))},
+    {"id": "y", "type": "curve", "path": wire((0, -2, 0), (0, 2, 0))},
+    {"id": "result", "type": "curve_constrained_arc", "workplane": plane(),
+     "constraints": [{"edge": {"type": "geometric", "feature_id": name,
+                               "curve_kind": "line", "expected_count": 1}}
+                     for name in ("x", "y")],
+     "radius": .5,
+     "solution": {"point": [.5-math.sqrt(2)/4, .5-math.sqrt(2)/4, 0], "tolerance": 1e-6}}])
 for name, features in {
     "sketch_hull": [sketch("left", radius=1), sketch("right", radius=1, origin=(4, 0, 0)),
         {"id": "derived", "type": "sketch_hull", "inputs": ["left", "right"], "workplane": plane()}],
@@ -267,6 +282,8 @@ for name, features in {
         {"id": "derived", "type": "sketch_full_round", "input": "profile", "edges": edge("profile", (10, 2, 0))}],
 }.items():
     cases[name] = model([*features, {"id": "result", "type": "extrude", "input": "derived", "distance": 1}])
+cases["sketch_full_round_inverted"] = copy.deepcopy(cases["sketch_full_round"])
+cases["sketch_full_round_inverted"]["features"][1]["invert"] = True
 
 def segments(points):
     return [wire(p, points[(i+1) % len(points)])["segments"][0] for i, p in enumerate(points)]

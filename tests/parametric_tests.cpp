@@ -20,11 +20,16 @@ void require(bool value,const std::string& message){++checks;if(!value)throw std
 void near(double actual,double expected,double tolerance=1e-6){require(std::abs(actual-expected)<=tolerance,"Expected "+std::to_string(expected)+", got "+std::to_string(actual));}
 void fails(const std::string& code,const std::function<void()>& action){try{action();}catch(const Error& e){require(e.code==code,"Expected "+code+", got "+e.code+": "+e.what());return;}throw std::runtime_error("Expected error "+code);}
 struct Temporary {fs::path root;Temporary(){root=temporary_file(fs::temp_directory_path());fs::remove(root);directory(root);}~Temporary(){std::error_code ignored;fs::remove_all(root,ignored);}};
-Json expression(const std::string& op,Json args,const std::string& unit="dimensionless"){return {{"expression",{{"op",op},{"args",args},{"unit",unit}}}};}
+Json expression(const std::string& op,Json::initializer_list_t args,const std::string& unit="dimensionless"){return {{"expression",{{"op",op},{"args",Json::array(args)},{"unit",unit}}}};}
 void arithmetic(){
   const Json parameters={{"angle",30},{"side",3}};
-  const auto compute=[&](Json value,const std::string& unit="dimensionless"){return scalar(value,parameters,unit);};
+  const auto compute=[&](Json value,const std::string& unit="dimensionless"){
+    try{return scalar(value,parameters,unit);}
+    catch(const Error& e){throw Error(e.code,"Arithmetic fixture "+value.dump()+": "+e.what(),e.details);}
+  };
   near(compute(expression("sin_deg",{Json{{"parameter","angle"}}})),.5);
+  near(compute(Json::parse(R"({"expression":{"op":"sin_deg","args":[{"parameter":"angle"}],"unit":"dimensionless"}})")),.5);
+  fails("invalid_model",[&]{compute(Json::parse(R"({"expression":{"op":"sin_deg","args":{"parameter":"angle"},"unit":"dimensionless"}})"));});
   near(compute(expression("cos",{std::numbers::pi})), -1);
   near(compute(expression("tan_deg",{45})),1);
   near(compute(expression("asin",{.5},"deg"),"deg"),30);

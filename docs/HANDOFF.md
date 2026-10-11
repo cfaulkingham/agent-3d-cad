@@ -13,8 +13,19 @@ The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
 authorized branch publication for CI. `1fe590adf6ca04dcc8d9ac0c9414aba88016b55e`
 is now published on `codex/build123d-gap-closure`; the five-platform workflow
 [run 50](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38099409378)
-has started. It is current-source execution in progress, not passing evidence.
-No host plugin registration has changed. The CI recipe now adds all eight
+is executing. Linux arm64 passed all 72 native suites then exceeded the SDK
+suite's aggregate 90-second timeout in the reopened session. macOS arm64 passed
+71/72 native suites; the expression fixture's singleton JSON construction has
+a compiler-dependent array/object interpretation. The test helper now constructs
+`Json::array(args)` explicitly and checks parsed singleton arrays and malformed
+object-valued arguments without changing production validation. Linux x64 passed
+71/72 suites; the nonplanar fill exceeded its unchanged 1e-5 mm positional
+tolerance. Windows passed 70/71 native tests and failed the same expression
+fixture; Intel macOS also passed 71/72 and failed that expression fixture. All
+five baseline lanes completed with failures; `.local/evidence/ci-run-50/summary.json`
+records their exact scope. These results do not establish platform
+acceptance.
+No host plugin registration has changed. The CI recipe now adds all nine
 actual-call modeling schema audits plus artifact SDK/flow schema validation on
 each native platform. YAML parsing and referenced-script inventory pass; the
 expanded recipe is not yet executed in CI.
@@ -28,9 +39,48 @@ Original-scope completion audit at `2cdf20d` reopened concrete native workflows:
 constrained point/common tangency and fixed-radius arcs, inverted full-round and
 general curved hull inputs; differently parameterized/rational/closed Gordon
 networks and explicit curved projection branches; and an internal jog that
-carries an existing far panel and attached walls. Parallel implementation is
-underway. The `d359331` test evidence below remains valid for its initial bounded
+carries an existing far panel and attached walls. These increments are integrated
+as `b9925f0`, `bbd2a81` and `2eca6b8`; combined build/acceptance is in progress.
+Curve completion independently passed 144 native and 133 actual-call checks;
+the sheet increment passed 5/5 suites and 106 actual-call checks; the surface
+increment passed 7/7 suites in 40.91 seconds, including 3,036 surface checks,
+and 252 actual-call checks. The first combined checkpoint passed **73/73 CTests
+in 312.46 seconds**, with the explicit array fixture. `536c45c` subsequently adds
+one fresh bounded fill refinement after strict failure; it independently passed
+4/4 suites and 268 actual-call checks. A previously rejected 1e-6 mm cylinder
+request now measures 5.54e-7 mm after STEP. Invalid constraints still fail with
+both attempt details and preserve the committed revision. The original Linux
+fixture and all public tolerances are unchanged; Linux confirmation awaits CI.
+Final combined native source checkpoint `536c45c` passed **73/73 CTests in
+311.80 seconds**, **1,383 official MCP SDK 2.3.0 checks**, and all nine modeling
+family audits. The modeling matrix passed **1,263 checks / 75 models / all 63
+feature kinds**; authoring/solid/sheet/surface/curve/completion/captured-authoring/
+mesh audits passed 115/95/106/268/104/133/94/91 checks. Full schema conformance
+including the native slicer fixture passed **879 checks**; artifact SDK passed
+**450 checks**; actual artifact-flow schema validation passed **191 checks**.
+All **12/12 actual-call schema/artifact audit scripts** passed. Poll-dependent
+totals vary; schemas and assertions are unchanged. The tested native executable
+SHA-256 is `ee83e41ff8ecfd9df95f098f30cd2ab49828e0d39e8a9e11443761fe61b950fa`.
+The native/artifact flow and UI tests are included in the complete CTest run.
+Evidence is `.local/evidence/gap-closure-refined-ctest.log`,
+`.local/evidence/gap-closure-refined-sdk.log` and
+`.local/evidence/schema-audit-expanded/results.json`. These are macOS arm64
+native/developer checks; current cross-platform and rebuilt-package validation
+remain pending.
+`7efd2f0` gives each independent SDK lifecycle a 90-second deadline and the full
+test a 180-second aggregate bound; per-call/native limits and schema checks are
+unchanged. Deadline attribution passed 3/3 checks. Timing probes showed Python
+validation dominates this developer harness; no schema validation is skipped.
+The combined 31-tool catalog is **467,231/476,160 bytes**.
+General hull/Gordon checks are bounded numerical
+verification, not global proofs for arbitrary curves. Exact rejection and
+public tolerances remain mandatory. The `d359331` test evidence below remains valid for its initial bounded
 contracts; it does not prove these reopened workflows or completion of the goal.
+
+Computer Use explicitly rejects the confirmed target's `com.openai.codex` bundle
+identifier for safety reasons. No host installation/update/acceptance action was
+performed, and this guard is not bypassed by another UI automation route. Actual
+ChatGPT/Claude journeys and publisher signing remain external acceptance gates.
 
 Continuation audit at ledger `465e937`: the final packaged binary passed **110
 additional resource-delivery checks across 10 files** (STEP, STL, 3MF/layout,
@@ -42,12 +92,12 @@ delivery, not an actual host save/download action. Signature verification passes
 as **ad hoc**, with no TeamIdentifier; the local signing-identity query reports
 zero valid identities. Current Docker context remains `desktop-linux`, whose
 configured daemon socket is absent; the restart question is pending.
-GitHub's commit lookup finds no published `d359331`, and the exact-source
-workflow query returns zero runs. Publishing the tested local branch for the
-five-platform CI is awaiting user approval. The installed app named ChatGPT
+At that earlier audit, GitHub's commit lookup found no published `d359331`, and
+the exact-source workflow query returned zero runs; later user approval and
+publication are recorded above. The installed app named ChatGPT
 reports `CFBundleName=ChatGPT`, `CFBundleIdentifier=com.openai.codex`, version
 26.707.30751; Claude reports `com.anthropic.claudefordesktop`, version 2.31226.1.
-The intended ChatGPT acceptance target is awaiting clarification; no host
+The user subsequently confirmed the ChatGPT acceptance target; no host
 registration or application update was made during this audit. The app's host
 inventory request did not return and was explicitly cancelled; that observation
 is not evidence that the host itself is unavailable.
@@ -58,7 +108,9 @@ The integration branch is `codex/build123d-gap-closure`, based on `f90033f`;
 the sibling comparison baseline is local build123d `d3b12235`.
 Native source checkpoint **`d359331`** integrates the work below.
 [GAP_CLOSURE_PLAN.md](GAP_CLOSURE_PLAN.md) retains the acceptance ledger.
-This increment has not been pushed, published or installed into the user's hosts.
+This baseline was validated locally before the branch publication recorded above;
+the new completion/refinement checkpoint is ready for its authorized publication.
+It has not been installed into the user's hosts.
 VERSION remains `0.1.0-preview.1`.
 
 Implemented native behavior:
