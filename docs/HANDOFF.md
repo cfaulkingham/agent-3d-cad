@@ -76,10 +76,45 @@ performance checkpoint before this version-only increment.
 
 Native source checkpoint `3cc4617fc2a3137324bd8654e2cc720d793d5322` is published;
 [run 53](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38126324625)
-started all five native lanes. Universal composition, two actual CPU runtime
-lanes and their same-archive acceptance gate remain conditional on those native
-jobs. `.local/evidence/ci-run-53/run.json` records the exact checkpoint.
-Current-source cross-platform/universal acceptance remains pending.
+completed with three successful and two failed platform jobs. Universal
+composition, runtime and same-archive acceptance jobs were skipped.
+`.local/evidence/ci-run-53/run.json` records the exact checkpoint;
+`final-jobs.json` preserves the terminal job state. Current-source
+cross-platform/universal acceptance remains pending.
+
+CI53's macOS arm64 and Linux arm64 jobs have now completed successfully.
+macOS passed **73/73 native suites in 416.44 seconds**, **1,899 official SDK
+checks** (32.053/23.837 seconds primary wall/Python CPU; reopened
+4.896/4.065), **268 surface schema checks** and **389 isolated package lifecycle
+checks**. Linux arm64 passed **73/73 suites in 267.26 seconds**, **1,332 SDK
+checks** (40.353/37.566 primary; reopened 7.865/6.937), **268 surface checks** and
+its applicable **18 isolated package lifecycle checks**. Poll-dependent SDK
+check totals differ; contracts and deadlines are unchanged. Decoded complete
+job logs are `.local/evidence/ci-run-53/{macos-arm64,linux-arm64}-job.log`.
+The downloaded Mac test-evidence ZIP matches GitHub's recorded SHA-256
+`0693088ecb936e5b41ec3e16115de6c9624c2761e10793a7dd9e71ec1d9d8afc`;
+its actual LastTest.log independently contains 73 passed and zero failed suites.
+Linux x64 subsequently completed successfully: **73/73 native suites in
+288.50 seconds**, **1,312 SDK checks** (52.134/49.115 seconds primary
+wall/Python CPU; reopened 11.115/10.147), **268 surface schema checks**, **450
+artifact SDK checks** and **18 isolated package lifecycle checks**. Its complete
+log is `linux-x64-job.log` in the same directory. Independent three-lane evidence,
+including all individual native passes and exact surface-suite timings, is in
+`surface-review/`. Intel macOS passed **73/73 native suites in 800.52 seconds**,
+including the corrected viewer suite in 11.83 seconds, then its primary SDK
+lifecycle exceeded the unchanged deadline at **90.540/76.691 seconds wall/Python
+CPU**. Windows passed **72/72 native suites in 682.19 seconds**, **2,434 SDK checks**
+(75.086/58.516 primary; reopened 11.287/9.562), all schema audits, and then failed
+the source-identity test fixture: generated quoted Windows paths interpreted
+`\\U` as an illegal CMake escape. Complete failed-job logs and independent
+results are preserved in the same evidence directory. Integrated fixture fix
+`f5a9dd1` uses collision-safe CMake bracket arguments and forward-slash paths;
+**49 source/build identity checks** pass locally, including reproduction of the
+old failure, drive/UNC/literal-variable path round trips, actual CPack from a
+source path with spaces, and unchanged source/binary drift rejection. Evidence
+is `.local/evidence/ci53-windows-path-fix.log`. Production source and deadlines
+are unchanged by that fixture fix. The remaining Intel SDK CPU cost is under
+investigation; no current-source universal acceptance is claimed.
 
 Thin ARM `preview.2` packages at that exact checkpoint are in
 `build/packages/gap-closure-preview2/`. Actual CPack, plugin/Claude generation,
@@ -120,13 +155,32 @@ exact preview.2 core; its production source hash remains
 `a8319ee6bf9152fe0ddcd278080a9c9cf47bcc73f6d73e553b18cf49345feb18`.
 Evidence is `.local/evidence/macos-publisher-tests.log`,
 `macos-publisher-preview2-inspection.json` and
-`macos-publisher-production-source.sha256`. The Mac still has zero valid signing
+`macos-publisher-production-source.sha256`. Subsequent independent review found
+that a resource changed after initial validation but before the first snapshot
+could become the signing baseline. Correction `6da2d81` revalidates the captured
+private copy against both approved hashes before signing or inventory refresh.
+Root verification passed **113 offline checks**; exact resource/coherent-manifest
+mutation regressions reject before every signer call, publish no output and
+remove staging. The same new regression fails against the preserved pre-fix
+source. Current log is `.local/evidence/macos-publisher-tests-current.log`;
+the independent review, reproduced defect, patch and evidence hashes are in
+`macos-publisher-independent-review/`. No credentialed success is simulated as
+publisher evidence. The Mac still has zero valid signing
 identities. No Developer ID signing, Apple timestamp/submission, notarization,
-stapling, public release or host acceptance was performed. Next inputs are an
-authorized Developer ID Application identity/private key already configured in
-the OS, its fingerprint and Team ID, a publisher-owned identifier prefix and an
-authorized notarytool keychain profile. Actual signed-byte dual-CPU/host and
-distribution acceptance remain required.
+stapling, public release or host acceptance was performed. The user explicitly
+asked to keep publisher signing pending on 2026-10-11. That track awaits a later
+user instruction; native and CI work continues. Actual signed-byte dual-CPU/host
+and distribution acceptance remain required for release readiness.
+
+Official OpenAI plugin packaging, local-server submission and connection/test
+guidance was fetched again on 2026-10-11. It still directs local MCP publishers
+to an OpenAI contact for an approved route when public HTTPS hosting is
+unsuitable; testing connections do not establish directory eligibility.
+[LOCAL_MCP_DISTRIBUTION.md](LOCAL_MCP_DISTRIBUTION.md) contains the source links
+and a concrete unsent request describing the packaged local engine and current
+evidence boundaries. No message, portal upload, directory submission or approval
+was made. Independent source/document review found no factual draft correction.
+The intended contact and explicit sending authorization remain inputs.
 
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
 authorized branch publication for CI. Published checkpoint

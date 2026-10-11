@@ -123,8 +123,9 @@ remains pending; exact timing and evidence are in HANDOFF. Development version
 no new tag or release is created. Its rebuild passed 15 targeted CTests, 1,922
 SDK checks, 42 source identity checks and relocated bundle smoke. Exact source
 `3cc4617` is published and
-[CI53](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38126324625) is
-running its five native lanes and conditional universal gates. Thin ARM archives
+[CI53](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38126324625)
+completed with three successful and two failed platform jobs; universal gates
+were skipped. Thin ARM archives
 at `build/packages/gap-closure-preview2/` pass actual creation, 389 lifecycle
 checks, packaged curve/sheet/surface audits and independent archive validation;
 hashes and full scope are in HANDOFF and `.local/evidence/package-audit-preview2/`.
@@ -141,7 +142,27 @@ unknown outcomes without automatic retry. Actual Apple acceptance requires
 fetched responses for the same submission/archive hash. No credentialed signing
 or Apple service request occurred. Zero valid local signing identities remains
 an external prerequisite; successful signed-byte CPU/host/distribution checks
-remain unfinished. Exact evidence and missing inputs are recorded in HANDOFF.
+remain unfinished. Subsequent correction `6da2d81` revalidates the captured
+private core against both approved hashes before signing or inventory refresh;
+113 root offline checks pass, and the new resource-change regression fails
+against the preserved pre-fix implementation. Exact independent review evidence
+and missing inputs are recorded in HANDOFF.
+
+CI53's Mac ARM, Linux ARM and Linux x64 jobs completed successfully, including
+all 73 native suites, SDK/schema and packaging checks. Intel Mac passed all 73
+native suites, then exceeded the unchanged SDK lifecycle deadline with
+predominantly Python CPU. Windows passed all 72 native suites and SDK/schema
+checks, then a test-generated CMake path failed on backslash escaping. Integrated
+fixture correction `f5a9dd1` passes 49 local identity checks, including actual
+CPack and platform-independent reproduction of the original Windows error.
+Complete decoded logs, terminal job state and independently hash-verified Mac
+test evidence are recorded in HANDOFF. No current-source universal acceptance
+is claimed. Publisher signing stays pending at the user's explicit request;
+implementation and CI work continues.
+Current official OpenAI local-MCP distribution guidance was rechecked;
+[LOCAL_MCP_DISTRIBUTION.md](LOCAL_MCP_DISTRIBUTION.md) prepares a concrete unsent
+request for the approved local route. No contact or directory submission/approval
+is claimed from this preparation.
 
 Source-helper `9265da3` fixes actual CPack embedded installation and passes
 **42 identity checks**, including source/binary substitution and stale-build
