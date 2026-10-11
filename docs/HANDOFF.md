@@ -71,9 +71,36 @@ production source identity is
 `a8319ee6bf9152fe0ddcd278080a9c9cf47bcc73f6d73e553b18cf49345feb18`.
 The 31-tool compact result remains 467,231/476,160 bytes. Evidence is
 `.local/evidence/gap-closure-preview2-{ctest,sdk,source-identity,bundle}.log` and
-`gap-closure-preview2-native-identity.json`. Rebuilt archives and current-source
-CI acceptance remain pending; the preceding 73-suite run is the performance
-checkpoint before this version-only increment.
+`gap-closure-preview2-native-identity.json`. The preceding 73-suite run is the
+performance checkpoint before this version-only increment.
+
+Native source checkpoint `3cc4617fc2a3137324bd8654e2cc720d793d5322` is published;
+[run 53](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38126324625)
+started all five native lanes. Universal composition, two actual CPU runtime
+lanes and their same-archive acceptance gate remain conditional on those native
+jobs. `.local/evidence/ci-run-53/run.json` records the exact checkpoint.
+Current-source cross-platform/universal acceptance remains pending.
+
+Thin ARM `preview.2` packages at that exact checkpoint are in
+`build/packages/gap-closure-preview2/`. Actual CPack, plugin/Claude generation,
+packaged guide checks, empty-PATH plugin modeling/export smoke and **389 isolated
+lifecycle checks** pass. Packaged curve/sheet/surface actual-call audits pass
+**133/106/268 checks**. Source/hash/timing evidence is in
+`.local/evidence/package-audit-preview2/results.json`. Independent archive audit
+passes all **96 production inputs**, raw executable/build stamp, **366 native/
+Claude core entries; 417 plugin entries**, identical cross-format core bytes,
+**171 strict Mach-O signature/section/loader checks**, **22 SDK notice files**,
+five HLR modified-source guards and **287 guide copies / 757 links**. The final
+packaged executable SHA-256 is
+`8ef4bfbe83ba32b0be73d99e6d1203eebabdefc40ca8ea9e871a18eea8e10592`.
+Archive SHA-256 values are native
+`490b4334c6802814ae3d8bb2d987d6b48f7568c3a0d78f7de8f71706f90f1048`, Claude
+`ec0a299024132e741737d0d7a5f7582fed8f18e30a2a6076c11fd19ff757af81`, plugin
+`4b8ef6c53de7f496a7c7a326bfa2f0465d45d9dab256b2af074f6b87fc239f45`.
+Independent evidence is in its `independent-archive-audit/` subdirectory. These
+packages are thin ARM, require macOS 27.0 and have ad-hoc signatures only.
+Same-build lifecycle replacement does not establish cross-version migration or
+actual host installation/update/save acceptance; the user will run those checks.
 
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
 authorized branch publication for CI. Published checkpoint

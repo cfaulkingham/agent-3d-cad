@@ -121,8 +121,15 @@ tests, and relocated empty-PATH/no-SDK bundle smoke. Current-source CI acceptanc
 remains pending; exact timing and evidence are in HANDOFF. Development version
 `0.1.0-preview.2` distinguishes an actual host upgrade from the published preview;
 no new tag or release is created. Its rebuild passed 15 targeted CTests, 1,922
-SDK checks, 42 source identity checks and relocated bundle smoke; archives and
-current-source CI validation remain pending.
+SDK checks, 42 source identity checks and relocated bundle smoke. Exact source
+`3cc4617` is published and
+[CI53](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38126324625) is
+running its five native lanes and conditional universal gates. Thin ARM archives
+at `build/packages/gap-closure-preview2/` pass actual creation, 389 lifecycle
+checks, packaged curve/sheet/surface audits and independent archive validation;
+hashes and full scope are in HANDOFF and `.local/evidence/package-audit-preview2/`.
+These require macOS 27.0 and remain ad-hoc signed. Current-source CI, actual host
+journeys, publisher signing and distribution acceptance remain pending.
 
 Source-helper `9265da3` fixes actual CPack embedded installation and passes
 **42 identity checks**, including source/binary substitution and stale-build
