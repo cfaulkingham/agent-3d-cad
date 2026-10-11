@@ -139,6 +139,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/packaging_provenance_test.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/linux_staging_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Relocated bundle without SDK environment
         run: |
           $build = Join-Path $PWD 'build'

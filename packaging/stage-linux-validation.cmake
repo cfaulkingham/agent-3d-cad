@@ -6,7 +6,10 @@ if(NOT DEFINED STAGE_DIR)
   set(STAGE_DIR "${SOURCE_DIR}/build-linux-container/context")
 endif()
 file(MAKE_DIRECTORY "${STAGE_DIR}/source" "${STAGE_DIR}/archives")
-foreach(item CMakeLists.txt README.md src include cmake docs examples tests packaging web skills .github)
+# Keep the native build, its notices, and developer tests self-contained.
+# Do not copy host build trees, credentials, caches, or the host-native SDK.
+foreach(item CMakeLists.txt VERSION README.md LICENSE NOTICE install.sh install.ps1
+    src include third_party cmake docs examples tests packaging web skills .github)
   file(COPY "${SOURCE_DIR}/${item}" DESTINATION "${STAGE_DIR}/source")
 endforeach()
 foreach(archive OCCT-V8_0_1.tar.gz freetype-2.14.3.tar.xz json-3.12.0.tar.gz)
