@@ -7,100 +7,149 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
-## Comprehensive comparison gaps — active, 2026-10-10
+## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
-The shared viewer now accepts the section report's optional exact endpoint and
-closure fields while retaining strict coordinate, type and unknown-field
-rejection. Historical reports without those fields remain supported. The final
-affected `live_ui`, `live_mcp_flow` and `webgl_renderer` CTests passed **3/3 in
-11.82 s**; direct renderer and UI runs passed **119** and **367 checks**. An earlier
-consistent Mac checkpoint passed 69/71 selected suites; both failures were this
-viewer mismatch and are covered by the corrected run. Full branch acceptance
-still awaits the independent signed-moment centroid fix and final rerun.
-
-Final integration checkpoint: the official **MCP SDK 2.3.0 passed 1,403
-interoperability checks**, including native stdio framing, current closed
-schemas, jobs, saved-source history, resource bytes and section geometry.
-The run exposed undeclared `closed`/`endpoints_mm` fields in section curves;
-their typed schema and independent analytic/rejection checks now pass.
-The initial new rejection probe used wire-field access on the SDK's typed Tool
-object; its harness now uses the SDK's `output_schema` attribute. The remaining
-parametric component portability test now reads the exact receipt revision.
-Focused `parametric`, `section` and `app_protocol` CTests passed **3/3 in 6.88 s**.
-Complete native acceptance and the independently detected STEP centroid fix
-remain in progress; these results are not a final full-branch acceptance claim.
-
-Integration checkpoint: strict compact committed-revision receipts now include
-`model_sha256`; `cad_read` at the returned revision retains the complete editable
-source. CLI, MCP, mutation replay and durable job recovery use the same Service
-projection. [COMMIT_RECEIPTS.md](COMMIT_RECEIPTS.md) documents this preview API
-change and historical-result compatibility. Narrow reconstruction proposal
-schemas describe the constructors actually emitted, and independent assertion
-factoring preserves accepted/rejected JSON instances and exact literal values.
-The current 31-tool catalog is **451,101 bytes**, below the unchanged
-**476,160-byte** gate; native `app_protocol` passed **1/1 in 0.99 s**.
-Independent factoring proofs passed **12,953 checks / 236 fixtures / 3,595
-acceptance probes**; mandatory-property hoisting/interning passed **51,993
-checks / 615 fixtures / 51,267 acceptance probes**. The integrated live-call
-schema run reached the existing curved-pipe example and failed its unchanged
-30-second worker timeout; a separately owned centroid-conditioning fix and the
-full integrated rerun remain outstanding. This checkpoint supersedes the older
-catalog-size observations below, not their historical evidence.
-
-The user authorized tackling the full comparison gap list with parallel agents.
+The user authorized implementing all comparison workstreams with parallel agents
+and local tested commits, and explicitly selected compact mutation receipts.
 The integration branch is `codex/build123d-gap-closure`, based on `f90033f`;
-isolated managed worktrees cover solids/lofts, surfaces and sheet metal.
-[GAP_CLOSURE_PLAN.md](GAP_CLOSURE_PLAN.md) preserves every required area and its
-acceptance obligations. This work is in progress; no release or installed app
-has changed and no full parity/release claim is made.
+the sibling comparison baseline is local build123d `d3b12235`.
+Native source checkpoint **`d359331`** integrates the work below.
+[GAP_CLOSURE_PLAN.md](GAP_CLOSURE_PLAN.md) retains the acceptance ledger.
+This increment has not been pushed, published or installed into the user's hosts.
+VERSION remains `0.1.0-preview.1`.
 
-The integration checkout now implements bounded trigonometric, square-root,
-inverse-trig, rounding, min/max/clamp, power/logarithm, comparison and conditional
-expressions, plus parameter/expression-driven pattern counts. Every tree is
-structurally checked (including inactive branches); `if` evaluates only its
-selected branch. Unit/domain errors and noninteger/out-of-range counts fail
-before publication. Dependencies and portable components retain all referenced
-parameters. [PARAMETRIC_EXPRESSIONS.md](PARAMETRIC_EXPRESSIONS.md) records the
-contract; geometry remains native and model source is never executed.
+Implemented native behavior:
 
-Validation: native build succeeded. The final focused run passed **4/4 CTest
-suites** (`parametric`, `modeling`, `dependency_cache`, `component`) in **26.43 s**.
-It covers analytic expressions/count geometry, independent STEP validation,
-count edits, invalid-count rollback, cold reopen and portable components.
-The first new test omitted its service-worker executable configuration and
-recursively launched the test itself; those test processes were stopped and the
-harness setup was corrected before the passing run. Production behavior was not
-changed for that harness failure. Independent Draft 2020-12 validation passed
-all **62 live schemas** and **11 accepted/rejected expression/count requests**.
+- Uniform/affine scaling, existing-face draft, reference-side asymmetric/angle
+  chamfers, twist extrusion, holed lofts and vertex endpoints. Multiple holes
+  require explicit geometric correspondence. [PARITY_SOLIDS.md](PARITY_SOLIDS.md)
+  records the contracts and rejection boundaries.
+- Explicit curve/surface STEP outputs and nonmaterial imports, corrected crown
+  thickening for both signs/joins, polynomial Gordon networks, checked C0/G1/G2
+  fills, exact UV contour holes and qualified directional curved projection.
+  [PARITY_SURFACES.md](PARITY_SURFACES.md) records numerical solver limits.
+- Named sheet-metal forming trees, folds through blanks, open hems, jogs,
+  explicit miters, rectangular relief and mapped cuts crossing cylindrical bends,
+  with matching exact developed geometry. The Bezier verifier remedy preserves
+  the exact support basis and repeats full validation.
+  [PARITY_SHEET_METAL.md](PARITY_SHEET_METAL.md) records physical/K-factor semantics.
+- Dimension-checked trig, square-root, inverse-trig, rounding, extrema, power/log,
+  comparison/conditional expressions and editable pattern counts. Inactive
+  expression branches are structurally checked; only the selected branch is
+  evaluated. [PARAMETRIC_EXPRESSIONS.md](PARAMETRIC_EXPRESSIONS.md) defines bounds.
+- Helices, rational Beziers, tangent constructors, exact edge extraction,
+  arc-length sampling/trimming, qualified geometric selectors, analytic hulls,
+  traces and full-round sketches. [PARITY_CURVES.md](PARITY_CURVES.md) retains the
+  distinction between these constructors and general constraint solving.
+- Captured DXF block/text/hatch expansion and editable planar text-on-path using
+  portable captured fonts. [PARITY_AUTHORING.md](PARITY_AUTHORING.md) lists rejected
+  formats/layouts and geometric placement semantics.
+- Native plane/cylinder/sphere mesh recognition with full-triangle residuals,
+  membership/leftover accounting and explicit editable reconstruction guides.
+  [MESH_RECONSTRUCTION.md](MESH_RECONSTRUCTION.md) does not claim recovered history.
+- Source-qualified bounded export resources for STEP/STL, 3MF plates/layout and
+  PDF/SVG/DXF drawings. The viewer requests `ui/download-file` only when advertised,
+  handles host cancellation and retains source/workspace paths. Historical bytes
+  are hash-checked on read. [EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md) records limits.
 
-Known integration task: the extended catalog is **490,560 bytes**, above the
-unchanged **476,160-byte** discovery budget. Lossless structural compaction is
-required after feature integration; the budget and validation must not be
-weakened. Full native/SDK/package/platform/host acceptance remains outstanding.
+Compact create/edit/import/restore receipts contain revision, summary and
+`model_sha256`; the complete editable source remains available through exact
+revision-pinned `cad_read`. CLI, MCP, idempotent mutation replay and durable job
+recovery use the same Service projection. Historical full-source durable results
+are projected without rewriting their stored bytes; sketch-import recovery reads
+the committed historical revision rather than HEAD.
+[COMMIT_RECEIPTS.md](COMMIT_RECEIPTS.md) records the preview contract change.
+The final **31-tool catalog is 454,784 bytes**, under the unchanged **476,160-byte**
+gate. Reconstruction proposal schemas match actual emitted constructors, while
+ordinary authoring remains fully described. Independent lossless assertion
+factoring passed **12,835 checks / 236 fixtures / 3,595 acceptance probes**;
+mandatory-property hoisting/interning passed **51,993 checks / 615 fixtures /
+51,267 acceptance probes**, and anchor compaction passed **15,267 checks /
+170 fixtures / 3,290 acceptance probes**. Closed schemas, literal values,
+reference scope and malformed-instance rejection remain checked.
 
-Embedded export delivery is implemented on the integration branch. STEP/STL,
-all 3MF plates and their layout report, and requested PDF/SVG/DXF artifacts
-produce bounded source-qualified MCP resource links. Captured bytes and their
-historical source/manifest hashes are checked on every resource read. Native
-MCP content blocks expose the links; the viewer requests `ui/download-file`
-only for an advertised host capability and retains complete workspace paths.
-Late replies cannot replace a newer view's status. Read-only job polls retry
-the documented `workspace_busy` result without resubmitting the export.
-The current MCP Apps `isError` download result is handled as a host decline or
-cancellation, with a passing bridge regression; timeouts retain uncertain status.
-[EXPORT_DOWNLOADS.md](EXPORT_DOWNLOADS.md) records bounds and behavior.
+Numerical summary fixes retain strict analytic tolerances and the unchanged
+30-second worker budget. Rational quadrature is selected per face, planar
+polygon moments use fixed-degree Gauss, and per-solid exterior references avoid
+symmetric rational-moment stalls. Compensated signed mass/first-moment sums avoid
+OCCT's intermediate-zero normalization loss. Zero-mass curved-face contributions
+trigger at most 16 complete common-reference retries per solid; unresolved conditioning
+fails explicitly. Independent native/snapshot/worker/STEP/source-deleted box and
+cubic-roof tests cover both cancellation mechanisms. The signed-moment
+increment `2304c65`, integrated as `79e448c`, passed **7/7 focused suites in
+47.46 s**, including **459 parity-solid checks** and artifact centroid oracles.
+The curved-pipe build/summary took **0.388 s** and ordinary create passed its
+unchanged worker limit. [PARITY_SOLIDS.md](PARITY_SOLIDS.md) records derivations.
 
-Validation: native build succeeded; **3/3 CTest suites** (`download`, `live_ui`,
-`export_ui`) passed in **2.54 s**, and the final UI checks after adding contention
-coverage passed **2/2 in 0.15 s**. The official **MCP SDK 2.3.0 passed 2,194
-checks** against the native stdio service, including typed resource links,
-source schemas and exact base64/file-byte comparison. Independent validation
-accepted all **62 discovery schemas**. The initial new test wrongly expected
-a 3MF export without a layout sidecar and polled jobs without handling the
-documented transient queue lock; both harness assumptions were corrected.
-This does not establish actual host download support or any release journey.
-The catalog is now **492,473 bytes**; its unchanged size gate still needs the
-planned lossless compaction after integration.
+An independent audit also found 7.28e-5 mm centroid drift for two 1 mm cubes
+separated by 1e6 mm when all faces shared an assembly-wide origin. `1f766bb`
+integrates each closed solid near its own bounds, then combines positive material
+masses with compensated moments. The separated-cube centroid is now exactly
+500000.5 mm. Unequal sizes, reversed order, rotated nested assemblies, coincident
+instances and cold source-deleted STEP rebuilds are independent regression cases.
+The single-curved-face-zero case remains represented inside one fused solid.
+The isolated final increment `6e835de` passed **12/12 suites in 67.18 s**, including
+**579 parity-solid / 6,611 assembly checks**. Pipe build/summary took **0.337 s**.
+Existing import validation already rejects nonmaterial entities beside solids;
+the correction does not change import or summed assembly-material semantics.
+
+Final source `d359331` has passed **1,421 official MCP SDK 2.3.0 checks**
+and **12/12 independent actual-call schema/artifact scripts**. Full schema
+conformance, including the native slicer fixture, passed **893 checks in 93.73 s**;
+the modeling matrix passed **1,227 checks / 72 models / all 61 feature kinds in
+78.17 s**. Dedicated authoring, solid, sheet, surface, curve, captured-authoring
+and mesh schema scripts passed 115/95/80/106/104/94/91 checks respectively.
+Artifact MCP flow passed **60 checks**, official artifact SDK passed **455**, and
+schema validation of successful flow evidence passed **209**. Poll-dependent
+check totals vary with successful polling iterations; assertions and tolerances
+are unchanged. The final complete CTest run passed **72/72 suites in 300.77 s**, with zero failures.
+
+Independent SDK section probes earlier exposed undeclared exact endpoint fields.
+Their schemas now declare bounded types; the viewer validates optional endpoint
+and closure metadata and retains historical reports. The corrected `live_ui`,
+`live_mcp_flow` and `webgl_renderer` run passed **3/3 in 11.82 s**, with **119
+renderer / 367 UI checks**. The earlier 69/71 native checkpoint's two failures
+were this viewer mismatch. The preceding `79e448c` checkpoint subsequently passed
+**72/72 CTests in 303.48 s** before the per-solid conditioning correction.
+
+Packaging verifies complete inventories and native OS/CPU headers for all five
+supported release pairs. The preview installer recognizes Rosetta and selects
+native arm64; bundled product guides and relative links are preserved. Isolated
+replacement/removal/reinstall and Claude manifest expansion validate saved files
+using the same build, without claiming host-managed or cross-version acceptance.
+Final package source is `d359331`. Empty-PATH packaged MCP checks passed **121
+checks**, including all 62 schemas, section/annular-cap geometry, exact receipt
+source, STEP centroid `[5,10,15]` and separated-solid centroid X=500000.5.
+Plugin modeling/history and STEP/STL/3MF/PDF/SVG/four-DXF exports passed.
+Same-build isolated replacement/remove/reinstall and Claude manifest expansion
+passed **387 checks**. Native/plugin guide checks resolved **200/313 links**;
+the relocated CPack archive passed its **365-file** inventory, headers and startup.
+Unchanged preflight fixtures previously passed 43 architecture/provenance checks,
+20 offline installer selections and the installer CTest. Linux source staging
+includes every current build/package input; its fully disconnected native SDK
+fixture passed **121 checks**. These staging/header tests do not execute Linux.
+
+The final build executable SHA-256 is
+`aeda5cc6aa63dc9551910890d8ecb85fdeaa2f605380d487af45ebfd63de2ee9`;
+the relocated packaged executable is
+`23968d8b2a0b4cd1e8886c5410d97ee3842233191e868308954d7640a2e46ebf`.
+Executed package baseline is Darwin arm64 / **macOS 27.0 minimum** inherited from
+the selected SDK, not evidence of older-macOS compatibility. Verified archive
+copies and package evidence are retained in `build/packages/gap-closure-d359331/`;
+copy hashes match the independently tested artifacts. Source/commands/schema logs
+are retained in `.local/evidence/schema-audit-d359331/`; native/SDK/proof logs are
+under `.local/evidence/gap-closure-*`. The package's configure-time HANDOFF stub
+records `d359331` explicitly and does not claim to contain this later ledger.
+[LOCAL_PACKAGE_ACCEPTANCE.md](LOCAL_PACKAGE_ACCEPTANCE.md) records the boundary.
+
+Still open: actual current-source foreign-platform execution, real ChatGPT/Claude
+install/select/edit/restart/reopen/export/save/update/remove/reinstall journeys,
+publisher signing/notarization, public local-plugin distribution and automatic
+CPU routing. Docker started on the local arm64 Mac and then quit cleanly; Linux
+execution awaits the user's pending restart decision. CI definitions and older
+platform results do not close current-source gates. Broader unsupported geometry
+remains explicit in each operation guide; no complete build123d API parity or
+1.0 release readiness is claimed.
 
 ## Standalone UI synchronized and installed — 2026-10-10
 
