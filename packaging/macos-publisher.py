@@ -259,17 +259,36 @@ def submit(root, output, archive_hash, profile):
     destination.mkdir()
     # Preserve an attempt record before the irreversible upload. Unknown outcome
     # never authorizes automatic resubmission or an Accepted claim.
-    write_json(destination / 'attempt.json', {'archive_sha256': archive_hash, 'status': 'upload-requested'})
+    attempt = {'archive_sha256': archive_hash, 'captured_archive': 'notary-submission.zip', 'status': 'capture-requested'}
+    write_json(destination / 'attempt.json', attempt)
+    captured = destination / attempt['captured_archive']
+    with (Path(root).resolve() / 'notary-submission.zip').open('rb') as source, captured.open('xb') as target:
+        shutil.copyfileobj(source, target)
+    captured.chmod(0o444)
+    if sha(captured) != archive_hash:
+        attempt['status'] = 'capture-rejected-no-upload'
+        write_json(destination / 'attempt.json', attempt)
+        raise ValueError('Captured ZIP differs from approved bytes; no upload attempted')
+    attempt['status'] = 'upload-requested'
+    write_json(destination / 'attempt.json', attempt)
     try:
-        result = subprocess.run(['/usr/bin/xcrun', 'notarytool', 'submit', str(Path(root).resolve() / 'notary-submission.zip'),
+        result = subprocess.run(['/usr/bin/xcrun', 'notarytool', 'submit', str(captured),
                              '--keychain-profile', profile, '--no-wait', '--output-format', 'json'],
                                 capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired as error:
         for name, value in [('submit.stdout.json', error.stdout), ('submit.stderr.txt', error.stderr)]:
             (destination / name).write_bytes(value if isinstance(value, bytes) else (value or '').encode())
+        attempt.update(status='upload-outcome-unknown', captured_sha256_after=sha(captured))
+        write_json(destination / 'attempt.json', attempt)
         raise ValueError('Apple upload outcome is unknown after timeout; review retained attempt before retry') from error
     (destination / 'submit.stdout.json').write_text(result.stdout)
     (destination / 'submit.stderr.txt').write_text(result.stderr)
+    attempt['captured_sha256_after'] = sha(captured)
+    if attempt['captured_sha256_after'] != archive_hash:
+        attempt['status'] = 'captured-bytes-changed-outcome-unknown'
+        write_json(destination / 'attempt.json', attempt)
+        raise ValueError('Captured ZIP changed during upload; review retained unknown outcome before retry')
+    write_json(destination / 'attempt.json', attempt)
     if result.returncode:
         raise ValueError('Apple submission did not complete; retained attempt must be reviewed before retry')
     response = json.loads(result.stdout)

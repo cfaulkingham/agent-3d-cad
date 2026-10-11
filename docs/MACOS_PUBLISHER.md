@@ -73,8 +73,9 @@ existing directory. The report says `signed-not-submitted`, never notarized.
 Create an authorized `notarytool` keychain profile separately using Apple's
 documented account process. This tool accepts a profile name, not passwords,
 API private keys or tokens. `submit` uploads the exact approved ZIP once, without
-polling; it records the attempt before upload and retains stdout/stderr and the
-returned submission ID. An interrupted/failed upload can have an unknown outcome:
+polling. It captures the ZIP into the new attempt directory, checks its approved
+hash, makes the capture read-only and uploads that captured path. It checks the
+capture again afterward and retains it with stdout/stderr and the submission ID. An interrupted/failed upload can have an unknown outcome:
 review the retained evidence and Apple's submission history before any retry.
 
 ```sh

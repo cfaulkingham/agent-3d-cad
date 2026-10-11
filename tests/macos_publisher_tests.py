@@ -118,13 +118,29 @@ with tempfile.TemporaryDirectory(prefix='cad-publisher-fixture-') as temporary:
     check(empty.is_dir() and (stage / 'preserved').exists(), 'Empty racing destination is never replaced')
     # Exercise an unknown upload outcome without a network call. No simulated
     # success/Accepted file is produced; exactly one invocation is attempted.
+    prepared = root / 'prepared-capture-fixture'; prepared.mkdir()
+    original_zip = prepared / 'notary-submission.zip'; original_zip.write_bytes(b'Offline upload-capture fixture')
+    approved_hash = validation.sha(original_zip)
     unknown = root / 'unknown-upload'
     timeout = subprocess.TimeoutExpired('notarytool', 300, output=b'partial response', stderr=b'interrupted')
     with patch.object(publisher, 'prepared', return_value={}), patch.object(publisher.subprocess, 'run', side_effect=timeout) as invoked:
-        fails(lambda: publisher.submit(root / 'nonexistent-prepared', unknown, 'f' * 64, 'fixture-profile'), 'outcome is unknown')
+        fails(lambda: publisher.submit(prepared, unknown, approved_hash, 'fixture-profile'), 'outcome is unknown')
         check(invoked.call_count == 1, 'Unknown upload never retries automatically')
+        check(invoked.call_args.args[0][3] == str(unknown.resolve() / 'notary-submission.zip'), 'Upload uses only the independently captured attempt ZIP')
     check((unknown / 'attempt.json').exists() and not (unknown / 'submission.json').exists() and not (unknown / 'accepted.json').exists(), 'Unknown upload retains attempt without acceptance')
     check((unknown / 'submit.stdout.json').read_bytes() == b'partial response' and (unknown / 'submit.stderr.txt').read_bytes() == b'interrupted', 'Unknown upload retains partial tool evidence')
+    check(validation.sha(unknown / 'notary-submission.zip') == approved_hash and not ((unknown / 'notary-submission.zip').stat().st_mode & 0o222), 'Exact captured bytes remain read-only for recovery')
+    original_zip.write_bytes(b'changed after validation')
+    with patch.object(publisher, 'prepared', return_value={}), patch.object(publisher.subprocess, 'run') as invoked:
+        fails(lambda: publisher.submit(prepared, root / 'copy-mismatch', approved_hash, 'fixture-profile'), 'no upload attempted')
+        check(invoked.call_count == 0, 'Preflight/copy race never reaches upload')
+    original_zip.write_bytes(b'Offline upload-capture fixture')
+    def changed_during_upload(argv, **kwargs):
+        uploaded = Path(argv[3]); uploaded.chmod(0o644); uploaded.write_bytes(b'mutated captured copy')
+        return subprocess.CompletedProcess(argv, 1, stdout='failure fixture', stderr='no network used')
+    with patch.object(publisher, 'prepared', return_value={}), patch.object(publisher.subprocess, 'run', side_effect=changed_during_upload) as invoked:
+        fails(lambda: publisher.submit(prepared, root / 'post-upload-mutation', approved_hash, 'fixture-profile'), 'changed during upload')
+        check(invoked.call_count == 1 and not (root / 'post-upload-mutation/submission.json').exists(), 'Changed upload capture cannot produce a submitted/Accepted record')
     arm, intel = root / 'arm64', root / 'x64'
     fixture(arm, 'arm64', source_hash, source_manifest, clang, sdk)
     fixture(intel, 'x64', source_hash, source_manifest, clang, sdk)
