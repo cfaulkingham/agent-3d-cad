@@ -1,5 +1,6 @@
 #include "agentcad/kernel.hpp"
 #include "agentcad/model.hpp"
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <iostream>
@@ -105,7 +106,75 @@ void fillet_diagnostic_tests(const Json& input_topology) {
     require(found!=input_edges.end() && found->second==match,"match "+match.at("id").get<std::string>()+" is the input feature's evaluated edge");
   }
 }
+// Independent all-pairs oracle: the spatial index may remove work, never a
+// competing geometric match. Compare both suggested presence and exact rules.
+void suggestion_oracle(const Json& topology) {
+  for(const auto* collection:{"faces","edges"}) {
+    const bool face=std::string(collection)=="faces";
+    const auto kind=face?"surface_kind":"curve_kind",measure=face?"area_mm2":"length_mm";
+    const auto orientation=face?"normal":"direction";
+    for(const auto& entity:topology.at(collection)) {
+      const auto center=entity.at("center_mm").get<std::array<double,3>>();
+      const bool eligible=(!entity.value("degenerate",false))&&entity.at(measure).get<double>()<=1e6&&
+        std::all_of(center.begin(),center.end(),[](double value){return std::abs(value)<=1e6;});
+      int matching=0;
+      for(const auto& candidate:topology.at(collection)) {
+        if(candidate.value("degenerate",false)||candidate.at(kind)!=entity.at(kind))continue;
+        const auto other=candidate.at("center_mm").get<std::array<double,3>>();
+        if(std::hypot(center[0]-other[0],center[1]-other[1],center[2]-other[2])>1e-5||
+          std::abs(candidate.at(measure).get<double>()-entity.at(measure).get<double>())>1e-5)continue;
+        if(entity.contains(orientation)) {
+          if(!candidate.contains(orientation))continue;
+          const auto a=entity.at(orientation).get<std::array<double,3>>(),b=candidate.at(orientation).get<std::array<double,3>>();
+          double dot=(a[0]*b[0]+a[1]*b[1]+a[2]*b[2])/std::hypot(a[0],a[1],a[2]);
+          if(!face)dot=std::abs(dot);
+          if(dot<std::cos(1e-6))continue;
+        }
+        ++matching;
+      }
+      const bool expected=eligible&&matching==1;
+      require(entity.contains("selector")==expected,"selector suggestions preserve independent all-pairs uniqueness");
+      if(!expected)continue;
+      Json rule={{"type","geometric"},{"feature_id",topology.at("feature_id")},{kind,entity.at(kind)},{"expected_count",1},
+        {"center",{{"point",entity.at("center_mm")},{"tolerance",1e-5}}},
+        {face?"area":"length",{{"value",entity.at(measure)},{"tolerance",1e-5}}}};
+      if(entity.contains(orientation))rule[orientation]={{"vector",entity.at(orientation)},{"tolerance",1e-6}};
+      require(entity.at("selector")==rule,"selector optimization preserves exact emitted geometric rules");
+    }
+  }
+}
+void suggestion_candidate_tests() {
+  for(int axis=0;axis<3;++axis)for(const double separation:{1e-5,1.0001e-5,40.0}) {
+    auto model=box();model["features"][0]["size"]={1,1,1};
+    Json step=Json::array({0.0,0.0,0.0});step[axis]=separation;
+    model["features"].push_back({{"id","copies"},{"type","pattern"},{"input","base"},{"count",3},{"step",step}});
+    model["output"]="copies";
+    suggestion_oracle(BuiltModel(model).topology());
+    // Reversing the same step creates exactly coincident retained occurrences;
+    // they must suppress suggestions instead of becoming arbitrary unique picks.
+    step[axis]=-separation;
+    model["features"].push_back({{"id","overlap"},{"type","pattern"},{"input","copies"},{"count",2},{"step",step}});
+    model["output"]="overlap";
+    const auto duplicated=BuiltModel(model).topology();suggestion_oracle(duplicated);
+    require(std::any_of(duplicated.at("faces").begin(),duplicated.at("faces").end(),[](const Json& item){return !item.contains("selector");}),"coincident native faces remain ambiguous");
+  }
+  for(const Json step:{Json::array({8e-6,6.001e-6,0}),Json::array({8e-6,5.999e-6,8e-6}),Json::array({-50,30,20})}) {
+    auto model=box();model["features"][0]["origin"]={-200,-300,-400};
+    model["features"].push_back({{"id","copies"},{"type","pattern"},{"input","base"},{"count",3},{"step",step}});model["output"]="copies";
+    suggestion_oracle(BuiltModel(model).topology());
+  }
+  for(bool cone:{false,true}) {
+    auto model=box();model["features"][0]={{"id","base"},{"type","cylinder"},{"radius",2},{"height",6}};
+    if(cone)model["features"]=Json::array({
+      Json{{"id","profile"},{"type","sketch"},{"profile",{{"type","circle"},{"radius",2}}},
+        {"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}}},
+      Json{{"id","base"},{"type","loft"},{"sections",{"profile"}},{"end_vertex",{0,0,6}},{"ruled",true}}});
+    model["features"].push_back({{"id","copies"},{"type","pattern"},{"input","base"},{"count",3},{"step",{0,0,12}}});model["output"]="copies";
+    suggestion_oracle(BuiltModel(model).topology());
+  }
+}
 void topology_tests() {
+  suggestion_candidate_tests();
   pattern_history_tests();
   auto model = fillet(vertical());
   BuiltModel built(model);

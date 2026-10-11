@@ -96,8 +96,12 @@ int main(){try{
   many["features"].push_back({{"id","row"},{"type","pattern"},{"input","base"},{"count",64},{"step",{30,0,0}}});
   many["features"].push_back({{"id","grid"},{"type","pattern"},{"input","row"},{"count",4},{"step",{0,20,0}}});
   many["output"]="grid";
+  const auto large_started=std::chrono::steady_clock::now();
   reopened.call("cad_create",{{"document_id","many"},{"model",many}});
+  const auto large_created=std::chrono::steady_clock::now();
+  std::cerr<<"viewer large create: "<<std::chrono::duration<double>(large_created-large_started).count()<<"s\n";
   auto large_view=reopened.call("cad_view",{{"document_id","many"},{"revision",1}});
+  std::cerr<<"viewer large view: "<<std::chrono::duration<double>(std::chrono::steady_clock::now()-large_created).count()<<"s\n";
   const auto large_metadata=temp.path/"evaluations"/(large_view.at("evaluation_id").get<std::string>()+".json");
   require(fs::file_size(large_metadata)>max_json_bytes,"large topology exercises artifact bound above model input bound");
   auto large_pick=Json{{"document_id","many"},{"revision",1},{"evaluation_id",large_view.at("evaluation_id")},{"feature_id","grid"},{"kind","face"},{"entity_id","face-1"}};

@@ -640,6 +640,54 @@ bool matches_face(const Json& descriptor,const Json& selector,const Json& parame
     scalar(selector.at("area").at("tolerance"),parameters,"mm2"))return false;
   return true;
 }
+// Suggested selectors all constrain center distance. Index one coordinate only
+// to discard impossible matches, then retain the full geometric predicate. The
+// widest axis avoids scanning an entire planar row just because X is constant.
+// Stored descriptors and authored selector resolution remain unchanged.
+class SuggestionCenters {
+ public:
+  explicit SuggestionCenters(const Json& descriptors):descriptors_(descriptors) {
+    if(descriptors.empty())return;
+    auto low=descriptors[0].at("center_mm").get<std::array<double,3>>(),high=low;
+    for(const auto& descriptor:descriptors) {
+      const auto center=descriptor.at("center_mm").get<std::array<double,3>>();
+      for(std::size_t axis=0;axis<3;++axis) {
+        if(!std::isfinite(center[axis])){indexed_=false;return;}
+        low[axis]=std::min(low[axis],center[axis]);high[axis]=std::max(high[axis],center[axis]);
+      }
+    }
+    for(std::size_t axis=1;axis<3;++axis)if(high[axis]-low[axis]>high[axis_]-low[axis_])axis_=axis;
+    centers_.reserve(descriptors.size());
+    for(std::size_t index=0;index<descriptors.size();++index)
+      centers_.emplace_back(descriptors[index].at("center_mm")[axis_].get<double>(),index);
+    std::sort(centers_.begin(),centers_.end());
+  }
+  template<class Predicate> bool unique(const Json& selector,Predicate matches) const {
+    int matching=0;
+    const auto test=[&](std::size_t index){return matches(descriptors_[index],selector,Json::object())&&++matching>1;};
+    if(!indexed_) {
+      for(std::size_t index=0;index<descriptors_.size();++index)if(test(index))return false;
+    } else {
+      const double center=selector.at("center").at("point")[axis_].get<double>();
+      const double tolerance=selector.at("center").at("tolerance").get<double>();
+      // Coordinate subtraction in the full predicate can round to tolerance.
+      // Expand that tolerance first, then round interval endpoints outwards;
+      // this also covers cancellation when center +/- tolerance is near zero.
+      const double outward=std::nextafter(tolerance,std::numeric_limits<double>::infinity());
+      const double low=std::nextafter(center-outward,-std::numeric_limits<double>::infinity());
+      const double high=std::nextafter(center+outward,std::numeric_limits<double>::infinity());
+      auto candidate=std::lower_bound(centers_.begin(),centers_.end(),low,
+        [](const auto& entry,double value){return entry.first<value;});
+      for(;candidate!=centers_.end()&&candidate->first<=high;++candidate)if(test(candidate->second))return false;
+    }
+    return matching==1;
+  }
+ private:
+  const Json& descriptors_;
+  std::vector<std::pair<double,std::size_t>> centers_;
+  std::size_t axis_=0;
+  bool indexed_=true;
+};
 std::vector<int> select_faces(const FeatureGeometry& source,const Json& selection,const Json& parameters,const std::string& input) {
   const auto selectors=selection.is_array()?selection:Json::array({selection});
   Json candidates=Json::array();std::vector<Json> descriptors;
@@ -3661,6 +3709,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
     }
     // A pick suggests a geometric rule only when that rule is unique here. The
     // caller must keep the rule, never the enumeration ID, for future rebuilds.
+    const SuggestionCenters face_centers(result.at("faces")),edge_centers(result.at("edges"));
     for(auto& face:result["faces"]) {
       if(!geometry.parts.empty()||face.at("area_mm2").get<double>()>1e6)continue;
       const auto center=face.at("center_mm").get<std::array<double,3>>();
@@ -3668,8 +3717,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
       Json selector={{"type","geometric"},{"feature_id",id},{"surface_kind",face.at("surface_kind")},{"expected_count",1},
         {"center",{{"point",face.at("center_mm")},{"tolerance",1e-5}}},{"area",{{"value",face.at("area_mm2")},{"tolerance",1e-5}}}};
       if(face.contains("normal"))selector["normal"]={{"vector",face.at("normal")},{"tolerance",1e-6}};
-      int matching=0;for(const auto& candidate:result.at("faces"))if(matches_face(candidate,selector,Json::object()))++matching;
-      if(matching==1)face["selector"]=selector;
+      if(face_centers.unique(selector,matches_face))face["selector"]=selector;
     }
     for (auto& edge : result["edges"]) {
       // Assembly picks identify editable source parts. A geometric rule on the
@@ -3683,9 +3731,7 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
         {"center", {{"point", edge.at("center_mm")}, {"tolerance", 1e-5}}},
         {"length", {{"value", edge.at("length_mm")}, {"tolerance", 1e-5}}}};
       if (edge.contains("direction")) selector["direction"] = {{"vector", edge.at("direction")}, {"tolerance", 1e-6}};
-      int matching = 0;
-      for (const auto& candidate : result.at("edges")) if (matches(candidate, selector, Json::object())) ++matching;
-      if (matching == 1) edge["selector"] = selector;
+      if(edge_centers.unique(selector,matches))edge["selector"] = selector;
     }
     return result;
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
