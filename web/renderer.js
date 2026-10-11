@@ -16,16 +16,16 @@
     for(const key of ['document_id','evaluation_id','feature_id'])
       if(typeof d[key]!=='string'||!d[key].length||d[key].length>256)fail('Missing evaluation identity.');
     if(!Number.isSafeInteger(d.revision)||d.revision<0)fail('Invalid revision identity.');
-    const m=d.mesh,t=d.topology,b=d.summary.bounds_mm;
+    const m=d.mesh,t=d.topology,b=d.summary.bounds_mm,partial=!!d.components&&!!d.progressive;
     if(!b||!finitePoint(b.min)||!finitePoint(b.max)||b.min.some((v,i)=>v>b.max[i])||Math.max(...b.max.map((v,i)=>v-b.min[i]))<=0)fail('Invalid model bounds.');
     if(m.linear_deflection_mm!==undefined&&!(typeof m.linear_deflection_mm==='number'&&Number.isFinite(m.linear_deflection_mm)&&m.linear_deflection_mm>=0&&m.linear_deflection_mm<=1e6))fail('Invalid mesh deflection.');
     for(const section of [m,t]) {
       if(section.schema_version!==1||section.feature_id!==d.feature_id||section.selection_lifetime!=='evaluation')fail('Mesh and topology must share the displayed feature and evaluation.');
     }
     const inside=p=>finitePoint(p)&&p.every((v,i)=>v>=b.min[i]-1e-5&&v<=b.max[i]+1e-5);
-    if(!Array.isArray(m.positions)||!m.positions.length||m.positions.length>MAX_VERTICES||!m.positions.every(inside))fail('Invalid or oversized vertex payload.');
-    if(!Array.isArray(m.triangles)||!m.triangles.length||m.triangles.length>MAX_TRIANGLES||!m.triangles.every(v=>Array.isArray(v)&&v.length===3&&v.every(i=>Number.isInteger(i)&&i>=0&&i<m.positions.length)))fail('Invalid or oversized triangle payload.');
-    if(!Array.isArray(t.faces)||!Array.isArray(t.edges)||t.faces.length+t.edges.length>MAX_ENTITIES)fail('Topology exceeds its entity limit.');
+    if(!Array.isArray(m.positions)||(!partial&&!m.positions.length)||m.positions.length>MAX_VERTICES||!m.positions.every(inside))fail('Invalid or oversized vertex payload.');
+    if(!Array.isArray(m.triangles)||(!partial&&!m.triangles.length)||m.triangles.length>MAX_TRIANGLES||!m.triangles.every(v=>Array.isArray(v)&&v.length===3&&v.every(i=>Number.isInteger(i)&&i>=0&&i<m.positions.length)))fail('Invalid or oversized triangle payload.');
+    if(!Array.isArray(t.faces)||!Array.isArray(t.edges)||t.faces.length+t.edges.length>(partial?100000:MAX_ENTITIES))fail('Topology exceeds its entity limit.');
     const faces=new Set(),edges=new Set();
     const parts=d.summary.assembly?.parts,partIds=new Set();
     if(parts!==undefined) {
@@ -55,8 +55,8 @@
         if(parts&&!partIds.has(entity.part_id))fail('Assembly topology must identify its owning part.');
         ids.add(entity.id);
       }
-    if(!Array.isArray(m.triangle_faces)||m.triangle_faces.length!==m.triangles.length||!m.triangle_faces.every(id=>faces.has(id))||new Set(m.triangle_faces).size!==faces.size)fail('Triangle mapping does not cover the displayed faces.');
-    if(!Array.isArray(m.edges)||m.edges.length!==edges.size)fail('Polyline mapping does not cover the displayed edges.');
+    if(!Array.isArray(m.triangle_faces)||m.triangle_faces.length!==m.triangles.length||!m.triangle_faces.every(id=>faces.has(id))||(!partial&&new Set(m.triangle_faces).size!==faces.size))fail('Triangle mapping does not cover the displayed faces.');
+    if(!Array.isArray(m.edges)||(!partial&&m.edges.length!==edges.size))fail('Polyline mapping does not cover the displayed edges.');
     let count=0;const seen=new Set(),edgeOwners=new Map(t.edges.map(edge=>[edge.id,edge.part_id]));
     for(const edge of m.edges) {
       if(!edge||!edges.has(edge.id)||seen.has(edge.id)||!Array.isArray(edge.points))fail('Invalid edge mapping.');
@@ -994,7 +994,21 @@
       if(same(this.hover,value))return;
       this.hover=value;this._schedule();this.callbacks.onHover(value?{...value}:null);
     }
-    load(evaluation,{preserveCamera=true,hiddenPartIds=[],presentation:settings=defaultPresentation(),appearance:style=defaultAppearance()}={}) {return this._checked(()=>{const full=evaluation?.read_only===true?prepareArtifact(evaluation):prepare(evaluation),value=presentation(settings,full),color=appearance(style,full),model=presentedModel(visibleModel(full,hiddenPartIds),value);this._clearPointMeasurement();this.fullModel=full;this.draft=!!evaluation.draft;this.annotations=[];this.callbacks.onAnnotations([]);this.sectionResult=null;this.presentation=value;this.appearance=color;this.hiddenPartIds=[...hiddenPartIds];this.model=model;this.selection=null;this._setHover(null);this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);this._upload();this._schedule();});}
+    load(evaluation,{preserveCamera=true,hiddenPartIds=[],presentation:settings=defaultPresentation(),appearance:style=defaultAppearance()}={}) {
+      if(this.destroyed)fail('The CAD viewport has been disposed.');
+      const previous={};for(const key of ['fullModel','model','resources','draft','annotations','sectionResult','presentation','appearance','hiddenPartIds','selection','camera','ready'])previous[key]=this[key];
+      try {
+        const full=evaluation?.read_only===true?prepareArtifact(evaluation):prepare(evaluation),value=presentation(settings,full),color=appearance(style,full),model=presentedModel(visibleModel(full,hiddenPartIds),value);
+        const same=!!evaluation.progressive&&previous.fullModel?.identity?.evaluation_id===full.identity.evaluation_id;
+        // Stage new GPU buffers before deleting the last successful frame. A bad
+        // component or GPU allocation failure cannot blank already visible geometry.
+        if(this.resources)this.resources={...this.resources,faces:null,edges:null,capFaces:null,capEdges:null,colors:null,materials:null,uvs:null,shadow:null,textures:new Map(this.resources.textures),ranges:new Map(),groups:[]};
+        this.fullModel=full;this.model=model;this.draft=!!evaluation.draft;this.presentation=value;this.appearance=color;this.hiddenPartIds=[...hiddenPartIds];this.sectionResult=null;
+        if(!same){this.annotations=[];this.selection=null;}this.ready=false;if(!preserveCamera)this.camera=cloneCamera(DEFAULT_CAMERA);
+        this._upload();const staged=this.resources;this.resources=previous.resources;this._deleteBuffers();this.resources=staged;
+        if(!same){this._clearPointMeasurement();this.callbacks.onAnnotations([]);}this._setHover(null);this._schedule();
+      }catch(error){if(this.resources!==previous.resources)this._deleteBuffers();Object.assign(this,previous);this._schedule();this.callbacks.onError(error);throw error;}
+    }
     setPresentation(value){return this._checked(()=>{
       if(!this.fullModel)return;
       const settings=presentation(value,this.fullModel);if(JSON.stringify(settings)===JSON.stringify(this.presentation))return;
@@ -1095,9 +1109,10 @@
       }else {if(this.selection===null)return;this.selection=null;}
       this._schedule();
     });}
-    capture(){return this._checked(()=>{
+    capture({paintOverlay=null}={}){return this._checked(()=>{
+      if(paintOverlay!==null&&typeof paintOverlay!=='function')fail('Invalid viewport capture overlay.');
       if(!this.gl||this.lost||!this.resources)fail('WebGL is unavailable for capture.');this._draw();
-      const pins=this._annotationLayout(),measure=this._pointMeasurementLayout();if(!pins.length&&!measure&&!this.artifactOverlayLayout?.texts.length&&!this.artifactOverlayLayout?.fills.length)return this.canvas.toDataURL('image/png');
+      const pins=this._annotationLayout(),measure=this._pointMeasurementLayout();if(!paintOverlay&&!pins.length&&!measure&&!this.artifactOverlayLayout?.texts.length&&!this.artifactOverlayLayout?.fills.length)return this.canvas.toDataURL('image/png');
       const image=this.canvas.ownerDocument?.createElement('canvas');if(!image)fail('Image composition is unavailable for review pins.');
       image.width=this.canvas.width;image.height=this.canvas.height;const ctx=image.getContext('2d');if(!ctx)fail('Image composition is unavailable for review pins.');
       ctx.drawImage(this.canvas,0,0);const size=this._size(),sx=image.width/size.width,sy=image.height/size.height;ctx.scale(sx,sy);
@@ -1113,10 +1128,11 @@
         for(const slot of ['a','b'])if(measure[slot]){const [x,y]=measure[slot];ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.fill();ctx.fillStyle='#162431';ctx.textAlign='left';ctx.fillText(slot.toUpperCase(),x+9,y-9);ctx.fillStyle='#007bff';}
         if(measure.a&&measure.b){const x=(measure.a[0]+measure.b[0])/2,y=(measure.a[1]+measure.b[1])/2-15,text=measure.distance_mm.toLocaleString(undefined,{maximumSignificantDigits:8})+' mm',width=ctx.measureText(text).width+16;ctx.fillStyle='#162431';ctx.fillRect(x-width/2,y-11,width,22);ctx.fillStyle='#fff';ctx.textAlign='center';ctx.fillText(text,x,y);}
       }
+      if(paintOverlay)paintOverlay(ctx,size.width,size.height);
       return image.toDataURL('image/png');
     });}
     destroy(){if(this.destroyed)return;this.destroyed=true;this.ready=false;this._clearPointMeasurement();if(this.pending!==null)cancelAnimationFrame(this.pending);this.pending=null;if(this.hoverPending!==null)cancelAnimationFrame(this.hoverPending);this.hoverPending=null;this.hover=null;this.hoverPoint=null;this.observer?.disconnect();this.overlayCanvas?.remove();this.overlayCanvas=null;for(const remove of this.listeners)remove();this.listeners=[];this.drag=null;this._deleteBuffers();if(this.gl&&this.resources){for(const texture of this.resources.textures.values())if(texture.texture)this.gl.deleteTexture(texture.texture);this.gl.deleteProgram(this.resources.program);if(this.resources.backdrop)this.gl.deleteProgram(this.resources.backdrop.program);}this.resources=null;this.model=null;this.fullModel=null;this.sectionResult=null;this.annotations=[];this.callbacks.onAnnotations([]);this.selection=null;this.gl=null;}
   }
-  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,pickPoint,pickMeasurementPoint,pointDistance,pointMeasurementLayout,nearestSegment,gpuData,presentation,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme,stageSettings,material,renderSettings,RENDER_MODES,surfaceStyle,materialData,studioLight,studioGeometry,artifactOverlay,paintArtifactOverlay});
+  CadRenderer.math=Object.freeze({validate,validateArtifact,prepareArtifact,camera,basis,project,screenRay,prepare,visibleModel,trace,pick,pickPoint,pickMeasurementPoint,pointDistance,pointMeasurementLayout,nearestSegment,gpuData,presentation,presentationOffsets,presentedModel,defaultPresentation,clipSegment,depthExtent,sectionGeometry,validateSection,sectionModel,appearance,defaultAppearance,appearanceData,annotations,annotationLayout,annotationLabelBounds,STANDARD_VIEWS,viewFromDirection,lerpCamera,easeOut,zoomAbout,fitCamera,entityBounds,defaultTheme,darkTheme,stageSettings,material,renderSettings,RENDER_MODES,surfaceStyle,materialData,studioLight,studioGeometry,artifactOverlay,paintArtifactOverlay});
   globalThis.CadRenderer=CadRenderer;
 })();

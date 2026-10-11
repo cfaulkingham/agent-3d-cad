@@ -848,12 +848,17 @@ The app uses `cad_viewer` with these closed actions:
   chunks before parsing; `next_offset: null` means complete. Every chunk checks
   displayed evaluation and HEAD. A changed view/revision fails explicitly.
 - `context`: `view_id`, `evaluation_id`, `selection` (a complete evaluated pick
-  or null), optional `camera`, `prompt`, `hidden_part_ids`, `presentation`, `appearance` and
-  `render`. Omitted visual settings retain the view's current values. Camera has finite `yaw`, `pitch`,
+  or null), optional `camera`, `prompt`, `hidden_part_ids`, `presentation`, `appearance`,
+  `render`, `markup` and `viewport`. Omitted visual settings retain the view's current values. Camera has finite `yaw`, `pitch`,
   `zoom`, and two-element `pan`; angles are radians, pan is in viewport fractions.
   Prompt is bounded to 8,192 UTF-8 bytes. Selection resolution and a final locked
   HEAD/evaluation recheck precede publication. Null clears selection. Omitted
   camera/prompt fields retain prior values only within the same evaluation.
+  `markup` accepts a bounded source/frame-qualified scene or null; `viewport`
+  contains two finite CSS dimensions from 1 to 10,000. Changed scenes must match
+  the authoritative source and frame under the publication locks or fail with
+  `stale_markup`. Unchanged historical scenes remain retired rather than being
+  rebound. See [MARKUP.md](MARKUP.md) for the closed scene schema and limits.
 - `capture`: app-only submission for a pending `cad_screenshot`. Ready sync
   exposes up to four `capture_requests`, each with `capture_id`, qualified
   `source` and `max_bytes`. Submit the current `view_id`, `evaluation_id`,
@@ -932,7 +937,9 @@ the evaluation-qualified selection context.
 
 `cad_context` returns view/document identity, displayed or selected revision and
 evaluation, current `head_revision`, `stale`, `selection`, `hidden_part_ids` and
-`presentation`, `appearance` and `render`. Artifact views also expose
+`presentation`, `appearance`, `render` and `markup`. Markup reports `current`,
+`retired` or `empty` with its original scene qualification; it never supplies a
+topology reference. Artifact views also expose
 `artifact_pose`. Hidden IDs and visual settings describe the current display even if a saved pick is
 stale. Validated geometry
 and a selector, when available, appear in `resolved_selection`. Saved camera,
@@ -962,9 +969,13 @@ view ID returned by `cad_open` and resolve a current native selection before
 editing. Stale or draft references cannot become guessed targets. Selection
 changes use
 `ui/update-model-context` when supported; that optional acknowledgment does not
-block native persistence or revision polling. The viewer does not post
-`ui/message` requests. Legacy native `prompt` fields remain supported; no tool
-or document contract changed. Parameter controls still use the shared validated
+block native persistence or revision polling. A separate **Send image to chat**
+control is available only when the host advertises image messages. A user click
+saves the captured frame's qualified context, rechecks it and sends that context
+with the composed PNG using `ui/message`. Source/frame changes reject delivery;
+uncertain acknowledgments are never retried. Ordinary selection or drawing
+does not send a chat message. Legacy native `prompt` fields remain supported.
+Parameter controls still use the shared validated
 `cad_apply` path; selection alone does not mutate geometry.
 
 The bridge accepts messages only from its parent window, pins the responding
@@ -1265,3 +1276,23 @@ same workspace read the exact displayed picks with existing `cad_context` and
 
 Curve sampling uses `cad_query kind:"curve"` with optional `curve:{stations,edge}`;
 see [PARITY_CURVES.md](PARITY_CURVES.md) for arc-length, continuity and selector contracts.
+
+## Progressive component display
+
+Committed native live clients may request `cad_viewer` sync with
+`progressive: true`. A ready response with `progressive: true` identifies a
+geometry-free `component_manifest` evaluation, transferred through the existing
+`mesh` chunk transport. Its unique local source meshes are requested separately
+with `cad_viewer` action `component`, `geometry_id`, integer `level` (0–2), and
+client `request_id`; optional `offset` continues a ready result and `cancel: true`
+cancels that native request. `component_state` reports loading/ready/error/cancelled.
+Every ready chunk is source-checked before delivery.
+
+The corresponding shared-Service `cad_query` kinds are `component_manifest`
+and `component_mesh`. The latter requires the manifest's `evaluation_id`, source
+`geometry_id`, and `level`, and preserves that evaluation rather than allocating
+new selection IDs. Manifest occurrence maps are exact transform-history maps,
+not a claim of stable topology naming. Current HEAD/model/build/source topology
+must still match. Exact geometry and saved documents remain unchanged.
+See [PROGRESSIVE_VIEWER.md](PROGRESSIVE_VIEWER.md) for closed-contract data,
+detail selection, limits, memory accounting, cancellation and supported scope.

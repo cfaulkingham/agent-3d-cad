@@ -7,7 +7,7 @@ It does not define the stable 1.0 publication or installation experience.
 
 The install tree is a relocatable native application: `bin/agent-3d-cad`
 (`.exe` on Windows), its native runtime libraries, and
-`share/agent-3d-cad/{occt,examples,notices,provenance.json}`. The core bundle includes the embedded MCP App and offline HTML viewer. The
+`share/agent-3d-cad/{occt,examples,skills,notices,provenance.json}`. The core bundle includes the embedded MCP App and offline HTML viewer. The
 desktop archive adds a Tauri application window under `desktop/`. Creating or editing a model
 requires no Python, Rust, Node, CMake, compiler, or sibling checkout.
 
@@ -20,6 +20,19 @@ resource or frame domains. `cad_open` associates its result with this resource;
 `cad_show` updates the existing view. Rendering the interactive app requires an
 MCP Apps host. CLI clients can use the standalone Tauri window; both adapters
 share the same native service, workspace, view IDs and revision-qualified picks.
+
+The native bundle includes five product skills: `native-cad`, `cad-manufacturing`,
+`cad-sendcutsend`, `cad-source-parts` and `cad-print-handoff`, with their local
+references and six-orientation data. The Agent Plugins packager copies this tree
+to its discoverable `skills/` directory and adds the `setup` skill. Claude MCPB
+archives retain the same product guides under `share/agent-3d-cad/skills`; this
+packaging does not claim automatic Claude skill discovery or installation of
+optional slicers/printer apps. Manufacturing skills call the existing native
+tools and use current supplier guidance; ordinary CAD has no new runtime.
+`tests/package_documentation_test.py` checks every packaged skill's discovery
+fields, local references and resources; passing a source path also verifies the
+original skill bytes. `tests/manufacturing_skills_test.py` accepts an installed
+skills directory to execute its six frames through the real native service.
 
 ## Building an archive
 

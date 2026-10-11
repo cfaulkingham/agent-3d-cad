@@ -121,6 +121,7 @@
       if (!openKey) return;
       const entry = popovers[openKey], target = event.target;
       if(activeTool==='measurement-panel'&&target===$('viewport'))return;
+      if(activeTool==='markup-panel'&&(target===$('markup-overlay')||target===$('viewport')))return;
       if (entry.el.contains(target) || (openKey === 'tool' ? dock.contains(target) : entry.trigger.contains(target))) return;
       close(false);
     }, true);

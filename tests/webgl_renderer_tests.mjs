@@ -394,6 +394,17 @@ test('stale references and malformed loads cannot replace a valid model',()=>{
   const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);assert.throws(()=>renderer.setSelection({...base,evaluation_id:'old',kind:'face',entity_id:'face-1'}));
   assert.throws(()=>renderer.load({}));assert.equal(renderer.model.identity.evaluation_id,'evaluation-a');renderer.destroy();
 });
+test('GPU allocation failure retains prior buffers, source model and capture',()=>{
+  const {canvas,gl}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);flush();const model=renderer.model,buffers=renderer.resources;
+  gl.getError=()=>1285;assert.throws(()=>renderer.load({...base,evaluation_id:'replacement'}),/graphics device/);
+  assert.equal(renderer.model,model);assert.equal(renderer.resources,buffers);assert.equal(renderer.ready,true);gl.getError=()=>0;
+  assert.match(renderer.capture(),/^data:image\/png/);renderer.destroy();
+});
+test('progressive payload refresh preserves evaluation selection and camera',()=>{
+  const {canvas}=mockCanvas(),renderer=new Renderer(canvas);renderer.load(base);renderer.setCamera({yaw:.2,pitch:.4,zoom:2,pan:[.1,.2]});
+  const reference={document_id:base.document_id,revision:base.revision,evaluation_id:base.evaluation_id,feature_id:base.feature_id,kind:'face',entity_id:'face-1'};renderer.setSelection(reference);
+  const camera=renderer.getCamera();renderer.load({...base,components:{},progressive:{generation:2}});assert.deepEqual(JSON.parse(JSON.stringify(renderer.selection)),reference);assert.deepEqual(JSON.parse(JSON.stringify(renderer.getCamera())),JSON.parse(JSON.stringify(camera)));renderer.destroy();
+});
 test('context loss reports recovery and restores current model buffers',()=>{
   const {canvas,stats}=mockCanvas(),errors=[],ready=[],renderer=new Renderer(canvas,{onError:e=>errors.push(e),onReady:value=>ready.push(value)});renderer.load(base);flush();assert.equal(ready.length,1);
   let prevented=false;stats.listeners.get('webglcontextlost')({preventDefault:()=>{prevented=true;}});assert.equal(prevented,true);assert.match(errors[0].message,/context was lost/);assert.throws(()=>renderer.capture());

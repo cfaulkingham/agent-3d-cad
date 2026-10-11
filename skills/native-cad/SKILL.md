@@ -28,6 +28,14 @@ revision-qualified selection; check `stale`, `draft` and `read_only`. Do not
 require a copied request, entity number or screenshot when current context is
 available. Honor the user's request; selecting geometry alone is not an edit.
 
+When the user points to drawn marks, read `cad_context.markup` and its recorded
+source/frame. Current marks are screen-space review evidence, never face/edge
+references; retired marks belong to their earlier view. Use `cad_screenshot`
+when the marked image helps resolve intent. See [viewport markup](MARKUP.md).
+Saved native views load component geometry progressively and adapt display
+detail to the camera; missing/failed detail remains explicit and exact modeling
+is independent of display tessellation. See [progressive viewing](PROGRESSIVE_VIEWER.md).
+
 When the task edits an external STEP, start with `cad_inspect_step` (use `cad_job`
 for large files). It reports the raw source SHA-256, every solid's bounds, validity,
 meshability and native diagnostic entities. Invalid source geometry is not repaired
@@ -252,6 +260,16 @@ that ID. Omitted bindings retain its mappings. Local edits cause
 with `discard_local_changes: true`. `detach_component` keeps local editable intent;
 `remove_component` requires repairing any remaining consumers in the same batch.
 See packaged COMPONENTS.md for bounds, status and update semantics.
+
+For process review/redesign and actual six-direction FDM orientation comparison,
+read [cad-manufacturing](../cad-manufacturing/SKILL.md). Its additive references
+also cover SLA/SLS/MJF/metal process guidance without inventing native checks.
+For SendCutSend material-specific preflight read
+[cad-sendcutsend](../cad-sendcutsend/SKILL.md). For purchased STEP discovery and
+verified provenance read [cad-source-parts](../cad-source-parts/SKILL.md).
+For slicing and Bambu Studio/Connect handoff read
+[cad-print-handoff](../cad-print-handoff/SKILL.md). These workflows use the same
+native tools and optional host applications; none adds a CAD runtime dependency.
 
 Use `cad_manufacture` for a revision-qualified handoff directory containing editable
 source, unique leaf STEP/STL/drawings, saved assembly placement, BOM and relative

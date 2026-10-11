@@ -414,15 +414,29 @@ Json model_definitions() {
     {"reference_policy",{{"const","geometric_replay"}}},{"history_lifetime",{{"const","evaluation"}}},
     {"history",{{"type","array"},{"items",history_entry},{"maxItems",10000}}},{"history_truncated",{{"type","boolean"}}}
   }, {"feature_id","feature_type","dependencies","reference_policy","history_lifetime","history","history_truncated"});
+  // Inspection emits resolved numeric suggestions, never authored parameter
+  // expressions. Keep the editable selector vocabulary only in input schemas.
+  const auto inspection_selector=[&](Json value) {
+    const auto literal=[&](auto&& self,Json& node)->void {
+      if(node==scalar_ref){node=numeric;return;}
+      if(node==vector_ref){node={{"type","array"},{"items",numeric},{"minItems",3},{"maxItems",3}};return;}
+      if(node.is_structured())for(auto& child:node)self(self,child);
+    };literal(literal,value);
+    value["properties"]["expected_count"]={{"const",1}};
+    for(const auto* key:{"radius","axis","closed","endpoints"})value["properties"].erase(key);
+    return value;
+  };
+  definitions["face_inspection_selector"]=inspection_selector(face_selector);
+  definitions["edge_inspection_selector"]=inspection_selector(selector);
   const Json face_output = object({
     {"id",face_id},{"surface_kind",{{"enum",{"plane","cylinder","cone","sphere","torus","bezier","bspline","revolution","extrusion","offset","other"}}}},
     {"area_mm2",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"normal",point_output},{"part_id",occurrence},
-    {"selector",{{"$ref","#/$defs/face_selector"}}}
+    {"selector",{{"$ref","#/$defs/face_inspection_selector"}}}
   }, {"id","surface_kind","area_mm2","center_mm","bounds_mm"});
   const Json edge_output = object({
     {"id",edge_id},{"curve_kind",{{"enum",{"line","circle","ellipse","hyperbola","parabola","bezier","bspline","offset","other"}}}},
     {"length_mm",nonnegative},{"center_mm",point_output},{"bounds_mm",bounds_output},{"direction",point_output},
-    {"degenerate",{{"type","boolean"}}},{"closed",{{"type","boolean"}}},{"endpoints_mm",{{"type","array"},{"items",point_output},{"minItems",2},{"maxItems",2}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/selector"}}},{"part_id",occurrence}
+    {"degenerate",{{"type","boolean"}}},{"closed",{{"type","boolean"}}},{"endpoints_mm",{{"type","array"},{"items",point_output},{"minItems",2},{"maxItems",2}}},{"radius_mm",nonnegative},{"axis",point_output},{"selector",{{"$ref","#/$defs/edge_inspection_selector"}}},{"part_id",occurrence}
   }, {"id","curve_kind","length_mm","center_mm","bounds_mm","degenerate"});
   const Json fraction={{"type","number"},{"minimum",0},{"maximum",1}};
   definitions["curve_query"]=object({{"stations",{{"type","array"},{"items",fraction},{"minItems",1},{"maxItems",257}}},{"edge",{{"$ref","#/$defs/selector"}}}},Json::array());

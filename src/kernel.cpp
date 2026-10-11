@@ -188,6 +188,7 @@ struct FeatureGeometry {
   Json mates = Json::array();
   Json tree = Json::array();
   Json motion;
+  Json component_maps = Json::array();
   std::map<std::string,gp_Trsf> placements;
   std::vector<std::string> face_parts, edge_parts;
   explicit FeatureGeometry(const TopoDS_Shape& value) : shape(value) {
@@ -554,7 +555,7 @@ std::optional<TopoDS_Face> periodic_rectangle(const TopoDS_Face& face) {
 // A periodic trim can defeat OCCT's 2D triangulator despite a valid B-rep.
 // Split only a private face for tessellation; retain the original face identity,
 // analytic surface and exact solid. Never repair or replace the saved geometry.
-std::vector<TopoDS_Face> tessellated_faces(const TopoDS_Face& face, const Json& context) {
+std::vector<TopoDS_Face> tessellated_faces(const TopoDS_Face& face, const Json& context, double deflection_mm=.1, double angle_rad=.5) {
   TopLoc_Location location;
   const auto ready=BRep_Tool::Triangulation(face,location);
   if(!ready.IsNull()&&ready->NbTriangles()>0)return {face};
@@ -566,7 +567,7 @@ std::vector<TopoDS_Face> tessellated_faces(const TopoDS_Face& face, const Json& 
     const auto a=bounds(face),b=bounds(divided);bool same=std::abs(before.Mass()-after.Mass())<=1e-7*std::max(1.0,std::abs(before.Mass()));
     for(const auto* end:{"min","max"})for(int k=0;k<3;++k)same=same&&std::abs(a.at(end)[k].get<double>()-b.at(end)[k].get<double>())<=1e-6;
     if(same) {
-      BRepMesh_IncrementalMesh retry(divided,.1,false,.5,false);std::vector<TopoDS_Face> fragments;
+      BRepMesh_IncrementalMesh retry(divided,deflection_mm,false,angle_rad,false);std::vector<TopoDS_Face> fragments;
       for(TopExp_Explorer it(divided,TopAbs_FACE);it.More();it.Next()) {
         const auto fragment=TopoDS::Face(it.Current());const auto mesh=BRep_Tool::Triangulation(fragment,location);
         if(mesh.IsNull()||mesh->NbTriangles()==0){fragments.clear();break;}fragments.push_back(fragment);
@@ -758,7 +759,7 @@ void check_parallel_material(const TopoDS_Shape& source,const TopoDS_Shape& resu
 }
 void topology_limit(const FeatureGeometry& feature, const QueryLimits& limits) {
   const auto requested = static_cast<std::size_t>(feature.faces.Extent()) + feature.edges.Extent();
-  const auto maximum = std::min<std::size_t>(limits.topology_entities, 10000);
+  const auto maximum = std::min<std::size_t>(limits.topology_entities, 100000);
   if (requested > maximum) throw Error("limit_exceeded", "Topology enumeration exceeds its entity limit", {{"limit", maximum}, {"requested", requested}});
 }
 template<class Operation>
@@ -1274,6 +1275,14 @@ FeatureGeometry build_assembly(const Json& feature,const Json& parameters,
   check_shape(compound);auto result=assemble_geometry(compound,std::move(plan));
   for(std::size_t p=0;p<result.parts.size();++p) {
     const auto& part=result.parts[p];const auto start=history.size();
+    Json mapping={{"id",part.id},{"geometry_id",part.input},{"transform",matrix(part.transform)},{"faces",Json::array()},{"edges",Json::array()}};
+    const auto& source=sources.at(part.input);
+    for(const auto& [entities,target,key,prefix]:std::initializer_list<std::tuple<const ShapeMap*,const ShapeMap*,const char*,const char*>>{
+      {&source.faces,&result.faces,"faces","face-"},{&source.edges,&result.edges,"edges","edge-"}})
+      for(int i=1;i<=entities->Extent();++i){const auto placed=operations[p]->ModifiedShape((*entities)(i));const auto index=target->FindIndex(placed);
+        if(!index)throw Error("kernel_failure","Placed source topology has no exact occurrence correspondence",{{"part_id",part.id}});
+        mapping[key].push_back(std::string(prefix)+std::to_string(index));}
+    result.component_maps.push_back(std::move(mapping));
     record_history(*operations[p],sources.at(part.input),part.input,result,history,history_truncated);
     for(std::size_t i=start;i<history.size();++i)history[i]["part_id"]=part.id;
   }
@@ -1359,8 +1368,10 @@ FeatureGeometry restore_feature(const Json& feature,const Json& parameters,
         throw Error("cache_miss","Cached occurrence topology differs from its source",{{"part_id",part.id}});
     }
     if(children.More())throw Error("cache_miss","Cached assembly has extra occurrences");
-    // Ownership comes from the actual deserialized children, never old indices.
-    geometry=assemble_geometry(shape,std::move(plan),"cache_miss");
+    // Rebuild only placements from cached source B-reps to retain OCCT transform
+    // correspondence. Cached enumeration indices are never source/occurrence maps.
+    Json fresh_history=Json::array();bool truncated=false;
+    geometry=build_assembly(feature,parameters,sources,fresh_history,truncated);
   }else if(entry.contains("assembly"))throw Error("cache_miss","Unexpected cached assembly marker");
   if(geometry.faces.Extent()!=entry.at("faces")||geometry.edges.Extent()!=entry.at("edges"))
     throw Error("cache_miss","Cached topology count mismatch");
@@ -3618,7 +3629,7 @@ Json BuiltModel::measure(const Json& query,const Json& evaluated_topology,const 
       for(const auto& item:evaluated_topology.at(list))if(item.at("id")==entity){if(original)throw Error("selection_ambiguous","Evaluation repeats a measurement entity");original=&item;}
       if(!original)throw Error("selection_missing","Measurement entity is absent from the evaluation",{{"entity_id",entity}});
       if(kind=="edge"&&original->value("degenerate",false))throw Error("selection_missing","Degenerate edges cannot be measured");
-      if(!current_topology)current_topology=topology(selected);
+      if(!current_topology){QueryLimits limits;limits.topology_entities=100000;current_topology=topology(selected,limits);}
       int match=0,matches=0,index=0;
       for(const auto& item:current_topology->at(list)){++index;if(measurement_descriptor_matches(*original,item)){match=index;++matches;}}
       if(matches!=1)throw Error(matches?"selection_ambiguous":"stale_selection","Cannot uniquely recover the evaluated measurement geometry",{{"entity_id",entity},{"matches",matches}});
@@ -3737,8 +3748,9 @@ Json BuiltModel::topology(const std::string& feature_id, const QueryLimits& limi
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
 }
 
-Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) const {
+Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits, double deflection_mm, double angle_rad) const {
   try {
+    if(!std::isfinite(deflection_mm)||deflection_mm<=0||deflection_mm>1000000||!std::isfinite(angle_rad)||angle_rad<=0||angle_rad>1)throw Error("invalid_argument","Invalid display tessellation tolerance");
     const auto& geometry = impl_->feature(feature_id);
     topology_limit(geometry, limits);
     const auto vertex_limit = std::min<std::size_t>(limits.mesh_vertices, 200000);
@@ -3746,15 +3758,15 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
     const auto point_limit = std::min<std::size_t>(limits.edge_points, 200000);
     // Meshing only attaches triangulations to these exact retained faces. It does
     // not enumerate a copied shape and assume the copy kept its ordering.
-    if(!geometry.faces.IsEmpty()){BRepMesh_IncrementalMesh tessellation(geometry.shape, 0.1, false, 0.5, false);
+    if(!geometry.faces.IsEmpty()){BRepTools::Clean(geometry.shape);BRepMesh_IncrementalMesh tessellation(geometry.shape, deflection_mm, false, angle_rad, false);
     if (!tessellation.IsDone()) throw Error("kernel_failure", "Tessellation failed");}
     Json result = {{"schema_version", 1}, {"units", "mm"}, {"feature_id", feature_id.empty() ? impl_->output : feature_id},
-      {"selection_lifetime", "evaluation"}, {"linear_deflection_mm", 0.1}, {"angular_deflection_rad", 0.5},
+      {"selection_lifetime", "evaluation"}, {"linear_deflection_mm", deflection_mm}, {"angular_deflection_rad", angle_rad},
       {"positions", Json::array()}, {"triangles", Json::array()}, {"triangle_faces", Json::array()}, {"edges", Json::array()}};
     for (int i = 1; i <= geometry.faces.Extent(); ++i) {
       const Json context={{"feature_id",feature_id.empty()?impl_->output:feature_id},{"face_id","face-"+std::to_string(i)},
         {"part_id",geometry.parts.empty()?Json(nullptr):Json(geometry.face_parts[i])}};
-      for(const auto& face:tessellated_faces(TopoDS::Face(geometry.faces(i)),context)) {
+      for(const auto& face:tessellated_faces(TopoDS::Face(geometry.faces(i)),context,deflection_mm,angle_rad)) {
       TopLoc_Location location;
       const auto triangulation = BRep_Tool::Triangulation(face, location);
       const auto offset = result.at("positions").size();
@@ -3776,7 +3788,7 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
       Json points = Json::array();
       if (!BRep_Tool::Degenerated(edge)) {
         BRepAdaptor_Curve curve(edge);
-        GCPnts_QuasiUniformDeflection sampling(curve, 0.1);
+        GCPnts_QuasiUniformDeflection sampling(curve, deflection_mm);
         if (!sampling.IsDone()) throw Error("kernel_failure", "Edge tessellation failed");
         if (total_points + sampling.NbPoints() > point_limit)
           throw Error("limit_exceeded", "Mesh exceeds its edge point limit", {{"limit", point_limit}});
@@ -3789,6 +3801,50 @@ Json BuiltModel::mesh(const std::string& feature_id, const QueryLimits& limits) 
     }
     return result;
   } catch (const Standard_Failure& e) { throw occt_error(e, {{"feature_id", feature_id.empty() ? impl_->output : feature_id}}); }
+}
+
+
+namespace {
+// This is a correspondence fingerprint, not a source-content hash. The service
+// separately pins exact saved model bytes and native build. OCCT serialization
+// perturbs analytic descriptors at machine precision; normalize those values at
+// 1e-9 numeric resolution (below descriptor matching tolerance), preserving order.
+double component_deflection(const Json& b,int level) {
+  const double span=std::max({number(b.at("max")[0])-number(b.at("min")[0]),number(b.at("max")[1])-number(b.at("min")[1]),number(b.at("max")[2])-number(b.at("min")[2])});
+  return std::max(.005,std::round(span*(level==0?.01:level==1?.002:.0004)*1e9)/1e9);
+}
+std::string component_topology_hash(Json topology) {
+  const auto normalize=[](auto&& self,Json& value)->void {
+    if(value.is_number_float()){const double number=value.get<double>();value=std::round(number*1e9)/1e9;if(value==0.0)value=0.0;}
+    else if(value.is_structured())for(auto& child:value)self(self,child);
+  };normalize(normalize,topology);return sha256(topology.dump());
+}
+}
+Json BuiltModel::component_manifest(const std::string& feature_id) const {
+  const auto selected=feature_id.empty()?impl_->output:feature_id;const auto& geometry=impl_->feature(selected);
+  QueryLimits limits;limits.topology_entities=100000;
+  Json result={{"topology",topology(selected,limits)},{"components",{{"schema_version",1},{"coordinate_space","source_local_mm"},{"geometries",Json::array()},{"occurrences",geometry.component_maps}}}};
+  std::set<std::string> sources;
+  if(geometry.parts.empty()) {
+    sources.insert(selected);Json occurrence={{"id",nullptr},{"geometry_id",selected},{"transform",matrix(gp_Trsf())},{"faces",Json::array()},{"edges",Json::array()}};
+    for(int i=1;i<=geometry.faces.Extent();++i)occurrence["faces"].push_back("face-"+std::to_string(i));
+    for(int i=1;i<=geometry.edges.Extent();++i)occurrence["edges"].push_back("edge-"+std::to_string(i));
+    result["components"]["occurrences"].push_back(std::move(occurrence));
+  }else for(const auto& part:geometry.parts)sources.insert(part.input);
+  for(const auto& id:sources){const auto t=topology(id);const auto b=bounds(impl_->feature(id).shape);
+    Json levels=Json::array();for(int level=0;level<3;++level)levels.push_back({{"level",level},{"linear_deflection_mm",component_deflection(b,level)},{"angular_deflection_rad",level==0?.8:level==1?.4:.2}});
+    result["components"]["geometries"].push_back({{"id",id},{"bounds_mm",b},{"topology_sha256",component_topology_hash(t)},{"levels",levels}});
+  }
+  return result;
+}
+Json BuiltModel::component_mesh(const std::string& feature_id,const std::string& geometry_id,int level) const {
+  if(level<0||level>2)throw Error("invalid_argument","Component detail level must be 0, 1 or 2");
+  const auto& output=impl_->feature(feature_id);const auto selected=feature_id.empty()?impl_->output:feature_id;
+  bool found=output.parts.empty()&&geometry_id==selected;for(const auto& part:output.parts)found=found||part.input==geometry_id;
+  if(!found)throw Error("invalid_argument","Component source is not a leaf of the displayed feature");
+  const auto b=bounds(impl_->feature(geometry_id).shape);
+  const auto t=topology(geometry_id);const double deflection=component_deflection(b,level);
+  return {{"geometry_id",geometry_id},{"level",level},{"topology_sha256",component_topology_hash(t)},{"mesh",mesh(geometry_id,{},deflection,level==0?.8:level==1?.4:.2)}};
 }
 
 

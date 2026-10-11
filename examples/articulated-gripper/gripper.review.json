@@ -1,0 +1,29 @@
+{
+  "document_id": "articulated_gripper",
+  "revision": 1,
+  "feature_id": "proximal",
+  "options": {
+    "profile": {
+      "process": "fdm",
+      "orientation": {
+        "build_direction": [
+          0,
+          0,
+          1
+        ],
+        "x_direction": [
+          1,
+          0,
+          0
+        ]
+      },
+      "build_envelope_mm": [
+        180,
+        180,
+        180
+      ],
+      "minimum_wall_mm": 1.5,
+      "overhang_angle_deg": 45
+    }
+  }
+}

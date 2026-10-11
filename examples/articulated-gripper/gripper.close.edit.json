@@ -1,0 +1,16 @@
+{
+  "document_id": "articulated_gripper",
+  "expected_revision": 1,
+  "operations": [
+    {
+      "op": "apply_pose",
+      "assembly_id": "finger",
+      "pose_id": "grasp"
+    },
+    {
+      "op": "apply_pose",
+      "assembly_id": "right_finger",
+      "pose_id": "grasp"
+    }
+  ]
+}

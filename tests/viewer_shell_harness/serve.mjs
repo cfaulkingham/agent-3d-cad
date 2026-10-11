@@ -3,6 +3,7 @@
 //   node tests/viewer_shell_harness/serve.mjs build/agent-3d-cad [port]
 // Then open the printed URL. Query: ?doc=live_plate&theme=auto|light|dark&width=900&height=620
 // Read-only artifact mode: ?review_path=<review.json>&review_sha=<sha256> (create one with cad_artifact via POST /rpc).
+// AGENTCAD_HARNESS_VIEWER=embedded reads the compiled app from the native MCP resource.
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -19,7 +20,7 @@ const seeds = ['live-plate', 'bracket', 'assembly', 'articulated-arm', 'nested-a
 
 const child = spawn(exe, ['serve', '--workspace', workspace], { stdio: ['pipe', 'pipe', 'pipe'] });
 const waiting = new Map();
-let next = 1, stderr = '';
+let next = 1, stderr = '', embeddedViewer = null;
 child.stderr.on('data', value => { stderr += value; });
 createInterface({ input: child.stdout }).on('line', line => {
   try {
@@ -37,7 +38,7 @@ const rpc = (method, params = {}) => new Promise((resolveRpc, reject) => {
 // Same substitution as cmake/EmbedViewerApp.cmake: one pass, data not directives.
 function assembledViewer() {
   let html = readFileSync(join(root, 'web/viewer.html'), 'utf8').replace(/\r\n/g, '\n');
-  for (const [token, file] of [['STYLES', 'styles.css'], ['BRIDGE', 'bridge.js'], ['RENDERER', 'renderer.js'], ['STATE', 'state.js'], ['SHELL', 'shell.js'], ['APP', 'app.js']]) {
+  for (const [token, file] of [['STYLES', 'styles.css'], ['BRIDGE', 'bridge.js'], ['RENDERER', 'renderer.js'], ['PROGRESSIVE', 'progressive.js'], ['MARKUP', 'markup.js'], ['STATE', 'state.js'], ['SHELL', 'shell.js'], ['APP', 'app.js']]) {
     const content = readFileSync(join(root, 'web', file), 'utf8').replace(/\r\n/g, '\n');
     html = html.replace(`@VIEWER_${token}@`, () => content);
   }
@@ -48,7 +49,7 @@ const server = http.createServer((request, response) => {
   const url = new URL(request.url, 'http://127.0.0.1');
   const send = (status, type, body) => { response.writeHead(status, { 'content-type': type, 'cache-control': 'no-store' }); response.end(body); };
   if (request.method === 'GET' && url.pathname === '/') return send(200, 'text/html; charset=utf-8', readFileSync(new URL('./host.html', import.meta.url)));
-  if (request.method === 'GET' && url.pathname === '/viewer') return send(200, 'text/html; charset=utf-8', assembledViewer());
+  if (request.method === 'GET' && url.pathname === '/viewer') return send(200, 'text/html; charset=utf-8', embeddedViewer ?? assembledViewer());
   if (request.method === 'GET' && url.pathname === '/docs') return send(200, 'application/json', JSON.stringify(seeds.map(name => JSON.parse(readFileSync(join(root, 'examples', `${name}.create.json`), 'utf8')).document_id)));
   if (request.method === 'POST' && url.pathname === '/rpc') {
     let body = '';
@@ -71,6 +72,11 @@ process.on('exit', cleanup);
 
 await rpc('initialize', { protocolVersion: '2025-11-25', capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: ['text/html;profile=mcp-app'] } } }, clientInfo: { name: 'shell-harness', version: '1' } });
 child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+if (process.env.AGENTCAD_HARNESS_VIEWER === 'embedded') {
+  const resource = await rpc('resources/read', { uri: 'ui://agent-3d-cad/viewer.html' });
+  embeddedViewer = resource.contents?.[0]?.text;
+  if (typeof embeddedViewer !== 'string' || !embeddedViewer.includes('CadLiveState')) throw Error('Native viewer resource is missing');
+}
 for (const name of seeds) {
   const create = JSON.parse(readFileSync(join(root, 'examples', `${name}.create.json`), 'utf8'));
   await rpc('tools/call', { name: 'cad_create', arguments: create });

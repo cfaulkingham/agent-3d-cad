@@ -8,7 +8,7 @@ import { createInterface } from 'node:readline';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../', import.meta.url));
-for (const file of ['bridge.js', 'state.js', 'renderer.js']) vm.runInThisContext(readFileSync(`${root}/web/${file}`, 'utf8'), { filename: file });
+for (const file of ['bridge.js', 'renderer.js', 'markup.js', 'state.js']) vm.runInThisContext(readFileSync(`${root}/web/${file}`, 'utf8'), { filename: file });
 const workspace = mkdtempSync(join(tmpdir(), 'cad-live-flow-'));
 const exe = resolve(process.argv[2]);
 const child = spawn(exe, ['serve', '--workspace', workspace], { stdio: ['pipe', 'pipe', 'pipe'] });

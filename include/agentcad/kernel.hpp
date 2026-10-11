@@ -42,7 +42,10 @@ public:
   Json summary(const std::string& feature_id = "") const;
   // IDs are local to this evaluation and feature. They are never design references.
   Json topology(const std::string& feature_id = "", const QueryLimits& limits = {}) const;
-  Json mesh(const std::string& feature_id = "", const QueryLimits& limits = {}) const;
+  Json mesh(const std::string& feature_id = "", const QueryLimits& limits = {}, double deflection_mm = 0.1, double angle_rad = 0.5) const;
+  // Geometry-free scene description and deduplicated, independently tessellated sources.
+  Json component_manifest(const std::string& feature_id = "") const;
+  Json component_mesh(const std::string& feature_id, const std::string& geometry_id, int level) const;
   // Separate, welded, closed meshes for native 3MF export.
   Json print_meshes(const std::string& feature_id = "") const;
   // Exact and explicitly sampled process checks. Reports never certify production.

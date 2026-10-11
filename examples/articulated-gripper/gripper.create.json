@@ -1,0 +1,3186 @@
+{
+  "document_id": "articulated_gripper",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "proximal_length": 48,
+      "distal_length": 32,
+      "base_thickness": 8,
+      "curl_angle": 0
+    },
+    "features": [
+      {
+        "id": "base_blank",
+        "type": "box",
+        "origin": [
+          -60,
+          -42,
+          0
+        ],
+        "size": [
+          120,
+          72,
+          {
+            "parameter": "base_thickness"
+          }
+        ]
+      },
+      {
+        "id": "base_mounting_holes_hole_0",
+        "type": "hole",
+        "input": "base_blank",
+        "origin": [
+          -50,
+          -32,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_1",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_0",
+        "origin": [
+          -50,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_2",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_1",
+        "origin": [
+          50,
+          -32,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_3",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_2",
+        "origin": [
+          50,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_4",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_3",
+        "origin": [
+          -42,
+          4,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_5",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_4",
+        "origin": [
+          -42,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_6",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_5",
+        "origin": [
+          -26,
+          4,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_7",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_6",
+        "origin": [
+          -26,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_8",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_7",
+        "origin": [
+          26,
+          4,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_9",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_8",
+        "origin": [
+          26,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes_hole_10",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_9",
+        "origin": [
+          42,
+          4,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_mounting_holes",
+        "type": "hole",
+        "input": "base_mounting_holes_hole_10",
+        "origin": [
+          42,
+          20,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_plate_hole_0",
+        "type": "hole",
+        "input": "base_mounting_holes",
+        "origin": [
+          -34,
+          12,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "base_plate",
+        "type": "hole",
+        "input": "base_plate_hole_0",
+        "origin": [
+          34,
+          12,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.7,
+        "depth": {
+          "parameter": "base_thickness"
+        }
+      },
+      {
+        "id": "mount_blank",
+        "type": "box",
+        "origin": [
+          -13,
+          -13,
+          0
+        ],
+        "size": [
+          26,
+          26,
+          6
+        ]
+      },
+      {
+        "id": "finger_mount_hole_0",
+        "type": "hole",
+        "input": "mount_blank",
+        "origin": [
+          -8,
+          -8,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": 6
+      },
+      {
+        "id": "finger_mount_hole_1",
+        "type": "hole",
+        "input": "finger_mount_hole_0",
+        "origin": [
+          -8,
+          8,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": 6
+      },
+      {
+        "id": "finger_mount_hole_2",
+        "type": "hole",
+        "input": "finger_mount_hole_1",
+        "origin": [
+          8,
+          -8,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": 6
+      },
+      {
+        "id": "finger_mount",
+        "type": "hole",
+        "input": "finger_mount_hole_2",
+        "origin": [
+          8,
+          8,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 1.7,
+        "depth": 6
+      },
+      {
+        "id": "mount",
+        "type": "hole",
+        "input": "finger_mount",
+        "origin": [
+          0,
+          0,
+          0
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.7,
+        "depth": 6
+      },
+      {
+        "id": "proximal_web",
+        "type": "box",
+        "origin": [
+          -7,
+          0,
+          8
+        ],
+        "size": [
+          14,
+          {
+            "parameter": "proximal_length"
+          },
+          8
+        ]
+      },
+      {
+        "id": "proximal_heel",
+        "type": "cylinder",
+        "radius": 7,
+        "height": 8,
+        "origin": [
+          0,
+          0,
+          8
+        ]
+      },
+      {
+        "id": "proximal_tip",
+        "type": "cylinder",
+        "radius": 7,
+        "height": 8,
+        "origin": [
+          0,
+          {
+            "parameter": "proximal_length"
+          },
+          8
+        ]
+      },
+      {
+        "id": "proximal_outline_a",
+        "type": "fuse",
+        "left": "proximal_web",
+        "right": "proximal_heel"
+      },
+      {
+        "id": "proximal_outline",
+        "type": "fuse",
+        "left": "proximal_outline_a",
+        "right": "proximal_tip"
+      },
+      {
+        "id": "proximal_bores_hole_0",
+        "type": "hole",
+        "input": "proximal_outline",
+        "origin": [
+          0,
+          0,
+          8
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 3.5,
+        "depth": 8
+      },
+      {
+        "id": "proximal_bores",
+        "type": "hole",
+        "input": "proximal_bores_hole_0",
+        "origin": [
+          0,
+          {
+            "parameter": "proximal_length"
+          },
+          8
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 3.5,
+        "depth": 8
+      },
+      {
+        "id": "proximal_pocket",
+        "type": "box",
+        "origin": [
+          -3,
+          10,
+          10
+        ],
+        "size": [
+          6,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "proximal_length"
+                },
+                20
+              ],
+              "unit": "mm"
+            }
+          },
+          6
+        ]
+      },
+      {
+        "id": "proximal",
+        "type": "cut",
+        "left": "proximal_bores",
+        "right": "proximal_pocket"
+      },
+      {
+        "id": "distal_web",
+        "type": "box",
+        "origin": [
+          -6,
+          0,
+          17
+        ],
+        "size": [
+          12,
+          {
+            "parameter": "distal_length"
+          },
+          6
+        ]
+      },
+      {
+        "id": "distal_heel",
+        "type": "cylinder",
+        "radius": 6,
+        "height": 6,
+        "origin": [
+          0,
+          0,
+          17
+        ]
+      },
+      {
+        "id": "distal_tip",
+        "type": "cylinder",
+        "radius": 6,
+        "height": 6,
+        "origin": [
+          0,
+          {
+            "parameter": "distal_length"
+          },
+          17
+        ]
+      },
+      {
+        "id": "distal_outline_a",
+        "type": "fuse",
+        "left": "distal_web",
+        "right": "distal_heel"
+      },
+      {
+        "id": "distal_outline",
+        "type": "fuse",
+        "left": "distal_outline_a",
+        "right": "distal_tip"
+      },
+      {
+        "id": "distal_bores_hole_0",
+        "type": "hole",
+        "input": "distal_outline",
+        "origin": [
+          0,
+          0,
+          17
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 3.5,
+        "depth": 6
+      },
+      {
+        "id": "distal_bores",
+        "type": "hole",
+        "input": "distal_bores_hole_0",
+        "origin": [
+          0,
+          {
+            "parameter": "distal_length"
+          },
+          17
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 3.5,
+        "depth": 6
+      },
+      {
+        "id": "distal_pocket",
+        "type": "box",
+        "origin": [
+          -3,
+          10,
+          19
+        ],
+        "size": [
+          6,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                20
+              ],
+              "unit": "mm"
+            }
+          },
+          4
+        ]
+      },
+      {
+        "id": "distal",
+        "type": "cut",
+        "left": "distal_bores",
+        "right": "distal_pocket"
+      },
+      {
+        "id": "grip_pad_bridge",
+        "type": "box",
+        "origin": [
+          -7.5,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                2
+              ],
+              "unit": "mm"
+            }
+          },
+          23
+        ],
+        "size": [
+          15,
+          17,
+          4
+        ]
+      },
+      {
+        "id": "pad_skirt_left",
+        "type": "box",
+        "origin": [
+          -7.5,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                2
+              ],
+              "unit": "mm"
+            }
+          },
+          17
+        ],
+        "size": [
+          1.5,
+          17,
+          6
+        ]
+      },
+      {
+        "id": "pad_with_left_skirt",
+        "type": "fuse",
+        "left": "grip_pad_bridge",
+        "right": "pad_skirt_left"
+      },
+      {
+        "id": "pad_skirt_right",
+        "type": "box",
+        "origin": [
+          6,
+          {
+            "expression": {
+              "op": "subtract",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                2
+              ],
+              "unit": "mm"
+            }
+          },
+          17
+        ],
+        "size": [
+          1.5,
+          17,
+          6
+        ]
+      },
+      {
+        "id": "pad_with_right_skirt",
+        "type": "fuse",
+        "left": "pad_with_left_skirt",
+        "right": "pad_skirt_right"
+      },
+      {
+        "id": "pad_rib_left_0",
+        "type": "box",
+        "origin": [
+          -8.2,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                6
+              ],
+              "unit": "mm"
+            }
+          },
+          18
+        ],
+        "size": [
+          0.7,
+          9,
+          1
+        ]
+      },
+      {
+        "id": "pad_with_left_rib_0",
+        "type": "fuse",
+        "left": "pad_with_right_skirt",
+        "right": "pad_rib_left_0"
+      },
+      {
+        "id": "pad_rib_left_1",
+        "type": "box",
+        "origin": [
+          -8.2,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                6
+              ],
+              "unit": "mm"
+            }
+          },
+          21
+        ],
+        "size": [
+          0.7,
+          9,
+          1
+        ]
+      },
+      {
+        "id": "pad_with_left_rib_1",
+        "type": "fuse",
+        "left": "pad_with_left_rib_0",
+        "right": "pad_rib_left_1"
+      },
+      {
+        "id": "pad_rib_right_0",
+        "type": "box",
+        "origin": [
+          7.5,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                6
+              ],
+              "unit": "mm"
+            }
+          },
+          18
+        ],
+        "size": [
+          0.7,
+          9,
+          1
+        ]
+      },
+      {
+        "id": "pad_with_right_rib_0",
+        "type": "fuse",
+        "left": "pad_with_left_rib_1",
+        "right": "pad_rib_right_0"
+      },
+      {
+        "id": "pad_rib_right_1",
+        "type": "box",
+        "origin": [
+          7.5,
+          {
+            "expression": {
+              "op": "add",
+              "args": [
+                {
+                  "parameter": "distal_length"
+                },
+                6
+              ],
+              "unit": "mm"
+            }
+          },
+          21
+        ],
+        "size": [
+          0.7,
+          9,
+          1
+        ]
+      },
+      {
+        "id": "pad",
+        "type": "fuse",
+        "left": "pad_with_right_rib_0",
+        "right": "pad_rib_right_1"
+      },
+      {
+        "id": "pivot_seat_blank",
+        "type": "cylinder",
+        "radius": 8,
+        "height": 2,
+        "origin": [
+          0,
+          0,
+          6
+        ]
+      },
+      {
+        "id": "pivot_seat",
+        "type": "hole",
+        "input": "pivot_seat_blank",
+        "origin": [
+          0,
+          0,
+          6
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.7,
+        "depth": 2
+      },
+      {
+        "id": "pivot_cap_blank",
+        "type": "cylinder",
+        "radius": 8,
+        "height": 2,
+        "origin": [
+          0,
+          0,
+          16
+        ]
+      },
+      {
+        "id": "pivot_cap",
+        "type": "hole",
+        "input": "pivot_cap_blank",
+        "origin": [
+          0,
+          0,
+          16
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.7,
+        "depth": 2
+      },
+      {
+        "id": "proximal_bush_blank",
+        "type": "cylinder",
+        "radius": 3.4,
+        "height": 8,
+        "origin": [
+          0,
+          0,
+          8
+        ]
+      },
+      {
+        "id": "proximal_bush",
+        "type": "hole",
+        "input": "proximal_bush_blank",
+        "origin": [
+          0,
+          0,
+          8
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.6,
+        "depth": 8
+      },
+      {
+        "id": "distal_bush_blank",
+        "type": "cylinder",
+        "radius": 3.4,
+        "height": 6,
+        "origin": [
+          0,
+          0,
+          17
+        ]
+      },
+      {
+        "id": "distal_bush",
+        "type": "hole",
+        "input": "distal_bush_blank",
+        "origin": [
+          0,
+          0,
+          17
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.6,
+        "depth": 6
+      },
+      {
+        "id": "joint_washer_blank",
+        "type": "cylinder",
+        "radius": 4.5,
+        "height": 1,
+        "origin": [
+          0,
+          0,
+          16
+        ]
+      },
+      {
+        "id": "joint_washer",
+        "type": "hole",
+        "input": "joint_washer_blank",
+        "origin": [
+          0,
+          0,
+          16
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.6,
+        "depth": 1
+      },
+      {
+        "id": "lower_washer_blank",
+        "type": "cylinder",
+        "radius": 4.5,
+        "height": 1,
+        "origin": [
+          0,
+          0,
+          7
+        ]
+      },
+      {
+        "id": "lower_washer",
+        "type": "hole",
+        "input": "lower_washer_blank",
+        "origin": [
+          0,
+          0,
+          7
+        ],
+        "axis": [
+          0,
+          0,
+          1
+        ],
+        "radius": 2.6,
+        "depth": 1
+      },
+      {
+        "id": "support_post",
+        "type": "cylinder",
+        "radius": 2.5,
+        "height": 10,
+        "origin": [
+          0,
+          0,
+          6
+        ]
+      },
+      {
+        "id": "pivot_shaft",
+        "type": "cylinder",
+        "radius": 2.5,
+        "height": 21,
+        "origin": [
+          0,
+          0,
+          -1
+        ]
+      },
+      {
+        "id": "pivot_head",
+        "type": "cylinder",
+        "radius": 4.5,
+        "height": 2,
+        "origin": [
+          0,
+          0,
+          20
+        ]
+      },
+      {
+        "id": "pivot_pin",
+        "type": "fuse",
+        "left": "pivot_shaft",
+        "right": "pivot_head"
+      },
+      {
+        "id": "knuckle_shaft",
+        "type": "cylinder",
+        "radius": 2.5,
+        "height": 17,
+        "origin": [
+          0,
+          0,
+          7
+        ]
+      },
+      {
+        "id": "knuckle_head",
+        "type": "cylinder",
+        "radius": 4.5,
+        "height": 2,
+        "origin": [
+          0,
+          0,
+          24
+        ]
+      },
+      {
+        "id": "knuckle_pin",
+        "type": "fuse",
+        "left": "knuckle_shaft",
+        "right": "knuckle_head"
+      },
+      {
+        "id": "screw_shaft",
+        "type": "cylinder",
+        "radius": 1.4,
+        "height": 13,
+        "origin": [
+          0,
+          0,
+          -7
+        ]
+      },
+      {
+        "id": "screw_head",
+        "type": "cylinder",
+        "radius": 2.6,
+        "height": 3,
+        "origin": [
+          0,
+          0,
+          6
+        ]
+      },
+      {
+        "id": "mount_screw",
+        "type": "fuse",
+        "left": "screw_shaft",
+        "right": "screw_head"
+      },
+      {
+        "id": "finger",
+        "type": "assembly",
+        "parts": [
+          {
+            "id": "mount",
+            "input": "mount"
+          },
+          {
+            "id": "proximal",
+            "input": "proximal"
+          },
+          {
+            "id": "distal",
+            "input": "distal"
+          },
+          {
+            "id": "pad",
+            "input": "pad"
+          },
+          {
+            "id": "lower_seat",
+            "input": "pivot_seat"
+          },
+          {
+            "id": "upper_cap",
+            "input": "pivot_cap"
+          },
+          {
+            "id": "base_pin",
+            "input": "pivot_pin"
+          },
+          {
+            "id": "base_bush",
+            "input": "proximal_bush"
+          },
+          {
+            "id": "tip_bush",
+            "input": "proximal_bush"
+          },
+          {
+            "id": "knuckle_pin",
+            "input": "knuckle_pin"
+          },
+          {
+            "id": "knuckle_washer",
+            "input": "joint_washer"
+          },
+          {
+            "id": "knuckle_lower_washer",
+            "input": "lower_washer"
+          },
+          {
+            "id": "distal_bush",
+            "input": "distal_bush"
+          },
+          {
+            "id": "tip_distal_bush",
+            "input": "distal_bush"
+          },
+          {
+            "id": "rear_post_left",
+            "input": "support_post"
+          },
+          {
+            "id": "rear_post_right",
+            "input": "support_post"
+          },
+          {
+            "id": "mount_screw_1",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_2",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_3",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_4",
+            "input": "mount_screw"
+          }
+        ],
+        "mates": [
+          {
+            "id": "base_hinge",
+            "type": "revolute",
+            "parent": "mount",
+            "child": "proximal",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "angle_deg": {
+              "parameter": "curl_angle"
+            },
+            "angle_limits_deg": [
+              -10,
+              0
+            ]
+          },
+          {
+            "id": "knuckle",
+            "type": "revolute",
+            "parent": "proximal",
+            "child": "distal",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "angle_limits_deg": [
+              -10,
+              0
+            ]
+          },
+          {
+            "id": "pad_mount",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "pad",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "lower_seat_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "lower_seat",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "upper_cap_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "upper_cap",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "base_pin_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "base_pin",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "base_bush_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "base_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "tip_bush_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "tip_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_pin_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_pin",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_washer_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_washer",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_lower_washer_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_lower_washer",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "distal_bush_attachment",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "distal_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "tip_distal_bush_attachment",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "tip_distal_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "distal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "rear_post_left_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "rear_post_left",
+            "parent_frame": {
+              "origin": [
+                -10,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "rear_post_right_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "rear_post_right",
+            "parent_frame": {
+              "origin": [
+                10,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_1_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_1",
+            "parent_frame": {
+              "origin": [
+                -8,
+                -8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_2_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_2",
+            "parent_frame": {
+              "origin": [
+                8,
+                -8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_3_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_3",
+            "parent_frame": {
+              "origin": [
+                -8,
+                8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_4_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_4",
+            "parent_frame": {
+              "origin": [
+                8,
+                8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          }
+        ],
+        "couplings": [
+          {
+            "id": "curl",
+            "source": {
+              "mate_id": "base_hinge",
+              "coordinate": "angle_deg"
+            },
+            "target": {
+              "mate_id": "knuckle",
+              "coordinate": "angle_deg"
+            },
+            "ratio": 1
+          }
+        ],
+        "poses": [
+          {
+            "id": "open",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "approach",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": -5
+              }
+            ]
+          },
+          {
+            "id": "grasp",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": -10
+              }
+            ]
+          }
+        ],
+        "bom": [
+          {
+            "input": "mount",
+            "part_number": "GR-MOUNT",
+            "description": "Machined finger mount",
+            "material": "Aluminum, design assumption"
+          },
+          {
+            "input": "proximal",
+            "part_number": "GR-PROXIMAL",
+            "description": "Pocketed proximal link",
+            "material": "Polymer, process TBD"
+          },
+          {
+            "input": "distal",
+            "part_number": "GR-DISTAL",
+            "description": "Pocketed distal link",
+            "material": "Polymer, process TBD"
+          },
+          {
+            "input": "pad",
+            "part_number": "GR-PAD",
+            "description": "Ribbed replaceable grip pad",
+            "material": "Elastomer, process TBD"
+          },
+          {
+            "input": "mount_screw",
+            "part_number": "GR-MOUNT_SCREW",
+            "description": "Unsourced simplified 3 mm screw envelope",
+            "material": "Steel, assumed"
+          }
+        ]
+      },
+      {
+        "id": "right_finger",
+        "type": "assembly",
+        "parts": [
+          {
+            "id": "mount",
+            "input": "mount"
+          },
+          {
+            "id": "proximal",
+            "input": "proximal"
+          },
+          {
+            "id": "distal",
+            "input": "distal"
+          },
+          {
+            "id": "pad",
+            "input": "pad"
+          },
+          {
+            "id": "lower_seat",
+            "input": "pivot_seat"
+          },
+          {
+            "id": "upper_cap",
+            "input": "pivot_cap"
+          },
+          {
+            "id": "base_pin",
+            "input": "pivot_pin"
+          },
+          {
+            "id": "base_bush",
+            "input": "proximal_bush"
+          },
+          {
+            "id": "tip_bush",
+            "input": "proximal_bush"
+          },
+          {
+            "id": "knuckle_pin",
+            "input": "knuckle_pin"
+          },
+          {
+            "id": "knuckle_washer",
+            "input": "joint_washer"
+          },
+          {
+            "id": "knuckle_lower_washer",
+            "input": "lower_washer"
+          },
+          {
+            "id": "distal_bush",
+            "input": "distal_bush"
+          },
+          {
+            "id": "tip_distal_bush",
+            "input": "distal_bush"
+          },
+          {
+            "id": "rear_post_left",
+            "input": "support_post"
+          },
+          {
+            "id": "rear_post_right",
+            "input": "support_post"
+          },
+          {
+            "id": "mount_screw_1",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_2",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_3",
+            "input": "mount_screw"
+          },
+          {
+            "id": "mount_screw_4",
+            "input": "mount_screw"
+          }
+        ],
+        "mates": [
+          {
+            "id": "base_hinge",
+            "type": "revolute",
+            "parent": "mount",
+            "child": "proximal",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                -1
+              ],
+              "x_direction": [
+                -1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                -1
+              ],
+              "x_direction": [
+                -1,
+                0,
+                0
+              ]
+            },
+            "angle_deg": {
+              "parameter": "curl_angle"
+            },
+            "angle_limits_deg": [
+              -10,
+              0
+            ]
+          },
+          {
+            "id": "knuckle",
+            "type": "revolute",
+            "parent": "proximal",
+            "child": "distal",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                -1
+              ],
+              "x_direction": [
+                -1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                -1
+              ],
+              "x_direction": [
+                -1,
+                0,
+                0
+              ]
+            },
+            "angle_limits_deg": [
+              -10,
+              0
+            ]
+          },
+          {
+            "id": "pad_mount",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "pad",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "lower_seat_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "lower_seat",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "upper_cap_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "upper_cap",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "base_pin_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "base_pin",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "base_bush_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "base_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "tip_bush_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "tip_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_pin_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_pin",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_washer_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_washer",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "knuckle_lower_washer_attachment",
+            "type": "rigid",
+            "parent": "proximal",
+            "child": "knuckle_lower_washer",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "proximal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "distal_bush_attachment",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "distal_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "tip_distal_bush_attachment",
+            "type": "rigid",
+            "parent": "distal",
+            "child": "tip_distal_bush",
+            "parent_frame": {
+              "origin": [
+                0,
+                {
+                  "parameter": "distal_length"
+                },
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "rear_post_left_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "rear_post_left",
+            "parent_frame": {
+              "origin": [
+                -10,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "rear_post_right_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "rear_post_right",
+            "parent_frame": {
+              "origin": [
+                10,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_1_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_1",
+            "parent_frame": {
+              "origin": [
+                -8,
+                -8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_2_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_2",
+            "parent_frame": {
+              "origin": [
+                8,
+                -8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_3_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_3",
+            "parent_frame": {
+              "origin": [
+                -8,
+                8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          },
+          {
+            "id": "mount_screw_4_attachment",
+            "type": "rigid",
+            "parent": "mount",
+            "child": "mount_screw_4",
+            "parent_frame": {
+              "origin": [
+                8,
+                8,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            },
+            "child_frame": {
+              "origin": [
+                0,
+                0,
+                0
+              ],
+              "normal": [
+                0,
+                0,
+                1
+              ],
+              "x_direction": [
+                1,
+                0,
+                0
+              ]
+            }
+          }
+        ],
+        "couplings": [
+          {
+            "id": "curl",
+            "source": {
+              "mate_id": "base_hinge",
+              "coordinate": "angle_deg"
+            },
+            "target": {
+              "mate_id": "knuckle",
+              "coordinate": "angle_deg"
+            },
+            "ratio": 1
+          }
+        ],
+        "poses": [
+          {
+            "id": "open",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "id": "approach",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": -5
+              }
+            ]
+          },
+          {
+            "id": "grasp",
+            "values": [
+              {
+                "mate_id": "base_hinge",
+                "coordinate": "angle_deg",
+                "value": -10
+              }
+            ]
+          }
+        ],
+        "bom": [
+          {
+            "input": "mount",
+            "part_number": "GR-MOUNT",
+            "description": "Machined finger mount",
+            "material": "Aluminum, design assumption"
+          },
+          {
+            "input": "proximal",
+            "part_number": "GR-PROXIMAL",
+            "description": "Pocketed proximal link",
+            "material": "Polymer, process TBD"
+          },
+          {
+            "input": "distal",
+            "part_number": "GR-DISTAL",
+            "description": "Pocketed distal link",
+            "material": "Polymer, process TBD"
+          },
+          {
+            "input": "pad",
+            "part_number": "GR-PAD",
+            "description": "Ribbed replaceable grip pad",
+            "material": "Elastomer, process TBD"
+          },
+          {
+            "input": "mount_screw",
+            "part_number": "GR-MOUNT_SCREW",
+            "description": "Unsourced simplified 3 mm screw envelope",
+            "material": "Steel, assumed"
+          }
+        ]
+      },
+      {
+        "id": "housing_outer",
+        "type": "box",
+        "origin": [
+          -18,
+          -38,
+          -24
+        ],
+        "size": [
+          36,
+          36,
+          22
+        ]
+      },
+      {
+        "id": "housing_inner",
+        "type": "box",
+        "origin": [
+          -16,
+          -36,
+          -22
+        ],
+        "size": [
+          32,
+          32,
+          20
+        ]
+      },
+      {
+        "id": "actuator_housing",
+        "type": "cut",
+        "left": "housing_outer",
+        "right": "housing_inner"
+      },
+      {
+        "id": "actuator_envelope",
+        "type": "box",
+        "origin": [
+          -11,
+          -32,
+          -20
+        ],
+        "size": [
+          22,
+          24,
+          16
+        ]
+      },
+      {
+        "id": "housing_bottom",
+        "type": "box",
+        "origin": [
+          -18,
+          -38,
+          -26
+        ],
+        "size": [
+          36,
+          36,
+          2
+        ]
+      },
+      {
+        "id": "spacer",
+        "type": "cylinder",
+        "radius": 3,
+        "height": 2,
+        "origin": [
+          0,
+          0,
+          -2
+        ]
+      },
+      {
+        "id": "gripper",
+        "type": "assembly",
+        "parts": [
+          {
+            "id": "base",
+            "input": "base_plate"
+          },
+          {
+            "id": "left",
+            "input": "finger",
+            "placement": {
+              "translation": [
+                -34,
+                12,
+                {
+                  "parameter": "base_thickness"
+                }
+              ]
+            }
+          },
+          {
+            "id": "right",
+            "input": "right_finger",
+            "placement": {
+              "translation": [
+                34,
+                12,
+                {
+                  "parameter": "base_thickness"
+                }
+              ]
+            }
+          },
+          {
+            "id": "housing",
+            "input": "actuator_housing"
+          },
+          {
+            "id": "actuator",
+            "input": "actuator_envelope"
+          },
+          {
+            "id": "bottom",
+            "input": "housing_bottom"
+          },
+          {
+            "id": "housing_spacer_1",
+            "input": "spacer",
+            "placement": {
+              "translation": [
+                -13,
+                -33,
+                0
+              ]
+            }
+          },
+          {
+            "id": "housing_spacer_2",
+            "input": "spacer",
+            "placement": {
+              "translation": [
+                13,
+                -33,
+                0
+              ]
+            }
+          },
+          {
+            "id": "housing_spacer_3",
+            "input": "spacer",
+            "placement": {
+              "translation": [
+                -13,
+                -7,
+                0
+              ]
+            }
+          },
+          {
+            "id": "housing_spacer_4",
+            "input": "spacer",
+            "placement": {
+              "translation": [
+                13,
+                -7,
+                0
+              ]
+            }
+          }
+        ],
+        "bom": [
+          {
+            "input": "base_plate",
+            "part_number": "GR-BASE",
+            "description": "Mounting plate",
+            "material": "Aluminum, assumed"
+          },
+          {
+            "input": "actuator_envelope",
+            "part_number": "GR-ACTUATOR-ENVELOPE",
+            "description": "Unsourced actuator clearance envelope; no drive transmission",
+            "material": "Unspecified"
+          }
+        ]
+      }
+    ],
+    "output": "gripper"
+  }
+}

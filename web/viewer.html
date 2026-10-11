@@ -6,6 +6,7 @@
 <body data-theme="light">
 <div id="app" data-scene="open" data-dock="icons">
   <canvas id="viewport" tabindex="0" aria-label="CAD model. Drag to orbit, shift-drag to pan, scroll to zoom. Hover and click to select a face or edge."></canvas>
+  <canvas id="markup-overlay" aria-label="Viewport markup"></canvas>
   <div id="annotation-overlay" class="annotation-overlay" aria-label="Review pins"></div>
   <svg id="point-measure-overlay" class="point-measure-overlay" aria-label="Distance between user-defined points" hidden></svg>
   <div id="empty-state" class="empty-state"><div class="empty-mark" aria-hidden="true">◇</div><h2>Your next idea starts here</h2><p>Ask your agent to create a model,<br>or open one from the Models menu.</p></div>
@@ -82,6 +83,7 @@
     <button class="dock-button" data-tool="render-panel" aria-label="Display" title="Display" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3M7 8h10M7 12h6"/></svg></button>
     <button class="dock-button" data-tool="appearance-panel" aria-label="Colors" title="Colors" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><circle cx="8.8" cy="10" r="1.2"/><circle cx="13.5" cy="8.4" r="1.2"/><circle cx="15.8" cy="13" r="1.2"/></svg></button>
     <button class="dock-button" data-tool="annotations-panel" aria-label="Review notes" title="Review notes" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9.5L4 20z"/></svg></button>
+    <button class="dock-button" data-tool="markup-panel" aria-label="Draw on model" title="Draw on model" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 12-12 4 4L8 20H4zM13 7l4 4M4 20h16"/></svg></button>
     <button class="dock-button" data-tool="presets-panel" aria-label="Saved views" title="Saved views" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/></svg></button>
     <button class="dock-button" data-tool="section-panel" aria-label="Exact section" title="Exact section" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16"/><path d="M8 16h8" stroke-dasharray="1.6 2"/></svg></button>
     <button class="dock-button" data-tool="measurement-panel" aria-label="Face and part clearance" title="Face and part clearance" aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 15.5L15.5 3.5l5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/></svg></button>
@@ -94,6 +96,17 @@
     <div id="tool-popover-body"></div>
   </section>
   <div id="tool-panels" hidden>
+    <section id="markup-panel" class="presentation-panel" aria-label="Viewport markup" hidden>
+      <div class="section-heading"><h2>Draw on model</h2><button id="markup-clear" class="quiet">Clear</button></div>
+      <div class="markup-tools" role="group" aria-label="Drawing tool">
+        <button data-markup-tool="navigate" aria-pressed="true">Navigate</button><button data-markup-tool="pen" aria-pressed="false">Pen</button><button data-markup-tool="line" aria-pressed="false">Line</button>
+        <button data-markup-tool="arrow" aria-pressed="false">Arrow</button><button data-markup-tool="rectangle" aria-pressed="false">Rectangle</button><button data-markup-tool="ellipse" aria-pressed="false">Ellipse</button><button data-markup-tool="text" aria-pressed="false">Text</button>
+      </div>
+      <div class="markup-style"><label for="markup-color">Color</label><input id="markup-color" type="color" value="#e63946"><label for="markup-width">Width</label><input id="markup-width" type="number" min="1" max="16" value="3"></div>
+      <label for="markup-text">Text to place</label><textarea id="markup-text" rows="2" maxlength="512" placeholder="Describe the change…"></textarea>
+      <div class="note-actions"><button id="markup-undo">Undo</button><button id="markup-redo">Redo</button><button id="markup-attach" hidden>Send image to chat</button></div>
+      <p id="markup-status" class="fine-print" role="status" aria-live="polite">Choose a tool, then draw over the model. Markup stays with this view.</p>
+    </section>
     <section id="artifact-review-panel" class="artifact-review-panel" aria-label="External artifact review" hidden><div class="section-heading"><h2>Read-only review</h2></div><dl id="artifact-source"></dl><p id="artifact-association" class="fine-print"></p><details><summary>Captured source identity</summary><pre id="artifact-hashes"></pre></details><details><summary>Review limitations</summary><ul id="artifact-limitations"></ul></details><details id="artifact-pose-panel" open hidden><summary>Imported motion</summary><div id="artifact-joint-values"></div><div id="artifact-animation-controls" hidden><label for="artifact-animation">Animation</label><select id="artifact-animation"></select><div class="view-buttons"><button id="artifact-play">Play</button><button id="artifact-pause" class="quiet">Pause</button></div><label for="artifact-time">Time (seconds)</label><input id="artifact-time" type="range" min="0" max="1" step="0.01" value="0"><output id="artifact-time-value">0 s</output></div><button id="artifact-pose-reset" class="quiet">Restore captured pose</button><p id="artifact-pose-status" class="fine-print" role="status" aria-live="polite"></p><p class="fine-print">Imported motion changes this view. Captured source files and editable native models keep their saved state.</p></details></section>
     <section id="presentation-panel" class="presentation-panel" aria-label="Visual inspection" hidden>
       <div class="section-heading"><h2>Visual inspection</h2><button id="presentation-reset" class="quiet">Reset</button></div>
@@ -219,5 +232,5 @@
 
   <span id="update-status" class="sr-only" role="status" aria-live="polite">Connecting to native service</span>
 </div>
-<script>@VIEWER_BRIDGE@</script><script>@VIEWER_RENDERER@</script><script>@VIEWER_STATE@</script><script>@VIEWER_SHELL@</script><script>@VIEWER_APP@</script>
+<script>@VIEWER_BRIDGE@</script><script>@VIEWER_RENDERER@</script><script>@VIEWER_PROGRESSIVE@</script><script>@VIEWER_MARKUP@</script><script>@VIEWER_STATE@</script><script>@VIEWER_SHELL@</script><script>@VIEWER_APP@</script>
 </body></html>

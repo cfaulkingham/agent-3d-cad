@@ -90,8 +90,16 @@ install(FILES third_party/tinyxml2/tinyxml2.cpp third_party/tinyxml2/tinyxml2.h
 get_target_property(AGENTCAD_OCCT_LINKAGE TKernel TYPE)
 file(SHA256 "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" AGENTCAD_APP_SHA256)
 install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/occt)
-install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples)
-install(DIRECTORY skills/native-cad DESTINATION share/agent-3d-cad/skills)
+install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples
+  PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+# Every checked-in skill ships in native/Claude bundles and is copied to the
+# Agent Plugins discovery root by make-plugin. References and data stay beside
+# their entrypoint; no scripting runtime is added to the end-user bundle.
+file(GLOB AGENTCAD_SKILL_ENTRYPOINTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/skills/*/SKILL.md")
+foreach(entrypoint IN LISTS AGENTCAD_SKILL_ENTRYPOINTS)
+  get_filename_component(skill_directory "${entrypoint}" DIRECTORY)
+  install(DIRECTORY "${skill_directory}" DESTINATION share/agent-3d-cad/skills)
+endforeach()
 # Curated product documentation, shared by the archive and native skill. Keep
 # transitive product references available; repository implementation history has
 # an explicit immutable-source reference below instead of a stale copied ledger.
@@ -99,10 +107,10 @@ set(AGENTCAD_PRODUCT_DOCUMENTS
   ANNOTATIONS APPEARANCE ARTIFACT_REVIEW ASSEMBLIES AUTHORING_IMPORTS
   COMMIT_RECEIPTS COMPONENTS COMPOSITION_FABRICATION_REVIEW DEPENDENCIES DEPENDENCY_CACHE
   DISTRIBUTION DRAWINGS EXPORT_DOWNLOADS FABRICATION_REVIEW GCODE_REVIEW
-  LIVE_VIEWER LOCAL_PACKAGE_ACCEPTANCE MANUFACTURING MEASUREMENTS
+  LIVE_VIEWER LOCAL_PACKAGE_ACCEPTANCE MANUFACTURING MARKUP MEASUREMENTS
   MESH_RECONSTRUCTION PARAMETRIC_EXPRESSIONS PARITY_AUTHORING PARITY_CURVES
   PARITY_SHEET_METAL PARITY_SOLIDS PARITY_SURFACES PLAYBACK PRESENTATION
-  PRINTER_HANDOFF PROTOCOL PURCHASED_PARTS RELEASE_1_0 RENDERING RICHER_MODELING
+  PRINTER_HANDOFF PROGRESSIVE_VIEWER PROTOCOL PURCHASED_PARTS RELEASE_1_0 RENDERING RICHER_MODELING
   ROBOT_EXPORT SECTIONS SHEET_METAL SHELL_OFFSET_THICKEN SKETCH_OPERATIONS
   SLICING SPEC SURFACES)
 foreach(document IN LISTS AGENTCAD_PRODUCT_DOCUMENTS)
@@ -115,7 +123,7 @@ string(REGEX MATCHALL "[A-Z][A-Z_0-9]+[.]md" AGENTCAD_SKILL_REFERENCES "${AGENTC
 list(REMOVE_DUPLICATES AGENTCAD_SKILL_REFERENCES)
 foreach(reference IN LISTS AGENTCAD_SKILL_REFERENCES)
   string(REGEX REPLACE "[.]md$" "" document "${reference}")
-  if(NOT document IN_LIST AGENTCAD_PRODUCT_DOCUMENTS AND NOT reference STREQUAL "HANDOFF.md")
+  if(NOT document IN_LIST AGENTCAD_PRODUCT_DOCUMENTS AND NOT reference STREQUAL "HANDOFF.md" AND NOT reference STREQUAL "SKILL.md")
     message(FATAL_ERROR "Skill reference is missing from bundled product documents: ${reference}")
   endif()
 endforeach()

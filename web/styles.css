@@ -53,6 +53,13 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 /* Stage */
 #app{position:relative;height:100vh;min-height:480px;overflow:hidden;background:var(--bg)}
 #viewport{position:absolute;inset:0;display:block;width:100%;height:100%;touch-action:none}
+#markup-overlay{position:absolute;inset:0;bottom:36px;width:100%;height:calc(100% - 36px);pointer-events:none;z-index:2}
+.markup-tools{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:8px 0}
+.markup-tools button{min-width:0;padding:6px 3px;font-size:11px}
+.markup-style{display:flex;align-items:center;gap:8px;margin:8px 0}
+.markup-style input[type=number]{width:62px}
+#markup-text{width:100%;min-height:58px}
+#app[data-markup-drawing=true] #cube-area{pointer-events:none;opacity:.5}
 .annotation-overlay{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .point-measure-overlay{position:absolute;inset:0;width:100%;height:calc(100% - 36px);pointer-events:none;overflow:hidden}
 .point-measure-overlay[hidden]{display:none}

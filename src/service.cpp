@@ -8,6 +8,7 @@
 #include "agentcad/viewer.hpp"
 #include "agentcad/hash.hpp"
 #include "agentcad/live.hpp"
+#include "agentcad/progressive.hpp"
 #include "agentcad/screenshot.hpp"
 #include "agentcad/visual.hpp"
 #include "agentcad/render_service.hpp"
@@ -95,7 +96,7 @@ Json tool_definitions() {
   const Json id={{"$ref","#/$defs/model_id"}};
   const Json revision={{"$ref","#/$defs/revision"}};
   const Json text={{"type","string"}};
-  auto definitions=model_definitions();
+  auto definitions=model_definitions();progressive_definitions(definitions);
   definitions["authoring_feature"]=object({{"id",{{"$ref","#/$defs/model_id"}}},{"type",{{"const","sketch"}}},
     {"workplane",{{"$ref","#/$defs/workplane"}}},
     {"profile",{{"oneOf",authoring_profile_schemas({{"$ref","#/$defs/scalar"}})}}}}, {"id","type","workplane","profile"});
@@ -145,13 +146,19 @@ Json tool_definitions() {
     {"kernel_version",{{"const","8.0.1"}}},{"evaluation_id",id},{"feature_id",id},{"draft",{{"type","boolean"}}},
     {"selection_lifetime",{{"const","evaluation"}}},{"summary",summary_schema()},
     {"curve",{{"$ref","#/$defs/curve_samples"}}},{"topology",{{"$ref","#/$defs/topology"}}},{"mesh",{{"$ref","#/$defs/mesh"}}},{"path",text},{"data_path",text}};
+  auto progressive_identity=identity;
+  progressive_identity["topology"]={{"$ref","#/$defs/progressive_topology"}};
+  progressive_identity["components"]={{"$ref","#/$defs/component_manifest"}};
+  progressive_identity["component_mesh"]={{"$ref","#/$defs/component_mesh_result"}};
   auto tool=[&](const char* name,const char* description,Json properties,Json required,Json output,bool read_only) {
     auto input=object(properties,required);input["$defs"]=definitions;
     output["$defs"]=definitions;
     return Json{{"name",name},{"description",description},{"inputSchema",input},{"outputSchema",output},
       {"annotations",{{"readOnlyHint",read_only},{"destructiveHint",false},{"openWorldHint",false}}}};
   };
-  auto preview_output=object(identity,{"schema_version","document_id","revision","kernel_version","evaluation_id","feature_id","draft","selection_lifetime","summary"});
+  auto preview_identity=identity;preview_identity.erase("curve");
+  auto offline_identity=preview_identity;offline_identity.erase("mesh");offline_identity.erase("topology");
+  auto preview_output=object(preview_identity,{"schema_version","document_id","revision","kernel_version","evaluation_id","feature_id","draft","selection_lifetime","summary"});
   preview_output["properties"]["draft"]={{"const",true}};
   preview_output["oneOf"]=Json::array({Json{{"required",{"path","data_path"}}},Json{{"required",{"mesh","topology"}}}});
   Json tools=Json::array({
@@ -187,8 +194,8 @@ Json tool_definitions() {
       {{"document_id",id},{"path",text},{"request_id",id},{"geometry",{{"enum",{"solid","surface"}}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
       object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
-      {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh","curve"}}}},{"feature_id",id},{"curve",{{"$ref","#/$defs/curve_query"}}}},
-      {"document_id","revision"},object(identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
+      {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh","curve","component_manifest","component_mesh"}}}},{"feature_id",id},{"curve",{{"$ref","#/$defs/curve_query"}}},{"evaluation_id",id},{"geometry_id",id},{"level",{{"type","integer"},{"minimum",0},{"maximum",2}}}},
+      {"document_id","revision"},object(progressive_identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
     tool("cad_measure","Measure committed B-reps: face/edge/leaf pair distances, analytic angles, common material volume, or planar section curves and material caps. Clearance queries cover at most 23 leaves. Section queries use an explicit displayed-world plane and optional exploded leaf offsets; distance queries always use the saved source pose. Reject stale/draft/build-mismatched references and ambiguous recovery.",
       {{"document_id",id},{"revision",revision},{"evaluation_id",id},{"feature_id",id},{"query",{{"$ref","#/$defs/measurement_query"}}}},
       {"document_id","revision","evaluation_id","feature_id","query"},definitions.at("measurement_result"),true),
@@ -260,13 +267,13 @@ Json tool_definitions() {
         {"document_id","revision","kernel_version","units","scale","sheet_mm","layout","view_layouts","path","recipe_path","artifacts","dimensions","projection_tolerance_mm"}),false),
     tool("cad_view","Save an offline interactive HTML viewer and .view.json. Pick a face or edge and copy/save its revision-qualified reference.",
       {{"document_id",id},{"revision",revision},{"feature_id",id}},{"document_id","revision"},
-      object(identity,{"schema_version","document_id","revision","evaluation_id","feature_id","draft","summary","path","data_path"}),false),
+      object(offline_identity,{"schema_version","document_id","revision","evaluation_id","feature_id","draft","summary","path","data_path"}),false),
     tool("cad_preview","Build edits without committing. Returns a draft viewer; draft picks cannot be used as committed references.",
       {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"feature_id",id},{"kind",{{"enum",{"view","mesh"}}}}},
       {"document_id","expected_revision","operations"},preview_output,true),
     tool("cad_resolve_selection","Resolve a saved evaluation pick. Reject stale revisions, draft picks and mismatched evaluations. Persistent selectors are geometric rules, never pick tokens.",
       reference_properties,{"document_id","revision","evaluation_id","feature_id","kind","entity_id"},
-      object({{"reference",reference},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},{"selector",{{"oneOf",Json::array({Json{{"$ref","#/$defs/selector"}},Json{{"$ref","#/$defs/face_selector"}}})}}}},{"reference","geometry"}),true),
+      object({{"reference",reference},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},{"selector",{{"oneOf",Json::array({Json{{"$ref","#/$defs/edge_inspection_selector"}},Json{{"$ref","#/$defs/face_inspection_selector"}}})}}}},{"reference","geometry"}),true),
     tool("cad_compare","Compare committed revisions by parameters, named features, output and geometric measurements.",
       {{"document_id",id},{"from_revision",revision},{"to_revision",revision}},{"document_id","from_revision","to_revision"},
       object({{"document_id",id},{"from_revision",revision},{"to_revision",revision},{"parameters",{{"type","object"}}},
@@ -292,7 +299,7 @@ Json tool_definitions() {
   for(auto& definition:tools)if(definition.at("name")=="cad_printer_handoff")
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/printer_arguments"},{"$defs",definitions}};
   for(auto& tool:tools) {
-    if(tool.at("name")=="cad_query")tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["curve"]},"then":{"required":["kind"],"properties":{"kind":{"const":"curve"}}}}])JSON");
+    if(tool.at("name")=="cad_query")tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["curve"]},"then":{"required":["kind"],"properties":{"kind":{"const":"curve"}}}},{"if":{"required":["kind"],"properties":{"kind":{"const":"component_mesh"}}},"then":{"required":["evaluation_id","geometry_id","level"]},"else":{"not":{"anyOf":[{"required":["evaluation_id"]},{"required":["geometry_id"]},{"required":["level"]}]}}}])JSON");
     if(tool.at("name")=="cad_import"){tool["inputSchema"]["dependentRequired"]={{"solid_indices",{"expected_sha256"}}};tool["inputSchema"]["not"]={{"required",{"solid_indices","purchase"}}};tool["inputSchema"]["allOf"]=parse_json(R"JSON([{"if":{"required":["geometry"],"properties":{"geometry":{"const":"surface"}}},"then":{"not":{"anyOf":[{"required":["solid_indices"]},{"required":["purchase"]}]}}}])JSON");}
     if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"]=Json::array({{{"if",{{"properties",{{"format",{{"const","text"}}}}}}},{"then",{{"required",{"text","height"}},{"not",{{"required",{"scale"}}}}}},{"else",{{"not",{{"anyOf",Json::array({Json{{"required",{"text"}}},Json{{"required",{"height"}}},Json{{"required",{"spacing"}}},Json{{"required",{"face_index"}}}})}}}}}}});
     if(tool.at("name")=="cad_export"||tool.at("name")=="cad_drawing") {
@@ -864,7 +871,9 @@ void validate_tool_arguments(const std::string& tool,const Json& args) {
   else if(tool=="cad_robot_export") {fields(args,{"document_id","revision","robot"},{"feature_id"});validate_robot_options(args.at("robot"));}
   else if(tool=="cad_bom") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_drawing") fields(args,{"document_id","revision"},{"drawing"});
-  else if(tool=="cad_query"){fields(args,{"document_id","revision"},{"kind","feature_id","curve"});if(args.contains("curve")&&args.value("kind",std::string("summary"))!="curve")throw Error("invalid_argument","Curve options require kind curve");}
+  else if(tool=="cad_query"){fields(args,{"document_id","revision"},{"kind","feature_id","curve","evaluation_id","geometry_id","level"});if(args.contains("curve")&&args.value("kind",std::string("summary"))!="curve")throw Error("invalid_argument","Curve options require kind curve");
+    if(args.value("kind",std::string{})=="component_mesh"){for(const auto* key:{"evaluation_id","geometry_id","level"})if(!args.contains(key))throw Error("invalid_argument","Component meshes require evaluation_id, geometry_id and level");identifier(text_field(args,"evaluation_id"));model_identifier(text_field(args,"geometry_id"));if(!args.at("level").is_number_integer()||args.at("level")<0||args.at("level")>2)throw Error("invalid_argument","Component level must be 0, 1 or 2");}
+    else if(args.contains("evaluation_id")||args.contains("geometry_id")||args.contains("level"))throw Error("invalid_argument","Component fields require component_mesh");}
   else if(tool=="cad_measure") {fields(args,{"document_id","revision","evaluation_id","feature_id","query"});identifier(text_field(args,"evaluation_id"));validate_measurement_query(args.at("query"));}
   else if(tool=="cad_view") fields(args,{"document_id","revision"},{"feature_id"});
   else if(tool=="cad_preview") fields(args,{"document_id","expected_revision","operations"},{"feature_id","kind"});
@@ -1226,9 +1235,24 @@ Json Service::execute(const std::string& tool,const Json& args) {
   }
   if(tool=="cad_query"||tool=="cad_view") {
     const auto kind=tool=="cad_view"?std::string("view"):(args.contains("kind")?text_field(args,"kind"):std::string("summary"));
-    if(kind!="summary"&&kind!="topology"&&kind!="mesh"&&kind!="curve"&&!(kind=="view"&&tool=="cad_view"))throw Error("invalid_argument","Query kind must be summary, topology, mesh or curve");
+    if(kind!="summary"&&kind!="topology"&&kind!="mesh"&&kind!="curve"&&kind!="component_manifest"&&kind!="component_mesh"&&!(kind=="view"&&tool=="cad_view"))throw Error("invalid_argument","Query kind must be summary, topology, mesh or curve");
     Json request={{"kind",kind=="mesh"?"view":kind}};if(args.contains("feature_id"))request["feature_id"]=args.at("feature_id");
     if(kind=="curve"){request["options"]=args.value("curve",Json::object());validate_curve_query(request.at("options"),record.at("model").at("parameters"),args.value("feature_id",record.at("model").at("output").get<std::string>()));}
+    if(kind=="component_mesh") {
+      for(const auto* field:{"evaluation_id","geometry_id","level"})if(!args.contains(field))throw Error("invalid_argument","Component meshes require evaluation_id, geometry_id and level");
+      const auto eid=text_field(args,"evaluation_id");identifier(eid);const auto parent=store_.root()/"evaluations",path=parent/(eid+".json");
+      if(fs::is_symlink(fs::symlink_status(parent))||fs::is_symlink(fs::symlink_status(path)))throw Error("storage_error","Component evaluation cannot be a symlink");
+      const auto evaluation=parse_json(read_text(path,64*1024*1024),64*1024*1024);
+      if(evaluation.at("document_id")!=id||evaluation.at("revision")!=revision||evaluation.at("draft")!=false||!evaluation.contains("components")||evaluation.value("_native_build",std::string{})!=AGENTCAD_CACHE_BUILD||evaluation.value("_model_sha256",std::string{})!=sha256(record.at("model").dump())||store_.read(id).at("revision")!=revision)throw Error("stale_selection","Component request does not belong to the current manifest");
+      if(args.contains("feature_id")&&args.at("feature_id")!=evaluation.at("feature_id"))throw Error("stale_selection","Component feature differs from its manifest");
+      request["feature_id"]=evaluation.at("feature_id");request["geometry_id"]=args.at("geometry_id");request["level"]=args.at("level");
+      auto result=evaluate_model(store_.root(),record.at("model"),request);const auto& mesh=result.at("component_mesh");bool matched=false;
+      for(const auto& geometry:evaluation.at("components").at("geometries"))if(geometry.at("id")==args.at("geometry_id")&&geometry.at("topology_sha256")==mesh.at("topology_sha256"))matched=true;
+      if(!matched)throw Error("stale_selection","Component topology differs from its qualified manifest");
+      DocumentLock lock(store_.root(),id,LockWait::publication);check_job_cancelled();if(store_.read(id).at("revision")!=revision)throw Error("stale_selection","Source changed while tessellating its component");
+      for(const auto* field:{"schema_version","document_id","revision","kernel_version","evaluation_id","feature_id","draft","selection_lifetime"})result[field]=evaluation.at(field);return result;
+    }
+    if(args.contains("evaluation_id")||args.contains("geometry_id")||args.contains("level"))throw Error("invalid_argument","Component fields require component_mesh");
     auto result=evaluate_model(store_.root(),record.at("model"),request);
     if(kind!="summary") return save_evaluation(store_.root(),record,result,false,kind=="view");
     result["document_id"]=id;result["revision"]=revision;result["kernel_version"]=kernel_version();

@@ -32,7 +32,7 @@ Json fingerprint(Store& store,const Json& state){
   if(!state.value("read_only",false)){const auto& display=state.at("display");if(state.contains("motion")&&display.value("motion_id",Json())!=state.at("motion").at("id"))throw Error("stale_capture","Displayed motion pose is still changing");}
   Json frame={{"generation",state.at("generation")},{"display",state.at("display")},{"document_id",state.at("document_id")}};
   if(!state.value("read_only",false))frame.update(native_hashes(store,state));
-  for(const auto* key:{"artifact","hidden_part_ids","presentation","appearance","render","annotations","playback","section","artifact_pose","motion"})if(state.contains(key))frame[key]=state.at(key);
+  for(const auto* key:{"artifact","hidden_part_ids","presentation","appearance","render","annotations","markup","playback","section","artifact_pose","motion"})if(state.contains(key))frame[key]=state.at(key);
   if(state.contains("context")&&!state.at("context").is_null()){frame["context"]=state.at("context");frame["context"].erase("updated_at_unix_ms");frame["context"].erase("prompt");}
   return frame;
 }

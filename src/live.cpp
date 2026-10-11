@@ -9,6 +9,7 @@
 #include "agentcad/service.hpp"
 #include "agentcad/screenshot.hpp"
 #include "agentcad/render_settings.hpp"
+#include "agentcad/markup.hpp"
 #include "agentcad/visual.hpp"
 #include <algorithm>
 #include <chrono>
@@ -207,6 +208,33 @@ Json annotation_records(const Json& state,const Json& head) {
   }
   return notes;
 }
+Json view_markup_binding(const Json& state,const Json& viewport) {
+  if(!state.contains("display"))return nullptr;
+  const auto& display=state.at("display");const bool artifact=state.value("read_only",false);
+  auto hidden=state.value("hidden_part_ids",Json::array());std::sort(hidden.begin(),hidden.end());
+  const auto camera=!state.at("context").is_null()&&state.at("context").contains("camera")?state.at("context").at("camera"):default_camera();
+  const auto presentation=state.value("presentation",default_presentation());
+  Json section=nullptr;if(!artifact&&state.contains("section")&&state.at("section").at("evaluation_id")==display.at("evaluation_id")&&section_matches(state.at("section").at("query"),presentation))section=state.at("section");
+  return {{"source",{{"view_id",state.at("view_id")},{"document_id",artifact?Json(nullptr):state.at("document_id")},{"revision",artifact?Json(nullptr):display.at("revision")},{"evaluation_id",display.at("evaluation_id")},{"feature_id",artifact?Json(nullptr):display.at("feature_id")},{"review_sha256",artifact?state.at("artifact").at("review_sha256"):Json(nullptr)},{"draft",display.value("draft",false)}}},
+    {"frame",{{"camera",camera},{"hidden_part_ids",hidden},{"presentation",presentation},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"artifact_pose",artifact?state.value("artifact_pose",Json::object()):Json(nullptr)},{"section",section},{"annotations",artifact?Json::array():annotation_records(state,display.at("revision"))}}},{"viewport",!state.at("context").is_null()?state.at("context").value("viewport",viewport):viewport}};
+}
+Json view_markup(const Json& state,const Json& head=nullptr) {
+  const auto scene=state.value("markup",Json(nullptr));if(scene.is_null())return markup_context(nullptr,nullptr);
+  validate_markup_scene(scene);const bool artifact=state.value("read_only",false);
+  const bool current=artifact||(state.contains("display")&&current_pose(state)&&(head.is_null()||head==state.at("display").at("revision")));
+  return markup_context(scene,current?view_markup_binding(state,scene.at("binding").at("viewport")):Json(nullptr));
+}
+void accept_view_markup(Json& state,const Json& arguments) {
+  if(!arguments.contains("markup"))return;const auto& scene=arguments.at("markup");
+  if(!scene.is_null()) {
+    validate_markup_scene(scene);
+    // Re-publishing unchanged historical evidence never rebinds its coordinates.
+    // A new or edited scene must describe this exact authoritative displayed frame.
+    if(scene!=state.value("markup",Json(nullptr))&&!markup_matches(scene,view_markup_binding(state,scene.at("binding").at("viewport"))))
+      throw Error("stale_markup","Markup belongs to a different source, camera or displayed frame");
+  }
+  state["markup"]=scene;
+}
 void annotation_text(const Json& value) {
   if(!value.is_string())throw Error("invalid_argument","Annotation text must be a string");
   const auto text=value.get<std::string>();
@@ -230,11 +258,13 @@ Json ready_status(const Json& state, const Json& record, const Json& arguments) 
   result["summary"] = display.at("summary");
   result["feature_id"] = display.at("feature_id");
   result["draft"] = display.value("draft",false);
+  if(display.value("progressive",false))result["progressive"]=true;
   if (result.at("draft")==true) result["preview_operations"]=state.at("motion").at("operations");
   result["hidden_part_ids"] = state.value("hidden_part_ids",Json::array());
   result["presentation"] = state.value("presentation",default_presentation());
   result["appearance"]=state.value("appearance",default_appearance());result["render"]=state.value("render",normalize_render_settings());result["presets"]=state.value("presets",Json::array());
   result["annotations"]=annotation_records(state,record.at("revision"));
+  result["markup"]=view_markup(state,record.at("revision"));
   result["sequences"]=state.value("sequences",Json::array());result["playback"]=playback_status(state);
   if(!state.at("context").is_null()&&state.at("context").at("evaluation_id")==display.at("evaluation_id")&&state.at("context").contains("camera"))result["camera"]=state.at("context").at("camera");
   if(state.contains("measurement")&&state.at("measurement").at("evaluation_id")==display.at("evaluation_id"))result["measurement"]=state.at("measurement");
@@ -365,6 +395,7 @@ Json context_result(Store& store, const Json& state) {
   Json result = {{"view_id",state.at("view_id")},{"document_id",state.at("document_id")},
     {"revision",nullptr},{"evaluation_id",nullptr},{"feature_id",nullptr},{"head_revision",nullptr},{"stale",false},{"selection",nullptr},
     {"hidden_part_ids",state.value("hidden_part_ids",Json::array())},{"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",state.value("presets",Json::array())},{"annotations",Json::array()},{"sequences",state.value("sequences",Json::array())},{"playback",playback_status(state)}};
+  result["markup"]=markup_context(nullptr,nullptr);
   if (state.at("document_id").is_null()) return result;
   try { result["head_revision"] = store.read(state.at("document_id").get<std::string>()).at("revision"); }
   catch (const Error& e) { if (e.code != "not_found") throw; }
@@ -386,6 +417,7 @@ Json context_result(Store& store, const Json& state) {
   result["presentation"]=state.value("presentation",default_presentation());
   result["appearance"]=state.value("appearance",default_appearance());result["render"]=state.value("render",normalize_render_settings());result["presets"]=state.value("presets",Json::array());
   result["annotations"]=annotation_records(state,result.at("head_revision"));
+  result["markup"]=view_markup(state,result.at("head_revision"));
   result["sequences"]=state.value("sequences",Json::array());result["playback"]=playback_status(state);
   result["stale"] = (!result.at("revision").is_null() && result.at("revision") != result.at("head_revision")) ||
     (!result.at("evaluation_id").is_null() && (!state.contains("display") ||
@@ -434,7 +466,8 @@ Json synchronize(Store& store, const Json& arguments) {
       current["build"]=AGENTCAD_CACHE_BUILD;current["generation"]=nonce();
       current.erase("pending");current.erase("failure");save_state(path,current);continue;
     }
-    if (current_pose(state) && state.at("display").at("revision") == revision) {
+    const bool progressive=arguments.value("progressive",false)&&!state.contains("motion");
+    if (current_pose(state) && state.at("display").at("revision") == revision && state.at("display").value("progressive",false)==progressive) {
       // Retargeting between the initial snapshot and this result cannot publish
       // an evaluation belonging to the view's former document.
       DocumentLock publication(store.root(),document);
@@ -452,9 +485,9 @@ Json synchronize(Store& store, const Json& arguments) {
       WorkspaceLock lock(path);
       auto current = read_state(path);
       if (!same_view(current,state)) continue;
-      if (!current.contains("pending") || current.at("pending").at("revision") != revision) {
-        const auto job = "live_" + sha256(current.at("generation").get<std::string>() + ":" + document + ":" + revision.dump()).substr(0,59);
-        current["pending"] = {{"revision",revision},{"job_id",job}};
+      if (!current.contains("pending") || current.at("pending").at("revision") != revision || current.at("pending").value("progressive",false)!=progressive) {
+        const auto job = "live_" + sha256(current.at("generation").get<std::string>() + ":" + document + ":" + revision.dump()+(progressive?":components":"")).substr(0,59);
+        current["pending"] = {{"revision",revision},{"job_id",job},{"progressive",progressive}};
         current.erase("failure"); save_state(path,current);
       }
       state = std::move(current);
@@ -463,7 +496,7 @@ Json synchronize(Store& store, const Json& arguments) {
     try {
       // This call only submits/inspects a process job. Neither the view lock nor
       // a document publication lock is held while entering the job dispatcher.
-      std::string tool="cad_query";Json request={{"document_id",document},{"revision",revision},{"kind","mesh"}};
+      std::string tool="cad_query";Json request={{"document_id",document},{"revision",revision},{"kind",progressive?"component_manifest":"mesh"}};
       if (state.contains("motion")) {
         const auto& motion=state.at("motion");const bool saving=motion.value("saving",false);
         tool=saving?"cad_apply":"cad_preview";
@@ -516,7 +549,7 @@ Json synchronize(Store& store, const Json& arguments) {
           (current.at("display").at("revision") != revision || current.at("display").value("draft",false)))
         remove_quietly(store.root() / "evaluations" / (current.at("display").at("evaluation_id").get<std::string>() + ".json"));
       current["display"] = {{"document_id",document},{"revision",revision},{"evaluation_id",eid},
-        {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")},{"draft",draft},{"build",AGENTCAD_CACHE_BUILD}};
+        {"feature_id",evaluation.at("feature_id")},{"summary",evaluation.at("summary")},{"draft",draft},{"build",AGENTCAD_CACHE_BUILD},{"progressive",evaluation.contains("components")}};
       if (draft) current["display"]["motion_id"]=current.at("motion").at("id");
       prune_hidden_parts(current);
       prune_presentation(current);prune_appearance(current,current);prune_presets(current);
@@ -562,6 +595,28 @@ Json mesh_chunk(Store& store, const Json& arguments) {
   if (!input) throw Error("storage_error","Could not read the frozen view chunk");
   const auto next = offset+count;
   return {{"data",data},{"offset",offset},{"next_offset",next == size ? Json(nullptr) : Json(next)},{"total_bytes",size}};
+}
+Json component_chunk(Store& store,const Json& arguments) {
+  const auto id=view_id(arguments),eid=text_field(arguments,"evaluation_id"),geometry=text_field(arguments,"geometry_id"),request_id=text_field(arguments,"request_id");identifier(eid);identifier(geometry);identifier(request_id);
+  if(!arguments.at("level").is_number_integer()||arguments.at("level")<0||arguments.at("level")>2)throw Error("invalid_argument","Component detail level must be 0, 1 or 2");
+  const auto level=arguments.at("level");const auto key="lod_"+sha256(id+":"+eid+":"+geometry+":"+level.dump()+":"+request_id).substr(0,59);
+  if(arguments.value("cancel",false)) {
+    const auto job=dispatch_job(store.root(),{{"action","cancel"},{"job_id",key}});
+    return {{"component_state","cancelled"},{"evaluation_id",eid},{"geometry_id",geometry},{"level",level}};
+  }
+  auto state=snapshot(store.root(),id);check_display(store,state,eid);
+  if(!state.at("display").value("progressive",false)||state.at("display").value("draft",false))throw Error("invalid_argument","Components require a committed progressive manifest");
+  const auto job=dispatch_job(store.root(),{{"action","submit"},{"request_id",key},{"tool","cad_query"},{"arguments",{
+    {"document_id",state.at("document_id")},{"revision",state.at("display").at("revision")},{"kind","component_mesh"},{"evaluation_id",eid},{"geometry_id",geometry},{"level",level}}}});
+  Json result={{"component_state","loading"},{"evaluation_id",eid},{"geometry_id",geometry},{"level",level}};
+  const auto status=job.at("state");if(status=="queued"||status=="running"||status=="cancelling")return result;
+  if(status!="succeeded"){result["component_state"]="error";result["error"]=job.value("error",Error("worker_failed","Component tessellation did not complete").json());return result;}
+  const auto content=job.at("result").dump(-1,' ',true);
+  if(content.size()>max_view_bytes)throw Error("limit_exceeded","Component exceeds its transfer budget");
+  const auto offset_json=arguments.value("offset",Json(0));if(!offset_json.is_number_integer()||offset_json<0||offset_json>content.size())throw Error("invalid_argument","Invalid component offset");const auto offset=offset_json.get<std::size_t>();
+  DocumentLock publication(store.root(),state.at("document_id").get<std::string>());WorkspaceLock lock(view_path(store.root(),id));const auto current=read_state(view_path(store.root(),id));
+  if(!same_view(current,state))throw Error("stale_selection","View changed during component transfer");check_display(store,current,eid);
+  const auto next=std::min(content.size(),offset+chunk_bytes);result["component_state"]="ready";result["data"]=content.substr(offset,next-offset);result["offset"]=offset;result["next_offset"]=next==content.size()?Json(nullptr):Json(next);result["total_bytes"]=content.size();return result;
 }
 Json measure_view(Service& service,Store& store,const Json& arguments,const std::string& slot="measurement"){
   const auto id=view_id(arguments),eid=text_field(arguments,"evaluation_id");identifier(eid);
@@ -619,7 +674,7 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
   auto state = snapshot(store.root(),id); check_display(store,state,eid);
   Json context = {{"revision",state.at("display").at("revision")},{"evaluation_id",eid},{"feature_id",state.at("display").at("feature_id")},{"selection",arguments.at("selection")}};
   if (!state.at("context").is_null() && state.at("context").at("evaluation_id") == eid) {
-    for (const auto* key : {"camera","prompt"}) if (state.at("context").contains(key)) context[key] = state.at("context").at(key);
+    for (const auto* key : {"camera","prompt","viewport"}) if (state.at("context").contains(key)) context[key] = state.at("context").at(key);
   }
   if (!arguments.at("selection").is_null()) {
     if (state.at("display").value("draft",false)) throw Error("stale_selection","Save or reset a motion preview before selecting geometry");
@@ -630,6 +685,7 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
     context["resolved_selection"] = service.call("cad_resolve_selection",pick);
   }
   if(arguments.contains("camera"))context["camera"]=validate_camera(arguments.at("camera"));
+  if(arguments.contains("viewport")){const auto& viewport=arguments.at("viewport");if(!viewport.is_array()||viewport.size()!=2)throw Error("invalid_argument","Viewport requires width and height");for(const auto& item:viewport)if(!item.is_number()||!std::isfinite(item.get<double>())||item<1||item>10000)throw Error("invalid_argument","Viewport dimensions must be between 1 and 10000");context["viewport"]=viewport;}
   if (arguments.contains("prompt")) {
     const auto prompt = text_field(arguments,"prompt");
     if (prompt.size() > 8192) throw Error("limit_exceeded","Viewer prompt exceeds 8192 UTF-8 bytes");
@@ -658,7 +714,7 @@ Json publish_context(Service& service, Store& store, const Json& arguments) {
     if(current.contains("section")&&!section_matches(current.at("section").at("query"),current.at("presentation"))){
       retired_section=current.at("section").at("job_id");current.erase("section");
     }
-    current["context"] = context; save_state(path,current); state = std::move(current);
+    current["context"] = context; accept_view_markup(current,arguments); save_state(path,current); state = std::move(current);
   }
   if(retired_section)cancel_view_job(service,*retired_section);
   return context_result(store,state);
@@ -908,6 +964,7 @@ Json artifact_status(const Json& state,const Json& arguments) {
     {"read_only",true},{"draft",false},{"saving",false},{"hidden_part_ids",Json::array()},
     {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
   if(!state.at("context").is_null()&&state.at("context").contains("camera"))result["camera"]=state.at("context").at("camera");
+  result["markup"]=view_markup(state);
   return result;
 }
 Json artifact_context(Store&,const Json& state) {
@@ -915,7 +972,7 @@ Json artifact_context(Store&,const Json& state) {
     {"evaluation_id",state.at("display").at("evaluation_id")},{"head_revision",nullptr},{"stale",false},{"selection",nullptr},
     {"read_only",true},{"artifact",state.at("artifact")},{"artifact_pose",state.value("artifact_pose",Json::object())},{"hidden_part_ids",Json::array()},
     {"presentation",state.value("presentation",default_presentation())},{"appearance",state.value("appearance",default_appearance())},{"render",state.value("render",normalize_render_settings())},{"presets",Json::array()},{"annotations",Json::array()},{"sequences",Json::array()},{"playback",nullptr}};
-  if(!state.at("context").is_null())result.update(state.at("context"));return result;
+  if(!state.at("context").is_null())result.update(state.at("context"));result["markup"]=view_markup(state);return result;
 }
 void artifact_display(const Json& state,const std::string& eid) {
   if(!state.value("read_only",false)||!state.at("document_id").is_null()||!state.contains("artifact")||!state.contains("display")||state.at("display").at("evaluation_id")!=eid)
@@ -960,7 +1017,7 @@ Json artifact_pose_action(Store&store,const Json&arguments){
 Json artifact_publish_context(Store& store,const Json& arguments) {
   const auto id=view_id(arguments),eid=text_field(arguments,"evaluation_id");identifier(eid);auto state=snapshot(store.root(),id);artifact_display(state,eid);
   Json context={{"evaluation_id",eid},{"selection",arguments.at("selection")}};
-  if(!state.at("context").is_null())for(const auto* key:{"camera","prompt"})if(state.at("context").contains(key))context[key]=state.at("context").at(key);
+  if(!state.at("context").is_null())for(const auto* key:{"camera","prompt","viewport"})if(state.at("context").contains(key))context[key]=state.at("context").at(key);
   if(!arguments.at("selection").is_null()) {
     const auto& selection=arguments.at("selection");fields(selection,{"review_sha256","kind","entity_id"});
     if(selection.at("review_sha256")!=state.at("artifact").at("review_sha256"))throw Error("stale_selection","Artifact pick belongs to a different review");
@@ -972,12 +1029,13 @@ Json artifact_publish_context(Store& store,const Json& arguments) {
     if(!found)throw Error("selection_missing","Artifact label is absent from the displayed review");
   }
   if(arguments.contains("camera"))context["camera"]=validate_camera(arguments.at("camera"));
+  if(arguments.contains("viewport")){const auto& viewport=arguments.at("viewport");if(!viewport.is_array()||viewport.size()!=2)throw Error("invalid_argument","Viewport requires width and height");for(const auto& item:viewport)if(!item.is_number()||!std::isfinite(item.get<double>())||item<1||item>10000)throw Error("invalid_argument","Viewport dimensions must be between 1 and 10000");context["viewport"]=viewport;}
   if(arguments.contains("prompt")){const auto prompt=text_field(arguments,"prompt");if(prompt.size()>8192)throw Error("limit_exceeded","Viewer prompt exceeds 8192 UTF-8 bytes");context["prompt"]=prompt;}
   context["updated_at_unix_ms"]=std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
   const auto path=view_path(store.root(),id);WorkspaceLock lock(path);auto current=read_state(path);if(!same_view(current,state))throw Error("stale_selection","View changed before artifact context could be saved");artifact_display(current,eid);
   if(arguments.contains("hidden_part_ids")&&!arguments.at("hidden_part_ids").empty())throw Error("invalid_argument","Artifact labels are not native assembly occurrences");
   current["presentation"]=validate_presentation(arguments.value("presentation",current.value("presentation",default_presentation())),current);
-  current["render"]=normalize_render_settings(arguments.value("render",current.value("render",Json::object())));current["appearance"]=validate_appearance(arguments.value("appearance",current.value("appearance",default_appearance())),current);current["context"]=context;save_state(path,current);return artifact_context(store,current);
+  current["render"]=normalize_render_settings(arguments.value("render",current.value("render",Json::object())));current["appearance"]=validate_appearance(arguments.value("appearance",current.value("appearance",default_appearance())),current);current["context"]=context;accept_view_markup(current,arguments);save_state(path,current);return artifact_context(store,current);
 }
 }
 
@@ -1030,12 +1088,14 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
   if (tool != "cad_viewer") throw Error("unknown_tool","Unknown live-view tool");
   const auto action = text_field(arguments,"action");
   if (action == "sync") {
-    fields(arguments,{"action","view_id"},{"known_evaluation_id"});
+    fields(arguments,{"action","view_id"},{"known_evaluation_id","progressive"});
+    if(arguments.contains("progressive")&&!arguments.at("progressive").is_boolean())throw Error("invalid_argument","progressive must be boolean");
     if (arguments.contains("known_evaluation_id")) identifier(text_field(arguments,"known_evaluation_id"));
     auto result=synchronize(store,arguments);
     if(result.at("state")=="ready")result["capture_requests"]=pending_view_screenshots(store,id);
     return result;
   }
+  if(action=="component"){fields(arguments,{"action","view_id","evaluation_id","geometry_id","level","request_id"},{"offset","cancel"});return component_chunk(store,arguments);}
   if(action=="capture")return submit_view_screenshot(store,arguments);
   if(action=="artifact_pose"){fields(arguments,{"action","view_id","evaluation_id","configuration"});return artifact_pose_action(store,arguments);}
   if (action == "mesh") {
@@ -1043,7 +1103,7 @@ Json live_call(Service& service, Store& store, const std::string& tool, const Js
   }
   if(snapshot(store.root(),id).value("read_only",false)&&action!="sync"&&action!="mesh"&&action!="context")throw Error("read_only_artifact","This operation requires a committed editable native document");
   if (action == "context") {
-    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids","presentation","appearance","render"});
+    fields(arguments,{"action","view_id","evaluation_id","selection"},{"camera","prompt","hidden_part_ids","presentation","appearance","render","markup","viewport"});
     if(snapshot(store.root(),id).value("read_only",false))return artifact_publish_context(store,arguments);
     return publish_context(service,store,arguments);
   }
@@ -1128,7 +1188,7 @@ Json live_tool_definitions() {
   auto saved_sequence=sequence;saved_sequence["properties"]["source"]=sequence_source_schema;saved_sequence["required"].push_back("source");
   const Json sequences={{"type","array"},{"maxItems",16},{"items",saved_sequence}};
   const Json playback=nullable(object({{"name",preset_name},{"time_s",{{"type","number"},{"minimum",0},{"maximum",3600}}},{"speed",{{"type","number"},{"minimum",0.1},{"maximum",4}}},{"loop",{{"type","boolean"}}},{"source",sequence_source_schema},{"state",{{"enum",{"unapplied","pending","displayed"}}}}}, {"name","time_s","speed","loop","source","state"}));
-  const Json edit_selector={{"oneOf",Json::array({Json{{"$ref","#/$defs/selector"}},Json{{"$ref","#/$defs/face_selector"}}})}};
+  const Json edit_selector={{"oneOf",Json::array({Json{{"$ref","#/$defs/edge_inspection_selector"}},Json{{"$ref","#/$defs/face_inspection_selector"}}})}};
   Json context = object({{"view_id",id},{"document_id",nullable(id)},{"revision",nullable(revision)},{"evaluation_id",nullable(id)},{"feature_id",nullable(id)},
     {"head_revision",nullable(revision)},{"stale",{{"type","boolean"}}},{"selection",selection},
     {"resolved_selection",object({{"reference",pick},{"geometry",{{"oneOf",Json::array({Json{{"$ref","#/$defs/face"}},Json{{"$ref","#/$defs/edge"}}})}}},
@@ -1137,6 +1197,8 @@ Json live_tool_definitions() {
     {"draft",{{"type","boolean"}}},{"preview_operations",operations}},
     {"view_id","document_id","revision","evaluation_id","feature_id","head_revision","stale","selection","hidden_part_ids","presentation","appearance","render","presets","annotations"});
   context["properties"]["read_only"]={{"const",true}};context["properties"]["artifact"]=artifact;context["properties"]["artifact_pose"]=artifact_pose;
+  context["properties"]["markup"]=markup_context_schema();
+  context["properties"]["viewport"]={{"type","array"},{"minItems",2},{"maxItems",2},{"items",{{"type","number"},{"minimum",1},{"maximum",10000}}}};
   const auto native_resolved=context["properties"]["resolved_selection"];context["properties"]["resolved_selection"]={{"oneOf",Json::array({native_resolved,object({{"reference",artifact_pick},{"geometry",{{"type","object"}}}},{"reference","geometry"})})}};
   Json identity = object({{"view_id",id},{"document_id",nullable(id)},{"resource_uri",{{"const",viewer_app_uri}}}}, {"view_id","document_id","resource_uri"});
   identity["properties"]["read_only"]={{"const",true}};identity["properties"]["artifact"]=artifact;
@@ -1153,7 +1215,9 @@ Json live_tool_definitions() {
     {"summary",summary},{"model",{{"$ref","#/$defs/model"}}},{"error",error},{"camera",camera},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()},{"presets",presets},{"annotations",annotations},{"sequences",sequences},{"playback",playback},{"measurement",measurement},{"section",section},
     {"draft",{{"type","boolean"}}},{"saving",{{"type","boolean"}}},{"preview_operations",operations}}, {"view_id","document_id","revision","state","changed"});
   sync["properties"]["read_only"]={{"const",true}};sync["properties"]["artifact"]=artifact;sync["properties"]["artifact_pose"]=artifact_pose;sync["properties"]["feature_id"]=nullable(id);sync["properties"]["summary"]={{"oneOf",Json::array({summary,Json{{"$ref","#/$defs/artifact_review_summary"}}})}};
+  sync["properties"]["markup"]=markup_context_schema();
   const Json offset = {{"type","integer"},{"minimum",0},{"maximum",max_view_bytes}};
+  sync["properties"]["progressive"]={{"const",true}};
   sync["properties"]["capture_requests"]={{"type","array"},{"maxItems",4},{"items",screenshot_request_schema()}};
   const Json chunk = object({{"data",{{"type","string"},{"maxLength",chunk_bytes}}},{"offset",offset},{"next_offset",nullable(offset)},{"total_bytes",offset}},
     {"data","offset","next_offset","total_bytes"});
@@ -1168,7 +1232,7 @@ Json live_tool_definitions() {
   open["_meta"]["openai/ui"] = {{"preferredModelDisplayMode","fullscreen"}};
   auto viewer = tool("cad_viewer","App-only view synchronization, frozen mesh chunks, assembly visibility and validated context. Motion controls preview native poses, reset, or explicitly save through atomic revision-checked edits. Declarative sequences sample joints/presentation without source edits.",
     {{"type","object"},{"oneOf",Json::array({
-      object({{"action",{{"const","sync"}}},{"view_id",id},{"known_evaluation_id",id}},{"action","view_id"}),
+      object({{"action",{{"const","sync"}}},{"view_id",id},{"known_evaluation_id",id},{"progressive",{{"type","boolean"}}}},{"action","view_id"}),
       object({{"action",{{"const","artifact_pose"}}},{"view_id",id},{"evaluation_id",id},{"configuration",artifact_pose}},{"action","view_id","evaluation_id","configuration"}),
       object({{"action",{{"const","mesh"}}},{"view_id",id},{"evaluation_id",id},{"offset",offset}},{"action","view_id","evaluation_id"}),
       object({{"action",{{"const","measure"}}},{"view_id",id},{"evaluation_id",id},{"query",nullable({{"$ref","#/$defs/measurement_distance_query"}})}},{"action","view_id","evaluation_id"}),
@@ -1188,9 +1252,12 @@ Json live_tool_definitions() {
       object({{"action",{{"const","sequence"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"const","options"}}},{"name",preset_name},{"speed",{{"type","number"},{"minimum",0.1},{"maximum",4}}},{"loop",{{"type","boolean"}}}}, {"action","view_id","evaluation_id","operation","name"}),
       object({{"action",{{"const","preset"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"const","list"}}}},{"action","view_id","evaluation_id","operation"}),
       object({{"action",{{"const","preset"}}},{"view_id",id},{"evaluation_id",id},{"operation",{{"enum",{"save","apply","delete"}}}},{"name",preset_name}},{"action","view_id","evaluation_id","operation","name"}),
-      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",selection},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()}},
+      object({{"action",{{"const","context"}}},{"view_id",id},{"evaluation_id",id},{"selection",selection},{"camera",camera},{"prompt",prompt},{"hidden_part_ids",hidden_parts},{"presentation",presentation},{"appearance",appearance},{"render",render_settings_schema()},{"markup",nullable(markup_scene_schema())},{"viewport",context.at("properties").at("viewport")}},
         {"action","view_id","evaluation_id","selection"})})}},
     {{"type","object"},{"oneOf",Json::array({sync,chunk,context,measure_status})}},false);
+  viewer["inputSchema"]["oneOf"].push_back(object({{"action",{{"const","component"}}},{"view_id",id},{"evaluation_id",id},{"geometry_id",id},{"level",{{"type","integer"},{"minimum",0},{"maximum",2}}},{"request_id",id},{"offset",offset},{"cancel",{{"type","boolean"}}}},{"action","view_id","evaluation_id","geometry_id","level","request_id"}));
+  auto component_properties=chunk.at("properties");component_properties["component_state"]={{"enum",{"loading","ready","error","cancelled"}}};component_properties["evaluation_id"]=id;component_properties["geometry_id"]=id;component_properties["level"]={{"type","integer"},{"minimum",0},{"maximum",2}};component_properties["error"]=error;
+  viewer["outputSchema"]["oneOf"].push_back(object(component_properties,{"component_state","evaluation_id","geometry_id","level"}));
   const auto capture_submit=screenshot_submit_schema();
   for(const auto& branch:capture_submit.at("oneOf"))viewer["inputSchema"]["oneOf"].push_back(branch);
   viewer["outputSchema"]["oneOf"].push_back(screenshot_reply_schema());

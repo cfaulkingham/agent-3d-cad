@@ -7,6 +7,106 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Progressive viewing, viewport markup and manufacturing — 2026-10-11
+
+Implemented and validated on `codex/progressive-cad-workflows`.
+[WORKFLOW_EXPANSION.md](WORKFLOW_EXPANSION.md) is the
+acceptance ledger for this increment.
+
+- Saved native views publish an exact source/occurrence manifest before display
+  tessellation, then build and transfer deduplicated component meshes through
+  bounded native jobs. Camera-dependent detail retains exact evaluated picks,
+  source-wide framing and the previous usable display. Source/cache, occurrence
+  staging and topology limits are explicit. See
+  [PROGRESSIVE_VIEWER.md](PROGRESSIVE_VIEWER.md).
+- The viewer supports pen, line, arrow, rectangle, ellipse and text overlays,
+  color/width, undo/redo and clear. Saved scenes bind to their source and display
+  frame; camera/aspect/source changes retire them. Save PNG, native screenshots
+  and the explicitly clicked, host-capability-gated image handoff include visible
+  markup and reject changed capture context. No source geometry or revision is
+  changed. See [MARKUP.md](MARKUP.md).
+- Four new product skills cover manufacturing review/redesign, source-qualified
+  slicing and printer-app handoff, SendCutSend preflight, and sourced STEP parts.
+  They include six measured orientation examples and source-backed process
+  guidance with unsupported checks identified. Native bundles contain five
+  product skills; Agent Plugins add setup as a sixth skill. Claude MCPB packages
+  carry the five workflow guides without claiming automatic skill discovery.
+- The [articulated gripper](../examples/articulated-gripper/README.md) contains
+  48 leaf solids from 19 sources, two coupled two-joint fingers and three named
+  poses. Its isolated acceptance runner passed **947 checks** for independent
+  forward transforms, 16 declared clearance pairs per pose, parameter edits and
+  rollback, BOM, exact STEP readback, GLB placements, rendered poses, dimensioned
+  drawings, six build orientations and a relocated editable manufacturing
+  package. Measured pad gaps are **51.600000 / 27.159273 / 3.768922 mm**.
+
+Final macOS arm64 verification against frozen production source:
+
+- The full Release build succeeded. All **86 CTest suites** passed across the
+  recorded runs: the full run passed 85 in **117.93 seconds**; the older artifact
+  controller fixture omitted the newly required markup module. Loading the same
+  shipped module corrected the fixture, and its rerun passed in **2.87 seconds**.
+  No production code or assertions were weakened between those runs.
+- Independent JSON Schema conformance passed **913 checks across 33 tools**.
+  Focused progressive schemas passed **64 checks**, including rejection of
+  parameter expressions/count changes in generated inspection suggestions while
+  authored selector inputs retain expression support. Discovery is **506,054
+  bytes**, below the unchanged **506,880-byte** catalog gate.
+- Official MCP SDK **2.3.0** passed **1,806 interoperability checks**. Primary
+  lifecycle: **33.812 / 26.829 seconds** wall/Python CPU; reopened legacy:
+  **4.714 / 4.118**. Native progressive passed **4,803 checks**, native markup
+  **64**, scheduler **47**, renderer **116**, live UI **380**, and markup UI
+  **16 scenario groups**. Poll-driven check totals vary between runs.
+- Actual Chromium/WebGL/native MCP tests loaded the **compiled viewer resource**:
+  **18 gripper/progressive/markup checks** and **23 markup workflow checks**
+  passed with zero browser exceptions. The first gripper frame had one of 48
+  occurrences; all 48 then loaded from 19 shared sources, with zero missing or
+  omitted geometry and **3,978,396 / 33,554,432** cache bytes. Refinement retained
+  the qualified selection and camera. Actual native screenshots contain the
+  gripper's arrow overlay; the six-tool markup fixture decoded **3,408 red
+  pixels** in a 1,100×744 PNG. Images were visually inspected. Local fake-host
+  image delivery is not actual desktop-host acceptance.
+- Actual native installation and Agent Plugins/Claude archive generation passed
+  complete inventory/hash/resource validation: **389 native/Claude files** and
+  **453 Plugin files**, plus their provenance/host manifests. Native/Claude
+  resolve **263** relative links and Plugin resolves **421**. The packaged binary
+  and packaged six-orientation data passed **110 manufacturing checks**.
+
+Final production SHA-256:
+`9f77147a5366a0a34c243768e9c92a12f7bf74b3e1ad2abf6abd430b3b031b49`.
+Raw executable SHA-256:
+`27150127e7eca9764bbf5c0a2485ac1a6914bd533ae6efd03dfbea69471e5288`.
+Installed bundle executable SHA-256 after local signing:
+`c1b4fc55bbbcbecec3e76ee2613602b034727b16699625ff773c1e06c0dcdcad`.
+This is ad-hoc bundle signing, not publisher signing/notarization.
+Build/package identities, artifact hashes and consolidated evidence are in
+`.local/evidence/workflow-expansion/completion.json`; logs and gripper browser
+captures are in that directory, with markup browser evidence under
+`.local/evidence/markup-workflow/browser/`. Verified local archives are under
+`.local/evidence/workflow-expansion/final-packaging/`.
+
+The reference exposed and reproduced three next priorities: collision-aware
+motion (the permitted -12-degree probe overlaps pads by **65.986 mm³**), closed
+kinematic loops (currently rejected), and scalable clearance (automatic all-pairs
+is capped at **23 leaves**). Its shipped poses stop at -10 degrees. Only 16 of
+1,128 possible pairs are checked at each saved pose; full assembly and swept
+clearance are not established. Actuator selection, force/transmission behavior,
+compliance and fabrication performance remain unmodeled.
+
+The 947-check reference evidence is
+`.local/evidence/workflow-expansion/gripper-final/evidence.json`, with model
+SHA-256 `f28ab8e6b755597c92f72572638fc71379d1559e1e6cc25afcdbc9230fc54fdc`
+and executable SHA-256
+`a54177a7656628bf29858ed3736f5fd1f04f6b7d2df9940f8e29a125fd7ab6c4`.
+Subsequent viewer/schema changes use the final build identity recorded with
+their own evidence; this reference result is not relabeled as a later run.
+
+Progressive viewing still requires the exact assembly/topology pass before its
+manifest. Motion drafts, external reviews and offline views retain monolithic
+meshes; occurrences share source transfers but expand into separate GPU buffers.
+Native/browser/package checks do not establish current-source cross-platform CI,
+hardware GPU behavior, signing/notarization or target-host install/reload/download
+acceptance. This increment has not replaced installed plugins or user projects.
+
 ## Local build cleanup — 2026-10-11
 
 At the user's request, removed 17 older package/staging directories, five bundle

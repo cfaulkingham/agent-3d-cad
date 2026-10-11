@@ -892,7 +892,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
 #endif
     WorkerWatchdog watchdog(limits);
     const auto& request = payload.at("request");
-    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot", "options", "topology", "mesh", "guides", "source_sha256", "review_sha256"});
+    fields(request, {"kind"}, {"feature_id", "format", "path", "drawing", "identity", "robot", "options", "topology", "mesh", "guides", "source_sha256", "review_sha256", "geometry_id", "level"});
     const auto kind = text_field(request, "kind");
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
@@ -956,6 +956,8 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     Json result=Json::object();
     if (kind == "topology" || kind == "view"||kind=="curve") result["topology"] = geometry().topology(feature);
     if (kind == "view") result["mesh"] = geometry().mesh(feature);
+    if (kind == "component_manifest") result=geometry().component_manifest(feature);
+    if (kind == "component_mesh") result["component_mesh"]=geometry().component_mesh(feature,text_field(request,"geometry_id"),request.at("level").get<int>());
     // Views the coordinator projected ahead of this worker, in other processes.
     std::map<std::size_t,Json> supplied;
     std::optional<Json> precomputed;
@@ -1049,7 +1051,7 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
       for(const auto& source:description.at("mesh_sources")) geometry().export_file(path/path_from_utf8(text_field(source,"path")),"stl",text_field(source,"feature_id"));
       result["robot"]=std::move(description);
     }
-    else if (kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing" && kind != "projection") throw Error("invalid_argument", "Unknown geometry worker request");
+    else if (kind != "component_manifest" && kind != "component_mesh" && kind != "summary" && kind != "topology" && kind != "view" && kind != "drawing" && kind != "projection") throw Error("invalid_argument", "Unknown geometry worker request");
     // A coordinator that projected views ahead of this worker also supplies the model
     // summary and publishes the geometry entry, so this worker need not rebuild it.
     // Current source provenance, BOM and named poses are document metadata.

@@ -10,7 +10,7 @@ import {inflateSync} from 'node:zlib';
 import vm from 'node:vm';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url)),workspace=mkdtempSync(join(tmpdir(),'cad-capture-flow-'));
-for(const name of ['renderer.js','state.js'])vm.runInThisContext(readFileSync(join(root,'web',name),'utf8'),{filename:name});
+for(const name of ['renderer.js','markup.js','state.js'])vm.runInThisContext(readFileSync(join(root,'web',name),'utf8'),{filename:name});
 const child=spawn(resolve(process.argv[2]),['serve','--workspace',workspace],{stdio:['pipe','pipe','pipe']});
 const pending=new Map();let next=1,stderr='',checks=0;
 const check=(v,m)=>{assert.ok(v,m);checks++;};

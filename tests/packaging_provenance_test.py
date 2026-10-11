@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
@@ -46,17 +47,21 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
         assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
         assert not output.exists()
     (bundle / 'unlisted').unlink()
-    skill = bundle / 'share/agent-3d-cad/skills/native-cad/SKILL.md'
-    skill.parent.mkdir(parents=True)
-    skill.write_text('Packaging fixture skill; not a runnable native binary.\n')
-    skill_entry = {'path': skill.relative_to(bundle).as_posix(), 'sha256': hashlib.sha256(skill.read_bytes()).hexdigest()}
-    save([entry, skill_entry])
+    # Exercise real entrypoints and their transitive resources through both
+    # packagers. The synthetic Mach-O bytes are inspected, never executed.
+    skill_root = bundle / 'share/agent-3d-cad/skills'
+    shutil.copytree(repo / 'skills', skill_root)
+    skill_entries = [{'path': path.relative_to(bundle).as_posix(), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                     for path in sorted(skill_root.rglob('*')) if path.is_file()]
+    save([entry, *skill_entries])
     output = root / 'valid.mcpb'
     result = run('make-mcpb.py', output)
     assert result.returncode == 0, result.stderr
     with zipfile.ZipFile(output) as archive:
         assert archive.read('bin/agent-3d-cad') == binary.read_bytes()
-        assert json.loads(archive.read('share/agent-3d-cad/provenance.json'))['files'] == [entry, skill_entry]
+        assert json.loads(archive.read('share/agent-3d-cad/provenance.json'))['files'] == [entry, *skill_entries]
+        for item in skill_entries:
+            assert archive.read(item['path']) == (bundle / item['path']).read_bytes()
         extension = json.loads(archive.read('manifest.json'))
         assert extension['_meta']['org.agentcad.native'] == {'system':'Darwin','architecture':'arm64','architecture_selection':'distribution_required'}
         assert extension['compatibility'] == {'platforms':['darwin']}
@@ -77,6 +82,9 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
             assert settings == {'type': 'stdio', 'command': './bin/agent-3d-cad', 'args': ['serve', '--default-workspace']}
             assert (plugin / 'skills/setup/SKILL.md').is_file()
             assert (plugin / 'skills/native-cad/SKILL.md').is_file()
+            for original in skill_root.rglob('*'):
+                if original.is_file():
+                    assert (plugin / 'skills' / original.relative_to(skill_root)).read_bytes() == original.read_bytes()
             catalog = json.loads((plugin / '.agents/plugins/marketplace.json').read_text())
             assert catalog['plugins'][0]['source'] == {'source': 'local', 'path': '.'}
             assert not (plugin / 'desktop').exists()

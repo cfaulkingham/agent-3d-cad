@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id), bridge = new CadBridge();
   let renderer = null, rendered = null, drawnEvaluation = null, contextTimer = null, libraryTimer = null, disposed = false, libraryBusy = false, rendererError = null;
   let sizeObserver = null, resizeTimer = null, partsKey = null, partsDocument = null, exporting = false, shell = null;
+  let markup = null, markupObserver = null, syncingMarkup = false, sendingMarkup = false;
   const fmt = value => Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 3 }) : '—';
   const status = text => { $('edit-status').textContent = text; };
   const fail = error => { $('view-error').hidden = false; $('view-error').textContent = error.message; };
@@ -265,15 +266,15 @@
     $('loading').hidden = !['connecting', 'loading'].includes(v.status);
     $('empty-state').hidden = !!v.payload || !['empty', 'connecting'].includes(v.status);
     const graphicsReady = !!v.payload && drawnEvaluation === v.payload.evaluation_id;
-    $('viewport').style.visibility = graphicsReady ? 'visible' : 'hidden';
+    $('viewport').style.visibility = drawnEvaluation ? 'visible' : 'hidden';
     $('save-image').disabled = !ready || !graphicsReady || !!v.preset_busy;
     $('update-status').textContent = ready ? (v.payload.read_only ? 'Captured external artifact · Read-only review' : v.payload.draft ? 'Unsaved pose · Save or reset to select geometry and export' : 'Following saved revisions') : v.error || (v.status === 'empty' ? 'Choose a model or ask your agent to create one' : 'Preparing current revision');
-    if (v.error || rendererError) fail(Error(v.error || rendererError));
+    if(ready&&v.progressive){const p=v.progressive;$('update-status').textContent=p.error?`Geometry detail: ${p.error}`:p.omitted_occurrences?`${p.omitted_occurrences} parts exceed the display budget · Zoom or hide parts to inspect them`:p.loading?`Loading detail · ${p.loaded} of ${p.total} unique components available`:p.pressure_limited_geometries?`Coarser detail retained for ${p.pressure_limited_geometries} components to fit the display budget`:`${p.loaded} components loaded · Detail follows the camera`;}
+    if (v.error || rendererError || v.progressive?.error) fail(Error(v.error || rendererError || `Some display geometry could not load: ${v.progressive.error}`));
     else if (v.status !== 'error') $('view-error').hidden = true;
     if (v.payload !== rendered && v.payload) {
       parameterControls(v); shell?.refresh();
       const same = v.payload.read_only?rendered?.artifact?.review_sha256===v.payload.artifact.review_sha256:!rendered?.read_only&&rendered?.document_id === v.payload.document_id;
-      drawnEvaluation = null;
       try {
         renderer?.setRender(v.render||{});
         renderer?.load(v.payload, { preserveCamera: same, hiddenPartIds: v.hidden_part_ids || [],presentation:v.presentation,appearance:v.appearance });
@@ -308,6 +309,7 @@
     measurementControls(v);
     inspect(v);
     shell?.refresh();
+    refreshMarkup(v);
     const s = v.payload?.summary;
     $('model-facts').textContent = v.payload?.read_only?`${s.triangles} triangles · ${s.curves} curves · Read-only`:s ? `${s.assembly ? `${s.assembly.parts.length} parts · ${(v.hidden_part_ids || []).length} hidden · ` : ''}${s.solid_count} solid${s.solid_count === 1 ? '' : 's'} · ${s.face_count} faces · ${s.edge_count} edges` : 'Ready when you are';
     const bounds=v.payload?.read_only?s?.bounds:s?.bounds_mm;
@@ -317,6 +319,33 @@
   }
   let captures=null;
   const state = new CadLiveState(bridge, update);
+  const markupButtons = () => [...$('markup-panel').querySelectorAll('[data-markup-tool]')];
+  function markupControls(v=state.value) {
+    if(!markup)return;
+    const context=markup.context(),drawing=markup.tool!=='navigate';
+    $('app').dataset.markupDrawing=String(drawing);
+    $('fit').disabled=drawing;
+    for(const button of $('standard-views').querySelectorAll('button'))button.disabled=drawing;
+    for(const button of markupButtons()){button.setAttribute('aria-pressed',String(button.dataset.markupTool===markup.tool));button.disabled=button.dataset.markupTool!=='navigate'&&(!markup.current||markup.stale);}
+    $('markup-undo').disabled=v.status!=='ready'||!context.can_undo;$('markup-redo').disabled=v.status!=='ready'||!context.can_redo;$('markup-clear').disabled=v.status!=='ready'||!context.item_count;
+    $('markup-attach').hidden=!bridge.capabilities?.message?.image;
+    $('markup-attach').disabled=sendingMarkup||!markup.active||!!markup.gesture||v.status!=='ready'||v.markup_unsaved;
+    $('markup-status').textContent=v.markup_error|| (markup.stale?'This sketch belongs to an earlier view. Restore that view or clear it before drawing.':v.markup_unsaved?'Saving markup…':context.item_count?`${context.item_count} marks saved with this view. ${drawing?'Draw over the model; choose Navigate to orbit.':'Ask your agent about the marks in the main chat.'}`:'Choose a tool, then draw over the model. Markup stays with this view.');
+  }
+  function refreshMarkup(v=state.value) {
+    $('markup-panel').hidden=!v.payload;
+    if(!markup||syncingMarkup)return;
+    syncingMarkup=true;
+    try{
+      const saved=v.markup?.scene??null;
+      if(!v.markup_unsaved&&!CadMarkup.sameScene(saved,markup.snapshot()))markup.restore(saved);
+      const rect=$('markup-overlay').getBoundingClientRect();
+      const available=v.status==='ready'&&drawnEvaluation===v.payload?.evaluation_id&&!v.playing&&!v.artifact_playing&&!v.preset_busy&&!v.sectioning&&(!v.section||v.section_status?.state==='succeeded');
+      markup.setBinding(available&&rect.width>0&&rect.height>0?CadMarkup.bind(v,renderer.getCamera(),rect.width,rect.height):null);
+      markup.resize();markupControls(v);
+    }catch(error){markup.setBinding(null);$('markup-status').textContent=error.message;}
+    finally{syncingMarkup=false;}
+  }
   const seekArtifact=()=>{state.pauseArtifact();state.artifactPose({animation:Number($('artifact-animation').value),time_seconds:Number($('artifact-time').value)}).catch(()=>{});};
   $('artifact-animation').onchange=()=>{state.pauseArtifact();$('artifact-time').value=0;seekArtifact();};
   $('artifact-time').oninput=()=>{$('artifact-time-value').textContent=`${fmt(Number($('artifact-time').value))} s`;};
@@ -637,12 +666,33 @@
         try{if(detail.endpoint){state.beginPointMeasurement(detail.endpoint);return;}if(!state.value.point_measurement.picking){if(!point)return;state.clearPointMeasurement();state.beginPointMeasurement('a');}state.acceptMeasurementPoint(point,detail.input||'surface');}catch(error){state.update({point_measurement:{...state.value.point_measurement,error:error.message}});}
       },
       onView(camera) { shell?.syncView(camera); },
-      onCamera(camera) { state.setCamera(camera); if (state.value.status === 'ready') saveSoon(); },
-      onError(error) { rendererError = error.message; drawnEvaluation = null; $('viewport').style.visibility = 'hidden'; fail(error); },
+      onCamera(camera) { state.setCamera(camera); refreshMarkup(); if (state.value.status === 'ready') saveSoon(); },
+      onError(error) { rendererError = error.message; if(!drawnEvaluation)$('viewport').style.visibility = 'hidden'; fail(error); },
       onReady(identity) { if (identity.evaluation_id === state.value.payload?.evaluation_id) { rendererError = null; drawnEvaluation = identity.evaluation_id; update(state.value); } }
     });
   } catch (error) { fail(error); }
-  shell = CadShell.mount({ $, bridge, renderer,onDisplayChange(settings){editRender(r=>Object.assign(r,settings));}, onToolChange(){state.stopPointMeasurement();},onMeasureToggle(){
+  try {
+    markup=new CadMarkup($('markup-overlay'),{
+      onChange(context){
+        if(syncingMarkup||disposed)return;
+        markupControls();
+        if(!CadMarkup.sameScene(context.scene,state.value.markup?.scene??null))state.setMarkup(context.scene).catch(error=>{$('markup-status').textContent=error.message;});
+      },
+      onGestureChange(active){state.update({markup_drawing:active});},
+      onModeChange(){markupControls();},
+      onError(error){$('markup-status').textContent=error.message;}
+    });
+    for(const button of markupButtons())button.onclick=()=>{try{state.stopPointMeasurement();refreshMarkup();markup.setTool(button.dataset.markupTool);}catch(error){$('markup-status').textContent=error.message;}};
+    const markupStyle=()=>{try{markup.setStyle({color:$('markup-color').value,width:Number($('markup-width').value)});}catch(error){$('markup-status').textContent=error.message;}};
+    $('markup-color').oninput=markupStyle;$('markup-width').onchange=markupStyle;
+    $('markup-text').oninput=()=>{try{markup.setText($('markup-text').value);}catch(error){markup.setText('');$('markup-status').textContent=error.message;}};
+    $('markup-clear').onclick=()=>markup.clear();$('markup-undo').onclick=()=>markup.undo();$('markup-redo').onclick=()=>markup.redo();
+    if(renderer){const capture=renderer.capture.bind(renderer);renderer.capture=(options={})=>capture({...options,paintOverlay(ctx,width,height){refreshMarkup();markup.paint(ctx,width,height);options.paintOverlay?.(ctx,width,height);}});}
+    const resize=()=>{const rect=$('viewport').getBoundingClientRect();if(rect.width>0&&rect.height>0){state.setViewportSize(rect.width,rect.height);state.setMarkupViewport([rect.width,rect.height]).catch(error=>{$('markup-status').textContent=error.message;});}refreshMarkup();};
+    if(typeof ResizeObserver!=='undefined'){markupObserver=new ResizeObserver(resize);markupObserver.observe($('viewport'));}resize();
+  }catch(error){$('markup-status').textContent=error.message;}
+  shell = CadShell.mount({ $, bridge, renderer,onDisplayChange(settings){editRender(r=>Object.assign(r,settings));}, onToolChange(tool){state.stopPointMeasurement();if(tool!=='markup-panel')markup?.setTool('navigate');},onMeasureToggle(){
+    markup?.setTool('navigate');
     const hadSelection = !!state.value.selection, m=state.value.point_measurement;
     if(m.active){state.stopPointMeasurement();return;}
     if(m.a&&m.b)state.update({selection:null,point_measurement:{...m,active:true,error:null}});
@@ -722,12 +772,25 @@
     finally { exporting = false; if (!disposed) update(state.value); }
   };
   $('fit').onclick = () => renderer?.reset();
+  async function captureCurrentView(){
+    if(state.value.status!=='ready'||!renderer)throw Error('Wait for the current model.');
+    const snapshot=state.snapshot();
+    await state.whenGeometryReady();await renderer.whenTexturesReady?.();
+    if(!state.matches(snapshot)||JSON.stringify(snapshot.selection)!==JSON.stringify(state.value.payload?.draft?null:state.value.selection?.reference||null)||JSON.stringify(renderer.getCamera())!==JSON.stringify(snapshot.camera)||rendererError||drawnEvaluation!==snapshot.evaluation_id||renderer.model?.identity.evaluation_id!==snapshot.evaluation_id||rendered!==state.value.payload||state.value.playing||state.value.artifact_playing||state.value.markup_drawing||state.value.sectioning||(state.value.section&&state.value.section_status?.state!=='succeeded'))throw Error('The view changed. Finish drawing or moving the model before capturing.');
+    return {image:renderer.capture(),snapshot};
+  }
+  $('markup-attach').onclick=async()=>{
+    if(sendingMarkup)return;
+    sendingMarkup=true;markupControls();
+    try{const {image,snapshot}=await captureCurrentView();await state.sendPrompt('Please inspect this marked-up CAD view. The marks identify the areas I want to discuss.',image,snapshot);$('markup-status').textContent='Marked-up image sent to the main chat.';}
+    catch(error){$('markup-status').textContent=error.message;}
+    finally{sendingMarkup=false;const message=$('markup-status').textContent;markupControls();$('markup-status').textContent=message;}
+  };
   $('save-image').onclick=async()=>{
     try{
       if(state.value.status!=='ready'||!renderer)return;
-      await renderer.whenTexturesReady?.();
-      const image=renderer.capture();if(typeof image!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image)||image.length>8*1024*1024)throw Error('The saved image exceeds the 8 MiB limit.');
-      const link=document.createElement('a');link.href=image;link.download=state.value.payload.read_only?`artifact-${state.value.payload.artifact.review_sha256.slice(0,12)}.png`:`${state.value.payload.document_id}-r${state.value.payload.revision}.png`;document.body.append(link);link.click();link.remove();status('PNG download requested. Your host may ask where to save it.');
+      const {image,snapshot}=await captureCurrentView();if(!state.matches(snapshot))throw Error('The displayed frame changed before saving.');if(typeof image!=='string'||!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(image)||image.length>8*1024*1024)throw Error('The saved image exceeds the 8 MiB limit.');
+      const link=document.createElement('a');link.href=image;link.download=snapshot.read_only?`artifact-${snapshot.artifact.review_sha256.slice(0,12)}.png`:`${snapshot.document_id}-r${snapshot.revision}.png`;document.body.append(link);link.click();link.remove();status('PNG download requested. Your host may ask where to save it.');
     }catch(error){status(error.message);}
   };
   $('clear-selection').onclick = () => { state.update({ selection: null }); publishSelection(); };
@@ -739,7 +802,7 @@
   };
   function dispose() {
     if (disposed) return; disposed = true; clearTimeout(contextTimer); clearInterval(libraryTimer); clearTimeout(resizeTimer); sizeObserver?.disconnect();
-    state.dispose(); shell?.dispose(); renderer?.destroy(); bridge.dispose();
+    markupObserver?.disconnect();markup?.destroy();state.dispose(); shell?.dispose(); renderer?.destroy(); bridge.dispose();
   }
   bridge.on('ui/resource-teardown', dispose); window.addEventListener('pagehide', dispose, { once: true });
   function hostLayout() {

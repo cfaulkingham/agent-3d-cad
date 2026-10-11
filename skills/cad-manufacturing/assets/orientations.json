@@ -1,0 +1,8 @@
+[
+  {"id":"z_plus","build_direction":[0,0,1],"x_direction":[1,0,0]},
+  {"id":"z_minus","build_direction":[0,0,-1],"x_direction":[1,0,0]},
+  {"id":"x_plus","build_direction":[1,0,0],"x_direction":[0,1,0]},
+  {"id":"x_minus","build_direction":[-1,0,0],"x_direction":[0,1,0]},
+  {"id":"y_plus","build_direction":[0,1,0],"x_direction":[1,0,0]},
+  {"id":"y_minus","build_direction":[0,-1,0],"x_direction":[1,0,0]}
+]

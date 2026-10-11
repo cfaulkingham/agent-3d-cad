@@ -1,0 +1,32 @@
+{
+  "document_id": "articulated_gripper",
+  "revision": 1,
+  "options": {
+    "drawings": false,
+    "formats": [
+      "step",
+      "stl"
+    ],
+    "notes": [
+      "Reference geometry only; unsourced hardware envelopes and no physical drive transmission.",
+      "Process and material choices require actual machine/vendor data before fabrication."
+    ],
+    "parts": [
+      {
+        "feature_id": "proximal",
+        "process": "fdm",
+        "material": "Polymer, TBD"
+      },
+      {
+        "feature_id": "distal",
+        "process": "fdm",
+        "material": "Polymer, TBD"
+      },
+      {
+        "feature_id": "base_plate",
+        "process": "cnc",
+        "material": "Aluminum, assumed"
+      }
+    ]
+  }
+}

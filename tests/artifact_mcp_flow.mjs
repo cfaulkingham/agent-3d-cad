@@ -9,7 +9,7 @@ import {createHash} from 'node:crypto';
 import vm from 'node:vm';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url)),exe=resolve(process.argv[2]),fixtures=resolve(process.argv[3]);
-for(const file of ['bridge.js','renderer.js','state.js'])vm.runInThisContext(readFileSync(join(root,'web',file),'utf8'),{filename:file});
+for(const file of ['bridge.js','renderer.js','markup.js','state.js'])vm.runInThisContext(readFileSync(join(root,'web',file),'utf8'),{filename:file});
 const temporary=realpathSync(mkdtempSync(join(tmpdir(),'cad-artifact-flow-'))),workspace=join(temporary,'workspace'),source=join(temporary,'source');mkdirSync(workspace);cpSync(fixtures,source,{recursive:true});
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const child=spawn(exe,['serve','--workspace',workspace],{stdio:['pipe','pipe','pipe']}),waiting=new Map();let next=1,stderr='',checks=0;
