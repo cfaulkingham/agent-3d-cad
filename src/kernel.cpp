@@ -2882,7 +2882,8 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     const auto& geometry = impl_->feature(feature_id);
     const auto& shape = geometry.shape;
     const auto solids = count(shape, TopAbs_SOLID);
-    GProp_GProps volume, area, linear;
+    GProp_GProps area, linear;
+    double volume_mass=0;gp_Pnt volume_center;
     // Integrate rational supports with Gauss-Kronrod, retaining adaptive Gauss
     // for polynomial/analytic faces. Applying GK to every face of a mixed body
     // makes polynomial offset walls prohibitively slow without improving them.
@@ -2916,42 +2917,78 @@ Json BuiltModel::summary(const std::string& feature_id) const {
         // makes symmetric moments vanish, so roundoff drives nested subdivision
         // to its iteration limit. A nearby exterior origin avoids that numerical
         // cancellation without changing the surface, quadrature or tolerance.
-        // GProps translates every signed face contribution to this same origin.
-        const gp_Pnt reference(2*lo.X()-hi.X(),2*lo.Y()-hi.Y(),2*lo.Z()-hi.Z());
-        GProp_GProps combined(reference);
-        for(TopExp_Explorer faces(shape,TopAbs_FACE);faces.More();faces.Next()) {
-          const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);
-          if(rational_support(BRep_Tool::Surface(face))) {
-            BRepGProp_VinertGK properties;properties.SetLocation(reference);
-            const double error=support.NaturalRestriction()?properties.Perform(support,1e-9,true,false):properties.Perform(support,domain,1e-9,true,false);
-            if(error<0||!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Rational surface volume integration failed");
-            combined.Add(properties);
-          } else {
-            BRepGProp_Vinert properties;properties.SetLocation(reference);
-            // Adaptive convergence measures mass, not every first moment.
-            // Plane faces bounded only by lines have polynomial integrands;
-            // fixed Gauss integrates their mass and moments exactly.
-            bool polynomial=BRepAdaptor_Surface(face).GetType()==GeomAbs_Plane;
-            for(TopExp_Explorer edge(face,TopAbs_EDGE);edge.More()&&polynomial;edge.Next())
-              polynomial=BRepAdaptor_Curve(TopoDS::Edge(edge.Current())).GetType()==GeomAbs_Line;
-            double error=0;
-            if(polynomial){if(support.NaturalRestriction())properties.Perform(support);else properties.Perform(support,domain);}
-            else error=support.NaturalRestriction()?properties.Perform(support,1e-9):properties.Perform(support,domain,1e-9);
-            if(!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Surface volume integration failed");
-            combined.Add(properties);
+        // Every signed face contribution uses this same origin.
+        bool conditioned=false;
+        for(int attempt=0;attempt<16&&!conditioned;++attempt) {
+          const double t=attempt/15.0;
+          const gp_Pnt reference(lo.X()-(hi.X()-lo.X())*(1+t),
+                                 lo.Y()-(hi.Y()-lo.Y())*(1+t*t),
+                                 lo.Z()-(hi.Z()-lo.Z())*(1+t*t*t));
+          // OCCT 8.0.1 GProp_GProps::Add normalizes after each addition and resets
+          // the first moment when an intermediate signed mass becomes zero. Face
+          // fluxes can cancel in mass without cancelling their first moments (a
+          // box already does this). Retain raw signed integrals and divide once,
+          // after the complete material volume has been validated. Compensated
+          // sums also limit cancellation loss in distant/mixed-size assemblies.
+          struct SignedSum {
+            double sum=0,correction=0;
+            void add(double value){const double next=sum+value;correction+=std::abs(sum)>=std::abs(value)?(sum-next)+value:(value-next)+sum;sum=next;}
+            double value() const{return sum+correction;}
+          };
+          std::array<SignedSum,4> integrals;
+          bool retry=false;
+          const auto accumulate=[&](const GProp_GProps& properties,const TopoDS_Face& face) {
+            const double mass=properties.Mass();const auto center=properties.CentreOfMass();
+            // OCCT Gauss discards a face's first moment below 1e-30 signed
+            // volume; GK reports zero below its roundoff threshold. A plane
+            // through the reference has identically zero point flux; otherwise retry the whole closed shape at a new common
+            // reference. Changing only this face's origin would change its flux.
+            if(std::abs(mass)<1e-30) {
+              const BRepAdaptor_Surface support(face);
+              if(support.GetType()!=GeomAbs_Plane||support.Plane().Distance(reference)!=0){retry=true;return;}
+            }
+            integrals[0].add(mass);
+            for(int axis=1;axis<=3;++axis){const double moment=mass*(center.Coord(axis)-reference.Coord(axis));if(!std::isfinite(moment))throw Error("kernel_failure","Surface volume integration produced invalid first moment");integrals[axis].add(moment);}
+          };
+          for(TopExp_Explorer faces(shape,TopAbs_FACE);faces.More();faces.Next()) {
+            const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);
+            if(rational_support(BRep_Tool::Surface(face))) {
+              BRepGProp_VinertGK properties;properties.SetLocation(reference);
+              const double error=support.NaturalRestriction()?properties.Perform(support,1e-9,true,false):properties.Perform(support,domain,1e-9,true,false);
+              if(error<0||!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Rational surface volume integration failed");
+              accumulate(properties,face);
+            } else {
+              BRepGProp_Vinert properties;properties.SetLocation(reference);
+              // Adaptive convergence measures mass, not every first moment.
+              // Plane faces bounded only by lines have polynomial integrands;
+              // fixed Gauss integrates their mass and moments exactly.
+              bool polynomial=BRepAdaptor_Surface(face).GetType()==GeomAbs_Plane;
+              for(TopExp_Explorer edge(face,TopAbs_EDGE);edge.More()&&polynomial;edge.Next())
+                polynomial=BRepAdaptor_Curve(TopoDS::Edge(edge.Current())).GetType()==GeomAbs_Line;
+              double error=0;
+              if(polynomial){if(support.NaturalRestriction())properties.Perform(support);else properties.Perform(support,domain);}
+              else error=support.NaturalRestriction()?properties.Perform(support,1e-9):properties.Perform(support,domain,1e-9);
+              if(!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Surface volume integration failed");
+              accumulate(properties,face);
+            }
+            if(retry)break;
           }
+          if(retry)continue;
+          volume_mass=integrals[0].value();
+          if(!std::isfinite(volume_mass)||volume_mass<=0)throw Error("kernel_failure","Solid volume integration produced invalid material mass");
+          for(int axis=1;axis<=3;++axis){const double coordinate=reference.Coord(axis)+integrals[axis].value()/volume_mass;if(!std::isfinite(coordinate))throw Error("kernel_failure","Solid volume integration produced invalid material center");volume_center.SetCoord(axis,coordinate);}
+          conditioned=true;
         }
-        volume=combined;
+        if(!conditioned)throw Error("kernel_failure","Cannot condition signed face moments at bounded exterior references");
       }
-      if(!std::isfinite(volume.Mass())||volume.Mass()<=0)throw Error("kernel_failure","Solid volume integration produced invalid material mass");
     }
     BRepGProp::SurfaceProperties(shape, area,1e-9);
     Bnd_Box box;
     BRepBndLib::AddOptimal(shape, box, false, false);
     const auto limits = box.Get();
     if(geometry.faces.IsEmpty())BRepGProp::LinearProperties(shape,linear);
-    const auto center = solids ? volume.CentreOfMass() : geometry.faces.IsEmpty()?linear.CentreOfMass():area.CentreOfMass();
-    Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume.Mass() : 0.0}, {"area_mm2", area.Mass()},
+    const auto center = solids ? volume_center : geometry.faces.IsEmpty()?linear.CentreOfMass():area.CentreOfMass();
+    Json result={{"valid", true}, {"units", "mm"}, {"volume_mm3", solids ? volume_mass : 0.0}, {"area_mm2", area.Mass()},
       {"center_of_mass_mm", {center.X(), center.Y(), center.Z()}},
       {"bounds_mm", {{"min", {limits.Xmin, limits.Ymin, limits.Zmin}}, {"max", {limits.Xmax, limits.Ymax, limits.Zmax}}}},
       {"solid_count", solids}, {"face_count", count(shape, TopAbs_FACE)},

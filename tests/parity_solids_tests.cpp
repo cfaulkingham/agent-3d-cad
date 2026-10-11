@@ -4,6 +4,7 @@
 #include "agentcad/cache.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/hash.hpp"
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <functional>
@@ -31,6 +32,57 @@ Json twist(Json angle=90,Json distance=10){return model(Json::array({sketch("pro
 Json ring(double outer,double inner){Json segments=Json::array({{{"type","arc"},{"start",{outer,0}},{"mid",{0,outer}},{"end",{-outer,0}}},{{"type","arc"},{"start",{-outer,0}},{"mid",{0,-outer}},{"end",{outer,0}}}});Json hole=Json::array({{{"type","arc"},{"start",{inner,0}},{"mid",{0,inner}},{"end",{-inner,0}}},{{"type","arc"},{"start",{-inner,0}},{"mid",{0,-inner}},{"end",{inner,0}}}});return {{"type","wire"},{"segments",segments},{"holes",Json::array({hole})}};}
 Json loft(){return model(Json::array({sketch("a",ring(5,2)),sketch("b",ring(8,3),{0,0,10}),{{"id","part"},{"type","loft"},{"sections",{"a","b"}},{"ruled",true}}}));}
 void lineage(const BuiltModel& built){auto topology=built.topology();std::set<std::string> results;for(const auto* key:{"faces","edges"})for(const auto& item:topology.at(key))results.insert(item.at("id"));require(!topology.at("provenance").at("history").empty(),"Operation records native history");for(const auto& item:topology.at("provenance").at("history"))if(item.contains("result_id"))require(results.contains(item.at("result_id")),"History result belongs to final feature");}
+void signed_moment_tests(){
+  Temp temp;set_worker_executable(path_from_utf8(CAD_SERVICE_EXE));Service service(temp.root);
+  const auto base=model(Json::array({{{"id","part"},{"type","box"},{"size",{10,20,30}}}}));
+  int fixture=0;
+  const auto verify=[&](const Json& intent,double mass,const std::array<double,3>& center,double tolerance=1e-9){
+    const auto check_summary=[&](const Json& summary){near(summary.at("volume_mm3"),mass,1e-5);for(int axis=0;axis<3;++axis)near(summary.at("center_of_mass_mm")[axis],center[axis],tolerance);};
+    BuiltModel built(intent);check_summary(built.summary());check_summary(BuiltModel(intent,built.snapshot()).summary());
+    const auto id="moments"+std::to_string(++fixture);check_summary(service.call("cad_create",{{"document_id",id},{"model",intent}}).at("summary"));
+    const auto exported=service.call("cad_export",{{"document_id",id},{"revision",1},{"format","step"}});
+    const auto imported=service.call("cad_import",{{"document_id",id+"step"},{"path",exported.at("path")}});check_summary(imported.at("summary"));
+    // The captured import remains sufficient after its original file disappears.
+    fs::remove(path_from_utf8(text_field(exported,"path")));check_summary(service.call("cad_query",{{"document_id",id+"step"},{"revision",1}}).at("summary"));
+  };
+  // At the exterior integration origin, the first three face fluxes of this
+  // box sum to zero mass but retain a nonzero first moment. Do not normalize
+  // the signed partial sums as though each prefix were a material solid.
+  verify(base,6000,{5,10,15});
+  auto transformed=base;transformed["features"].push_back({{"id","placed"},{"type","transform"},{"input","part"},{"translation",{123,-47,22}},
+    {"rotation",{{"origin",{0,0,0}},{"axis",{2,-1,3}},{"angle_deg",37}}}});transformed["output"]="placed";
+  // Independent Rodrigues rotation of the analytic box centroid.
+  const double angle=37*std::numbers::pi/180,c=std::cos(angle),sn=std::sin(angle),norm=std::sqrt(14.);
+  const std::array<double,3> axis={2/norm,-1/norm,3/norm},source={5,10,15},translation={123,-47,22};
+  const std::array<double,3> cross={axis[1]*source[2]-axis[2]*source[1],axis[2]*source[0]-axis[0]*source[2],axis[0]*source[1]-axis[1]*source[0]};
+  const double dot=axis[0]*source[0]+axis[1]*source[1]+axis[2]*source[2];std::array<double,3> center;
+  for(int k=0;k<3;++k)center[k]=translation[k]+c*source[k]+sn*cross[k]+(1-c)*dot*axis[k];
+  verify(transformed,6000,center);
+  // Cubic roof z=(2*x/3-1)^3 over z=-1, 0<=x<=3, 0<=y<=1.
+  // Its exact mass is 3, centroid (9/5,1/2,-3/7). The small second
+  // component conditions the bounding reference so the curved face's signed
+  // mass is zero on pinned OCCT 8.0.1, but its x first moment is nonzero.
+  // Other floating-point implementations may retain a near-zero face mass;
+  // both cases must preserve the same independently integrated solid moments.
+  const double marker_x=3.00000025-.1;
+  auto cancellation=model(Json::array({
+    Json{{"id","profile"},{"type","sketch"},{"workplane",{{"origin",{0,0,0}},{"normal",{0,-1,0}},{"x_direction",{1,0,0}}}},
+      {"profile",{{"type","wire"},{"segments",Json::array({Json{{"type","line"},{"start",{0,-1}},{"end",{3,-1}}},Json{{"type","line"},{"start",{3,-1}},{"end",{3,1}}},Json{{"type","bezier"},{"points",{{3,1},{2,-1},{1,1},{0,-1}}}}})}}}},
+    Json{{"id","wedge"},{"type","extrude"},{"input","profile"},{"distance",-1}},
+    Json{{"id","marker"},{"type","box"},{"origin",{marker_x,.3,-.5}},{"size",{.1,.1,.1}}},
+    Json{{"id","part"},{"type","assembly"},{"parts",Json::array({Json{{"id","roof"},{"input","wedge"}},Json{{"id","small"},{"input","marker"}}})}}
+  }));
+  const std::array<double,3> wedge_center={1.8,.5,-3./7},marker_center={marker_x+.05,.35,-.45};
+  for(int k=0;k<3;++k)center[k]=(3*wedge_center[k]+.001*marker_center[k])/3.001;
+  verify(cancellation,3.001,center,1e-7);
+  auto mixed=base;mixed["features"].push_back({{"id","cylinder"},{"type","cylinder"},{"radius",5},{"height",10}});
+  mixed["features"].push_back({{"id","ellipse"},{"type","scale"},{"input","cylinder"},{"factors",{2,3,.5}},{"origin",{1,2,3}}});
+  mixed["features"].push_back({{"id","mixed"},{"type","assembly"},{"parts",Json::array({Json{{"id","box"},{"input","part"}},Json{{"id","elliptic"},{"input","ellipse"},{"placement",{{"translation",{50,60,70}}}}}})}});mixed["output"]="mixed";
+  const double ellipse_mass=750*std::numbers::pi,total=6000+ellipse_mass;const std::array<double,3> ellipse_center={49,56,74};
+  for(int k=0;k<3;++k)center[k]=(6000*source[k]+ellipse_mass*ellipse_center[k])/total;
+  verify(mixed,total,center,1e-6);
+  std::reverse(mixed["features"].back()["parts"].begin(),mixed["features"].back()["parts"].end());verify(mixed,total,center,1e-6);
+}
 void scale_tests(){
   auto intent=scale();BuiltModel uniform(intent);near(uniform.summary().at("volume_mm3"),48000);near(uniform.summary().at("bounds_mm").at("min")[0],-1);near(uniform.summary().at("bounds_mm").at("max")[2],17);lineage(uniform);
   intent=scale({2,3,.5});BuiltModel anisotropic(intent);near(anisotropic.summary().at("volume_mm3"),18000);near(anisotropic.summary().at("bounds_mm").at("max")[1],86);lineage(anisotropic);
@@ -123,4 +175,4 @@ void lifecycle(){
   const auto before=feature_cache_keys(edit);edit["parameters"]["factor"]=3;const auto after=feature_cache_keys(edit);require(before.at("base")==after.at("base")&&before.at("part")!=after.at("part"),"Scale parameter selectively invalidates cache");
 }
 }
-int main(){try{configure_kernel_logging();scale_tests();draft_tests();chamfer_tests();twist_tests();loft_tests();lifecycle();edit_tests();std::cout<<checks<<" solid parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.json().dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
+int main(){try{configure_kernel_logging();signed_moment_tests();scale_tests();draft_tests();chamfer_tests();twist_tests();loft_tests();lifecycle();edit_tests();std::cout<<checks<<" solid parity checks passed\n";return 0;}catch(const Error& e){std::cerr<<e.json().dump()<<"\n";return 1;}catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
