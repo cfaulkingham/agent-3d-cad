@@ -31,7 +31,7 @@ import tempfile
 import time
 
 import anyio
-from jsonschema import Draft202012Validator
+from schema_validators import DiscoveredTools
 from mcp import Client, StdioServerParameters
 from slicer_contract_fixture import options as slice_options, verify_package
 
@@ -111,7 +111,7 @@ async def discover(client):
     require(client.server_capabilities.tools is not None, "Server did not advertise tools")
     require(client.server_capabilities.resources is not None, "Server did not advertise app resources")
     result = await client.list_tools()
-    definitions = {tool.name: tool for tool in result.tools}
+    definitions = DiscoveredTools({tool.name: tool for tool in result.tools})
     require({"cad_create", "cad_read", "cad_apply", "cad_export", "cad_bom", "cad_drawing", "cad_gcode_review", "cad_printer_handoff", "cad_slice", "cad_job", "cad_open", "cad_show", "cad_context", "cad_list", "cad_viewer"} <= definitions.keys(),
             "Required editable CAD tools were not discovered")
     require(result.next_cursor is None, "Unexpected unhandled tool pagination")
@@ -119,8 +119,8 @@ async def discover(client):
     schemas_cpu = time.process_time()
     for tool in definitions.values():
         require(tool.output_schema is not None, f"Missing output schema for {tool.name}")
-        Draft202012Validator.check_schema(tool.input_schema)
-        Draft202012Validator.check_schema(tool.output_schema)
+        definitions.validator(tool.name, "input_schema")
+        definitions.validator(tool.name, "output_schema")
         require(True, f"Input/output schemas valid for {tool.name}")
     print(f"MCP SDK discovery schemas: {len(definitions) * 2} checked; "
           f"{time.perf_counter() - schemas_started:.3f}s elapsed, "
@@ -145,8 +145,7 @@ async def discover(client):
 
 
 async def call(client, definitions, name, arguments, *, expected_error=None, timeout=15):
-    definition = definitions[name]
-    Draft202012Validator(definition.input_schema).validate(arguments)
+    definitions.validator(name, "input_schema").validate(arguments)
     # workspace_busy is the explicitly documented nonblocking publication/queue
     # contention result, not a reason to retry an arbitrary failed mutation.
     for attempt in range(100):
@@ -183,7 +182,7 @@ async def call(client, definitions, name, arguments, *, expected_error=None, tim
                 f"Expected structured {expected_error} error, received {value}")
     else:
         require(not result.is_error, f"{name} failed: {value}")
-        Draft202012Validator(definition.output_schema).validate(value)
+        definitions.validator(name, "output_schema").validate(value)
         require(True, f"{name} result satisfies independently discovered output schema")
     return value
 
@@ -263,14 +262,14 @@ async def smoke(executable, workspace):
         printer_done = await poll(client, definitions, printer_job["job_id"])
         require(printer_done["state"] == "succeeded", "SDK offline printer planning failed")
         printer = printer_done["result"]
-        Draft202012Validator(definitions["cad_printer_handoff"].output_schema).validate(printer)
+        definitions.validator("cad_printer_handoff", "output_schema").validate(printer)
         require(printer["readiness"]["status"] == "unknown" and not printer["hardware_contact"] and not printer["physical_print_started"], "SDK invented printer readiness or physical side effects")
         require(printer["source_association"] == "caller_declared_not_geometry_verified", "SDK hid the declared toolpath association")
         verified_printer = await call(client, definitions, "cad_printer_handoff", {"document_id": aid, "revision": 1, "action": "verify",
                        "plan_path": printer["path"], "expected_sha256": printer["sha256"]})
         require(verified_printer["readiness"] == printer["readiness"], "SDK verification changed unsupported firmware findings")
         unsupported_start = dict(printer_args, action="start")
-        require(not Draft202012Validator(definitions["cad_printer_handoff"].input_schema).is_valid(unsupported_start),
+        require(not definitions.validator("cad_printer_handoff", "input_schema").is_valid(unsupported_start),
                 "Printer schema admitted an unsupported physical start")
         rejected_start = await client.call_tool("cad_printer_handoff", unsupported_start)
         require(rejected_start.is_error and rejected_start.structured_content["error"]["code"] == "invalid_argument",
@@ -288,7 +287,7 @@ async def smoke(executable, workspace):
             sliced = await poll(client, definitions, slice_job["job_id"])
             require(sliced["state"] == "succeeded", "SDK native slicing process fixture failed")
             verify_package(sliced["result"])
-            Draft202012Validator(definitions["cad_slice"].output_schema).validate(sliced["result"])
+            definitions.validator("cad_slice", "output_schema").validate(sliced["result"])
             await call(client, definitions, "cad_slice", dict(running, expected_sha256="a" * 64), expected_error="artifact_mismatch")
         robot = await call(client, definitions, "cad_robot_export", {
             "document_id": aid, "revision": 1, "robot": {"format": "urdf", "joint_properties": []}})
@@ -498,11 +497,11 @@ async def smoke(executable, workspace):
                 "SDK show-all did not permit selecting the revealed part")
         await call(client, definitions, "cad_viewer", visibility_args)
         for invalid_hidden in ["cover", ["cover", "cover"], [1], ["cover"] * 65]:
-            require(not Draft202012Validator(definitions["cad_viewer"].input_schema).is_valid(
+            require(not definitions.validator("cad_viewer", "input_schema").is_valid(
                 {**visibility_args, "hidden_part_ids": invalid_hidden}), "SDK schema accepted malformed hidden-part IDs")
         for bad in [{"op": "set_bom_item", "assembly_id": "assembly", "item": {"input": "plate", "item_number": 1000}},
                     {"op": "set_bom_item", "assembly_id": "assembly", "item": {"input": "plate", "description": "line\n"}}]:
-            require(not Draft202012Validator(definitions["cad_apply"].input_schema).is_valid(
+            require(not definitions.validator("cad_apply", "input_schema").is_valid(
                 {"document_id": aid, "expected_revision": 3, "operations": [bad]}),
                 "SDK advertised schema accepts invalid BOM metadata")
         # Independent typed SDK calls exercise source-scoped native note metadata.
@@ -571,7 +570,7 @@ async def smoke(executable, workspace):
                 math.isclose(p[2], 5, abs_tol=1e-7) and
                 math.isclose(math.hypot(p[0], p[1]), curve["radius_mm"], abs_tol=1e-7)
                 for p in curve["endpoints_mm"]), "SDK section endpoints left their analytic circle")
-        section_validator = Draft202012Validator(definitions["cad_measure"].output_schema)
+        section_validator = definitions.validator("cad_measure", "output_schema")
         for field, value in [("closed", "yes"), ("endpoints_mm", [[5, 0, 5]]), ("unchecked_extra", True)]:
             malformed = json.loads(json.dumps(native_section))
             malformed["report"]["curves"][0][field] = value

@@ -255,6 +255,16 @@ and completed assertions. Run `python tests/mcp_sdk_deadline_tests.py` to check
 lifecycle cancellation and error attribution. Python is not part of the native
 distribution.
 
+The SDK smoke's independent Draft 2020-12 validators belong to each discovery
+session. They retain checked schema snapshots and pre-index local anchors and
+subresources once; every request and response still runs full instance validation.
+An exact schema-value change rebuilds its validator. The official SDK and its own
+validation remain untouched. This avoids repeatedly traversing large anchored
+schemas without increasing any deadline or caching validation outcomes. Run
+`python tests/sdk_schema_validation_tests.py` for full-error-tree equivalence,
+nested/dynamic references, schema refresh and repeated-anchor-work regressions;
+`python tests/mcp_sdk_deadline_tests.py` checks deadline attribution.
+
 For a final discovery inlining change, retain the native tool catalog immediately
 before that pass and compare it with the final catalog using
 `python tests/discovery_compaction_check.py before-tools.json after-tools.json --source .`

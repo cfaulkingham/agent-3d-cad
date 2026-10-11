@@ -111,6 +111,8 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_deadline_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/sdk_schema_validation_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/universal_runtime_contract_tests.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $exe = Join-Path $PWD 'build/agent-3d-cad'
