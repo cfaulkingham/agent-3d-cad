@@ -43,7 +43,7 @@ void signed_moment_tests(){
     const auto exported=service.call("cad_export",{{"document_id",id},{"revision",1},{"format","step"}});
     const auto imported=service.call("cad_import",{{"document_id",id+"step"},{"path",exported.at("path")}});check_summary(imported.at("summary"));
     // The captured import remains sufficient after its original file disappears.
-    fs::remove(path_from_utf8(text_field(exported,"path")));check_summary(service.call("cad_query",{{"document_id",id+"step"},{"revision",1}}).at("summary"));
+    fs::remove(path_from_utf8(text_field(exported,"path")));fs::remove_all(temp.root/".cache");check_summary(service.call("cad_query",{{"document_id",id+"step"},{"revision",1}}).at("summary"));
   };
   // At the exterior integration origin, the first three face fluxes of this
   // box sum to zero mass but retain a nonzero first moment. Do not normalize
@@ -75,6 +75,14 @@ void signed_moment_tests(){
   const std::array<double,3> wedge_center={1.8,.5,-3./7},marker_center={marker_x+.05,.35,-.45};
   for(int k=0;k<3;++k)center[k]=(3*wedge_center[k]+.001*marker_center[k])/3.001;
   verify(cancellation,3.001,center,1e-7);
+  // The fused variant keeps the cancellation inside one closed solid, so
+  // solid-local conditioning must still recover its lost face moments. The
+  // protruding box sliver is bounded by OCCT's modeling tolerance; integrate
+  // its authored dimensions independently instead of borrowing native results.
+  auto fused=cancellation;fused["features"].back()={{"id","part"},{"type","fuse"},{"left","wedge"},{"right","marker"}};
+  const double sliver=(marker_x+.1-3)*.1*.1;const std::array<double,3> sliver_center={(marker_x+.1+3)/2,.35,-.45};
+  for(int k=0;k<3;++k)center[k]=(3*wedge_center[k]+sliver*sliver_center[k])/(3+sliver);
+  verify(fused,3+sliver,center,1e-7);
   auto mixed=base;mixed["features"].push_back({{"id","cylinder"},{"type","cylinder"},{"radius",5},{"height",10}});
   mixed["features"].push_back({{"id","ellipse"},{"type","scale"},{"input","cylinder"},{"factors",{2,3,.5}},{"origin",{1,2,3}}});
   mixed["features"].push_back({{"id","mixed"},{"type","assembly"},{"parts",Json::array({Json{{"id","box"},{"input","part"}},Json{{"id","elliptic"},{"input","ellipse"},{"placement",{{"translation",{50,60,70}}}}}})}});mixed["output"]="mixed";
@@ -82,6 +90,22 @@ void signed_moment_tests(){
   for(int k=0;k<3;++k)center[k]=(6000*source[k]+ellipse_mass*ellipse_center[k])/total;
   verify(mixed,total,center,1e-6);
   std::reverse(mixed["features"].back()["parts"].begin(),mixed["features"].back()["parts"].end());verify(mixed,total,center,1e-6);
+  // An assembly-wide flux origin loses digits when tiny closed bodies are far
+  // apart. Each positive solid has exact local moments even at this separation.
+  auto separated=model(Json::array({Json{{"id","near"},{"type","box"},{"size",{1,1,1}}},
+    Json{{"id","far"},{"type","box"},{"origin",{1000000,0,0}},{"size",{1,1,1}}},
+    Json{{"id","part"},{"type","assembly"},{"parts",Json::array({Json{{"id","near"},{"input","near"}},Json{{"id","far"},{"input","far"}}})}}}));
+  verify(separated,2,{500000.5,.5,.5});
+  std::reverse(separated["features"].back()["parts"].begin(),separated["features"].back()["parts"].end());verify(separated,2,{500000.5,.5,.5});
+  separated["features"][1]["origin"]={1000000,-500000,250000};separated["features"][1]["size"]={2,3,4};
+  const std::array<double,3> far_center={1000001,-499998.5,250002};
+  for(int k=0;k<3;++k)center[k]=(.5+24*far_center[k])/25;
+  verify(separated,25,center);
+  separated["features"].push_back({{"id","placed"},{"type","assembly"},{"parts",Json::array({Json{{"id","pair"},{"input","part"},{"placement",{{"translation",{123,456,789}},{"rotation",{{"origin",{0,0,0}},{"axis",{0,0,1}},{"angle_deg",90}}}}}}})}});separated["output"]="placed";
+  verify(separated,25,{-center[1]+123,center[0]+456,center[2]+789});
+  // Coincident assembly instances remain two occurrences, not a fused union.
+  separated["features"]=Json::array({Json{{"id","cube"},{"type","box"},{"size",{1,1,1}}},Json{{"id","part"},{"type","assembly"},{"parts",Json::array({Json{{"id","first"},{"input","cube"}},Json{{"id","second"},{"input","cube"}}})}}});separated["output"]="part";
+  verify(separated,2,{.5,.5,.5});
 }
 void scale_tests(){
   auto intent=scale();BuiltModel uniform(intent);near(uniform.summary().at("volume_mm3"),48000);near(uniform.summary().at("bounds_mm").at("min")[0],-1);near(uniform.summary().at("bounds_mm").at("max")[2],17);lineage(uniform);

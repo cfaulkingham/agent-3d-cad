@@ -2888,6 +2888,13 @@ Json BuiltModel::summary(const std::string& feature_id) const {
     // for polynomial/analytic faces. Applying GK to every face of a mixed body
     // makes polynomial offset walls prohibitively slow without improving them.
     if (solids) {
+      struct SignedSum {
+        double sum=0,correction=0;
+        void add(double value){const double next=sum+value;correction+=std::abs(sum)>=std::abs(value)?(sum-next)+value:(value-next)+sum;sum=next;}
+        double value() const{return sum+correction;}
+      };
+      std::array<SignedSum,4> combined;
+      gp_Pnt aggregate_reference;bool has_reference=false;
       const auto rational_curve=[](occ::handle<Geom_Curve> curve) {
         for(int depth=0;depth<32;++depth) {
           if(const auto trimmed=occ::down_cast<Geom_TrimmedCurve>(curve)){curve=trimmed->BasisCurve();continue;}
@@ -2909,8 +2916,13 @@ Json BuiltModel::summary(const std::string& feature_id) const {
         }
         throw Error("kernel_failure","Surface support nesting exceeds the integration bound");
       };
-      {
-        Bnd_Box bounds;BRepBndLib::AddOptimal(shape,bounds,false,false);
+      // Signed face fluxes must share an origin within each closed solid.
+      // Independent solids can use different local origins: combining their
+      // positive material masses avoids cancellation across a distant assembly.
+      // Traverse occurrences, retaining overlapping/identical assembly instances.
+      for(TopExp_Explorer bodies(shape,TopAbs_SOLID);bodies.More();bodies.Next()) {
+        const auto& body=bodies.Current();double body_mass=0;gp_Pnt body_center;
+        Bnd_Box bounds;BRepBndLib::AddOptimal(body,bounds,false,false);
         const auto lo=bounds.CornerMin(),hi=bounds.CornerMax();
         // Keep the common integration origin outside the material bounds.
         // GK controls each first moment with a relative error: a centered origin
@@ -2930,19 +2942,14 @@ Json BuiltModel::summary(const std::string& feature_id) const {
           // box already does this). Retain raw signed integrals and divide once,
           // after the complete material volume has been validated. Compensated
           // sums also limit cancellation loss in distant/mixed-size assemblies.
-          struct SignedSum {
-            double sum=0,correction=0;
-            void add(double value){const double next=sum+value;correction+=std::abs(sum)>=std::abs(value)?(sum-next)+value:(value-next)+sum;sum=next;}
-            double value() const{return sum+correction;}
-          };
           std::array<SignedSum,4> integrals;
           bool retry=false;
           const auto accumulate=[&](const GProp_GProps& properties,const TopoDS_Face& face) {
             const double mass=properties.Mass();const auto center=properties.CentreOfMass();
             // OCCT Gauss discards a face's first moment below 1e-30 signed
             // volume; GK reports zero below its roundoff threshold. A plane
-            // through the reference has identically zero point flux; otherwise retry the whole closed shape at a new common
-            // reference. Changing only this face's origin would change its flux.
+            // through the reference has identically zero point flux; otherwise
+            // retry the closed solid at a new common reference. Changing only this face's origin would change its flux.
             if(std::abs(mass)<1e-30) {
               const BRepAdaptor_Surface support(face);
               if(support.GetType()!=GeomAbs_Plane||support.Plane().Distance(reference)!=0){retry=true;return;}
@@ -2950,7 +2957,7 @@ Json BuiltModel::summary(const std::string& feature_id) const {
             integrals[0].add(mass);
             for(int axis=1;axis<=3;++axis){const double moment=mass*(center.Coord(axis)-reference.Coord(axis));if(!std::isfinite(moment))throw Error("kernel_failure","Surface volume integration produced invalid first moment");integrals[axis].add(moment);}
           };
-          for(TopExp_Explorer faces(shape,TopAbs_FACE);faces.More();faces.Next()) {
+          for(TopExp_Explorer faces(body,TopAbs_FACE);faces.More();faces.Next()) {
             const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);
             if(rational_support(BRep_Tool::Surface(face))) {
               BRepGProp_VinertGK properties;properties.SetLocation(reference);
@@ -2974,13 +2981,19 @@ Json BuiltModel::summary(const std::string& feature_id) const {
             if(retry)break;
           }
           if(retry)continue;
-          volume_mass=integrals[0].value();
-          if(!std::isfinite(volume_mass)||volume_mass<=0)throw Error("kernel_failure","Solid volume integration produced invalid material mass");
-          for(int axis=1;axis<=3;++axis){const double coordinate=reference.Coord(axis)+integrals[axis].value()/volume_mass;if(!std::isfinite(coordinate))throw Error("kernel_failure","Solid volume integration produced invalid material center");volume_center.SetCoord(axis,coordinate);}
+          body_mass=integrals[0].value();
+          if(!std::isfinite(body_mass)||body_mass<=0)throw Error("kernel_failure","Solid volume integration produced invalid material mass");
+          for(int axis=1;axis<=3;++axis){const double coordinate=reference.Coord(axis)+integrals[axis].value()/body_mass;if(!std::isfinite(coordinate))throw Error("kernel_failure","Solid volume integration produced invalid material center");body_center.SetCoord(axis,coordinate);}
           conditioned=true;
         }
         if(!conditioned)throw Error("kernel_failure","Cannot condition signed face moments at bounded exterior references");
+        if(!has_reference){aggregate_reference=body_center;has_reference=true;}
+        combined[0].add(body_mass);
+        for(int axis=1;axis<=3;++axis){const double moment=body_mass*(body_center.Coord(axis)-aggregate_reference.Coord(axis));if(!std::isfinite(moment))throw Error("kernel_failure","Solid aggregate produced invalid first moment");combined[axis].add(moment);}
       }
+      volume_mass=combined[0].value();
+      if(!std::isfinite(volume_mass)||volume_mass<=0)throw Error("kernel_failure","Solid aggregate produced invalid material mass");
+      for(int axis=1;axis<=3;++axis){const double coordinate=aggregate_reference.Coord(axis)+combined[axis].value()/volume_mass;if(!std::isfinite(coordinate))throw Error("kernel_failure","Solid aggregate produced invalid material center");volume_center.SetCoord(axis,coordinate);}
     }
     BRepGProp::SurfaceProperties(shape, area,1e-9);
     Bnd_Box box;
