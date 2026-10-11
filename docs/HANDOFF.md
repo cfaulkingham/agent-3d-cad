@@ -10,11 +10,15 @@ signing/notarization and remaining host validation are still open.
 ## Comprehensive comparison gaps — integrated native source, 2026-10-10
 
 The user confirmed `/Applications/ChatGPT.app` as the acceptance target and
-authorized branch publication for CI. The tested checkpoint
-`59291ef81440c984c77d92d1c894ca8ad77c388e` is published on
-`codex/build123d-gap-closure`; the five-platform workflow
-[run 51](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38101187113)
-is executing. Its results remain pending. The preceding
+authorized branch publication for CI. Published checkpoint
+`59291ef81440c984c77d92d1c894ca8ad77c388e` completed
+[run 51](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38101187113):
+macOS arm64 passed all 73 native suites, SDK/schema checks and relocated packages.
+Linux x64 passed 72/73 suites; the cylindrical continuity fill exceeded the
+unchanged 1e-5 mm positional tolerance. Linux arm64 and Intel macOS passed 72/73,
+and Windows passed 71/72; that same suite exceeded its unchanged 120-second
+deadline. `.local/evidence/ci-run-51/summary.json` records all five outcomes.
+These results do not establish cross-platform acceptance. The preceding
 [run 50](https://github.com/cfaulkingham/agent-3d-cad/actions/runs/38099409378)
 at `1fe590a` completed with failures: Linux arm64 passed all 72 native suites then exceeded the SDK
 suite's aggregate 90-second timeout in the reopened session. macOS arm64 passed
@@ -31,7 +35,60 @@ acceptance.
 No host plugin registration has changed. The CI recipe now adds all nine
 actual-call modeling schema audits plus artifact SDK/flow schema validation on
 each native platform. YAML parsing and referenced-script inventory pass; the
-expanded recipe is now running in CI.
+expanded recipe passed on macOS arm64 in run 51; the other four lanes stopped
+at native surface validation before those downstream checks.
+
+The strict fill correction `b967c74` derives an exact candidate only when every
+boundary edge, exactly once and with consistent authored winding, describes the
+sole wire of the same explicitly selected copied support face. Interior point
+constraints must lie on that trimmed face. Partial wires, omitted holes, mixed
+supports and off-support points retain the general bounded solver. Every exact
+candidate passes the existing independent G0/G1/G2 checks and native validation.
+Both unchanged 1e-5 and 1e-6 mm cylinder requests independently measure
+1.10e-12 mm position, 1.49e-8 rad angle and 1.28e-13/mm curvature error after
+STEP. General off-plane G1/G2 bulges, reversed winding/signed thickening and a
+genuinely contradictory mixed-support rollback are independently covered.
+No public tolerance, worker budget, schema or test deadline changed.
+
+Integrated acceptance through `ee2aca1` passed **73/73 CTests in 308.54 seconds**,
+**1,435 official MCP SDK checks**, and **268 surface actual-call schema checks**.
+The raw executable SHA-256 is
+`879d77e3245c13c0b7cceeff032b6d348a94b478bfe0d2d95f55affdbe54fc19`.
+Source-helper fix `9265da3` reconfigured/relinked successfully and reproduced
+those exact runtime bytes and the same core cache identity. It fixes real CPack
+embedded installation, where `CMAKE_SCRIPT_MODE_FILE` does not reliably identify
+script execution: dependency tracking is now explicitly enabled only by the
+configure caller. **42 source/build identity checks**, including actual CPack,
+source drift, substituted binary and stale-stamp rejection, pass. Real native
+archive creation and relocated empty-PATH bundle smoke pass.
+Evidence is `.local/evidence/gap-closure-universal-ctest.log`,
+`.local/evidence/gap-closure-universal-sdk.log`,
+`.local/evidence/gap-closure-universal-surface-schema.log` and
+`.local/evidence/gap-closure-cpack-fix-build-identity.json`.
+The new deterministic production source identity is
+`ff37638d11e7ce89275bc6c8ab1627fd9e48f8685b0269ff82ad4cce2b2afb1c`;
+the stamp binds it to the successfully linked raw executable before loader
+relocation/signing. Final packaged bytes have a separate complete inventory.
+
+Fresh thin ARM packages at source `9265da3` are in
+`build/packages/gap-closure-universal-input/`. Actual CPack creation, plugin
+discovery/modeling/export smoke and **389 isolated lifecycle checks** pass.
+Packaged curve/sheet/surface schema audits pass **133/106/268 checks** with empty
+PATH; the developer assertions use the existing SDK-test Python environment,
+not an end-user package dependency. Archive hashes and executed logs are in
+`.local/evidence/package-audit-universal-input/results.json`.
+These are thin development packages, not universal acceptance.
+Independent archive validation passes all **96 production-input hashes**, linked
+build stamp, native code/data sections and SDK dependency identities after
+relocation/signing. Inventories are **366 native/Claude core entries; 417 plugin
+entries**; shared core bytes agree. All **171 Mach-O paths** strictly verify
+ad-hoc signatures and local loader closure. **22 SDK notices**, five idempotently
+patched HLR sources, **287 exact guide copies / 757 links** pass. The packaged
+executable SHA-256 is
+`12bbf4ffb29dd4f8ec4443582b151b8b66660669f4eaf529ca408bb190225634`.
+The audit is saved under
+`.local/evidence/package-audit-universal-input/independent-archive-audit/`.
+These local packages still require macOS 27.0 and have no publisher TeamIdentifier.
 
 Corrected stale packaged native-cad instructions that still limited lofts to one
 boundary and rejected contour trims/curved projection. The skill now documents
@@ -98,11 +155,30 @@ acceptance is implied.
 
 The completion audit confirmed that the Rosetta-aware terminal installer does
 not close the original host CPU-selection requirement. Current Mac host packages
-remain thin, and Claude records `architecture_selection: distribution_required`.
-A bounded universal composer, strict slice/provenance validation and same-package
-ARM64/Intel CI runtime checks are being implemented. Both input SDK/HLR records
-and embedded cache identities must remain distinct; a shared VERSION or Git
-revision alone cannot establish identical source bytes.
+in the published preview remain thin, and Claude records
+`architecture_selection: distribution_required`. The source-stamped universal
+composer, strict baseline ARM64/x64 Mach-O slice/provenance/loader validation and
+same-package ARM64/Intel CI runtime checks are now implemented. Common resource
+bytes, original per-CPU SDK/HLR records, successful-link source stamps and both
+embedded cache identities remain independently checked. Payloads survive `lipo`
+and ad-hoc re-signing; failed composition publishes no output. Local validation
+passes **41 synthetic header/provenance checks**, **51 real lipo/codesign fixture
+checks** and **11 runtime contract tests**. Synthetic and compiler fixture
+binaries are not executed as CAD acceptance. A thin development run passed
+7,369 runtime checks with actual ARM service/worker observation and explicitly
+records `universal_acceptance: false`. The workflow composes one set of three
+archives, executes those identical bytes on real ARM and Intel Mac runners, then
+requires source/artifact identities and distinct correct native cache keys.
+Actual universal CAD runtime and current five-platform acceptance await the next
+published CI checkpoint. No universal package release or host installation has
+been performed.
+Future preview draft releases now require the original 15 assets plus the
+accepted universal native TAR, plugin ZIP and Claude MCPB; the source manifest
+stays in CI evidence. The release recipe waits for actual universal runtime
+acceptance. **Seven release-manifest tests**, including each required-file
+omission and unexpected/symlink/directory rejection, pass; inert complete/missing
+workflow-staging fixtures preserve package bytes and reject missing inputs.
+No tag, draft release or public release was created.
 General hull/Gordon checks are bounded numerical
 verification, not global proofs for arbitrary curves. Exact rejection and
 public tolerances remain mandatory. The `d359331` test evidence below remains valid for its initial bounded
