@@ -33,6 +33,11 @@ CPUS = {'arm64': 0x0100000c, 'x64': 0x01000007}
 checks = 0
 
 
+def normalized_architecture(value):
+    return {'arm64': 'arm64', 'aarch64': 'arm64', 'x64': 'x64',
+            'x86_64': 'x64', 'amd64': 'x64', 'universal': 'universal'}.get(str(value).lower())
+
+
 def check(condition, message):
     global checks
     if not condition:
@@ -112,7 +117,7 @@ def extract(archive, destination):
 def verify_inventory(root, kind, thin, architecture, source_manifest):
     manifest = json.loads((root / MANIFEST).read_text())
     check(manifest['system'] == 'Darwin', 'Non-macOS package')
-    check(manifest['architecture'] == (architecture if thin else 'universal'), 'Wrong package architecture')
+    check(normalized_architecture(manifest['architecture']) == (architecture if thin else 'universal'), 'Wrong package architecture')
     entries = {item['path']: item['sha256'] for item in manifest['files']}
     check(len(entries) == len(manifest['files']), 'Duplicate inventory entry')
     excluded = {MANIFEST} | ({'manifest.json'} if kind == 'claude' else set())
@@ -307,7 +312,7 @@ def exercise(root, kind, base, architecture, provenance, archive):
         cache = cache_geometry(workspace, 4800)
         if provenance['architecture'] == 'universal':
             thin = json.loads((root/f'share/agent-3d-cad/universal-inputs/{architecture}/provenance.json').read_text())
-            check(thin['architecture'] == architecture, 'Wrong slice provenance')
+            check(normalized_architecture(thin['architecture']) == architecture, 'Wrong slice provenance')
             build_identity = thin['build_identity']['cache_identity']
         else:
             # Development harness check only: old thin packages predate the

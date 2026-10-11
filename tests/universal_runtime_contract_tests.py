@@ -42,6 +42,12 @@ class EvidenceGateTests(unittest.TestCase):
                 runtime.compare(args)
             return json.loads(args.report.read_text())
 
+    def test_original_cmake_architecture_spellings(self):
+        for original, expected in [('x86_64', 'x64'), ('AMD64', 'x64'), ('arm64', 'arm64'), ('aarch64', 'arm64')]:
+            self.assertEqual(runtime.normalized_architecture(original), expected)
+        self.assertIsNone(runtime.normalized_architecture('arm64e'))
+        self.assertIsNone(runtime.normalized_architecture('i386'))
+
     def test_matching_synthetic_gate_fixture(self):
         self.assertEqual(self.verify(self.reports())['status'], 'passed')
 
