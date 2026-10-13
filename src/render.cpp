@@ -186,11 +186,10 @@ void overlay(Raster& raster,const Json& item,std::size_t& text_count){
   const auto x0=static_cast<int>(std::max(0.,std::floor(lx))),x1=static_cast<int>(std::min(double(cam.w-1),std::floor(hx))),y0=static_cast<int>(std::max(0.,std::floor(ly))),y1=static_cast<int>(std::min(double(cam.h-1),std::floor(hy)));raster.budget.charge(static_cast<std::size_t>(x1-x0+1)*(y1-y0+1));
   for(int y=y0;y<=y1;++y)for(int x=x0;x<=x1;++x){raster.budget.step();const auto dx=x+.5-anchor.x,dy=y+.5-anchor.y,local_x=co*dx+si*dy-left,local_y=-si*dx+co*dy-upper;if(local_x<0||local_y<0||local_x>=total||local_y>=font_px)continue;const auto letter=static_cast<std::size_t>(local_x/advance);const auto col=static_cast<int>(std::floor((local_x-letter*advance)/(font_px/7*width))),row=static_cast<int>(std::floor(local_y/(font_px/7)));if(letter<lines[line].size()&&col>=0&&col<5&&row>=0&&row<7&&(font().at(lines[line][letter])[row]&(1u<<(4-col))))raster.paint(static_cast<std::size_t>(y)*cam.w+x,ink);}}
 }
-}
-RgbaImage render_rgba(const Json& payload,const Json& supplied,const std::function<void()>& check_cancel){
- fields(supplied,{}, {"width","height","camera","render","presentation","appearance","hidden_part_ids"});Budget budget{0,0,check_cancel};budget.check();
- auto dimension=[&](const char* key,int fallback){const auto value=supplied.value(key,Json(fallback));if(!value.is_number_integer()||value<16||value>2048)throw Error("invalid_argument","Native render dimensions must be integers from 16 to 2048");return value.get<std::uint32_t>();};const auto width=dimension("width",1024),height=dimension("height",768);if(static_cast<std::size_t>(width)*height>4*1024*1024)throw Error("limit_exceeded","Native render exceeds four million output pixels");
- const auto settings=normalize_render_settings(supplied.value("render",Json::object()));const auto model=scene(payload,supplied,settings,budget);const auto cam=camera(supplied,settings,model,width,height);Raster raster(width,height,budget,model,cam,settings);raster.floor();raster.shadows();const auto mode=settings.at("mode").get<std::string>();
+RgbaImage draw_scene(const Json& payload, const Scene& model, const Camera& cam,
+                     const Json& settings, Budget& budget) {
+ Raster raster(cam.w,cam.h,budget,model,cam,settings);raster.floor();raster.shadows();
+ const auto mode=settings.at("mode").get<std::string>();
  if(mode!="wireframe"){
   if(mode=="hidden_line")for(const auto& t:model.triangles)raster.triangle(t,true,false);
   else {std::vector<std::size_t> transparent;for(std::size_t i=0;i<model.triangles.size();++i){budget.step();const auto& t=model.triangles[i];const auto& m=model.materials[t.material];const bool alpha=m.alpha!="MASK"&&(m.opacity<1||(m.alpha=="BLEND"&&m.texture>=0)||t.v[0].c[3]<1||t.v[1].c[3]<1||t.v[2].c[3]<1);if(alpha)transparent.push_back(i);else raster.triangle(t,false,false);}auto depth=[&](std::size_t i){const auto& t=model.triangles[i];return dot(cam.b[2],add(add(t.v[0].p,t.v[1].p),t.v[2].p));};std::sort(transparent.begin(),transparent.end(),[&](auto a,auto b){return depth(a)>depth(b);});for(auto i:transparent){budget.step();raster.triangle(model.triangles[i],false,true);}}
@@ -202,8 +201,90 @@ RgbaImage render_rgba(const Json& payload,const Json& supplied,const std::functi
  }
  std::size_t text_count=0;for(const auto& item:model.overlays){budget.check();overlay(raster,item,text_count);}budget.check();return std::move(raster.image);
 }
+// Sheet labels live outside the scene viewport, using the same portable font.
+void label(RgbaImage& image, const std::string& text, unsigned x, unsigned y) {
+ for (char ch : text) {
+  const auto& glyph = font().at(ch);
+  for (unsigned row=0;row<7;++row) for(unsigned col=0;col<5;++col)
+   if(glyph[row] & (1u << (4-col))) {
+    const auto pixel=(static_cast<std::size_t>(y+row)*image.width+x+col)*4;
+    for(unsigned k=0;k<3;++k) image.pixels[pixel+k]=45;
+   }
+  x+=6;
+ }
+}
+RgbaImage render_image(const Json& payload,const Json& supplied,const std::function<void()>& check_cancel,Json* sheet) {
+ fields(supplied,{}, {"width","height","view","camera","render","presentation","appearance","hidden_part_ids"});
+ Budget budget{0,0,check_cancel};budget.check();
+ auto dimension=[&](const char* key,int fallback){const auto value=supplied.value(key,Json(fallback));if(!value.is_number_integer()||value<16||value>2048)throw Error("invalid_argument","Native render dimensions must be integers from 16 to 2048");return value.get<std::uint32_t>();};
+ const auto width=dimension("width",1024),height=dimension("height",768);
+ if(static_cast<std::size_t>(width)*height>4*1024*1024)throw Error("limit_exceeded","Native render exceeds four million output pixels");
+ const bool is_sheet=render_is_sheet(supplied);
+ auto settings=normalize_render_settings(supplied.value("render",Json::object()));
+ if(is_sheet) settings["projection"]="orthographic";
+ const auto model=scene(payload,supplied,settings,budget);
+ if(!is_sheet) return draw_scene(payload,model,camera(supplied,settings,model,width,height),settings,budget);
+
+ // Two rows in reading order. Reserve a header in each tile; fit all displayed
+ // bounds in every viewport, then use the smallest scale for all four cameras.
+ const std::array<std::string,4> names={"front","top","right","iso"};
+ const std::array<std::array<double,2>,4> angles={{{0,0},{0,pi/2},{-pi/2,0},{-pi/4,std::asin(1/std::sqrt(3.))}}};
+ std::array<Camera,4> cameras;
+ Json views=Json::array();
+ double scale=INFINITY;
+ const unsigned header=20;
+ const auto bounds=model.displayed.valid()?model.displayed:Bounds{{-.5,-.5,-.5},{.5,.5,.5}};
+ for(unsigned i=0;i<4;++i) {
+  const auto x=i%2?width/2:0, y=i/2?height/2:0;
+  const auto w=(i%2?width-width/2:width/2),h=(i/2?height-height/2:height/2)-header;
+  Json pose={{"camera",{{"yaw",angles[i][0]},{"pitch",angles[i][1]},{"zoom",1},{"pan",{0,0}}}}};
+  auto cam=camera(pose,settings,model,w,h);
+  double lo_x=INFINITY,hi_x=-INFINITY,lo_y=INFINITY,hi_y=-INFINITY;
+  for(unsigned corner=0;corner<8;++corner) {
+   V point;for(unsigned k=0;k<3;++k)point[k]=(corner&(1u<<k))?bounds.hi[k]:bounds.lo[k];
+   const auto u=dot(cam.b[0],point),v=dot(cam.b[1],point);
+   lo_x=std::min(lo_x,u);hi_x=std::max(hi_x,u);lo_y=std::min(lo_y,v);hi_y=std::max(hi_y,v);
+  }
+  scale=std::min({scale,(w-16.)/std::max(1e-9,hi_x-lo_x),(h-16.)/std::max(1e-9,hi_y-lo_y)});
+  // Hold projected centers until the shared scale has been determined.
+  cam.px=-(lo_x+hi_x)*.5;cam.py=(lo_y+hi_y)*.5;cameras[i]=cam;
+  views.push_back({{"name",names[i]},{"x",x},{"y",y+header},{"width",w},{"height",h}});
+ }
+ RgbaImage image{width,height,std::vector<unsigned char>(static_cast<std::size_t>(width)*height*4,255)};
+ for(unsigned i=0;i<4;++i) {
+  budget.check();auto& cam=cameras[i];cam.scale=scale;cam.px*=scale;cam.py*=scale;
+  const auto tile=draw_scene(payload,model,cam,settings,budget);
+  const auto x=views[i].at("x").get<unsigned>(),y=views[i].at("y").get<unsigned>();
+  budget.charge(static_cast<std::size_t>(tile.width)*tile.height);
+  for(unsigned row=0;row<tile.height;++row) {
+   budget.check();std::copy_n(tile.pixels.begin()+static_cast<std::size_t>(row)*tile.width*4,tile.width*4,
+    image.pixels.begin()+(static_cast<std::size_t>(y+row)*width+x)*4);
+  }
+  label(image,names[i],x+8,y-header+6);
+ }
+ for(unsigned y=0;y<height;++y)for(unsigned k=0;k<3;++k)image.pixels[(static_cast<std::size_t>(y)*width+width/2)*4+k]=210;
+ for(unsigned x=0;x<width;++x)for(unsigned k=0;k<3;++k)image.pixels[(static_cast<std::size_t>(height/2)*width+x)*4+k]=210;
+ if(sheet)*sheet={{"projection","orthographic"},{"pixels_per_mm",scale/model.span},{"views",views}};
+ budget.check();return image;
+}
+}
+bool render_is_sheet(const Json& settings) {
+ const auto view=settings.value("view",Json("single"));
+ if(view!="single"&&view!="sheet")throw Error("invalid_argument","Render view must be single or sheet");
+ if(view!="sheet")return false;
+ if(settings.contains("camera"))throw Error("invalid_argument","Sheet view uses fixed cameras; omit camera");
+ if(settings.value("render",Json::object()).value("projection",Json("orthographic"))!="orthographic")
+  throw Error("invalid_argument","Sheet view requires orthographic projection");
+ for(const auto* key:{"width","height"})if(settings.contains(key)&&(!settings.at(key).is_number_integer()||settings.at(key)<128||settings.at(key)>2048))
+  throw Error("invalid_argument","Sheet dimensions must be integers from 128 to 2048 pixels");
+ return true;
+}
+RgbaImage render_rgba(const Json& payload,const Json& supplied,const std::function<void()>& check_cancel) {
+ return render_image(payload,supplied,check_cancel,nullptr);
+}
 Json render_png(const Json& payload,const Json& supplied,const fs::path& destination,const std::function<void()>& check_cancel){
- const auto image=render_rgba(payload,supplied,check_cancel);const auto bytes=encode_png(image);if(bytes.size()>16*1024*1024)throw Error("limit_exceeded","Native rendered PNG exceeds 16 MiB");if(check_cancel)check_cancel();atomic_text(destination,bytes,16*1024*1024);
- return {{"width",image.width},{"height",image.height},{"bytes",bytes.size()},{"sha256",sha256(bytes)},{"method","native_cpu_rasterizer"}};
+ Json sheet;const auto image=render_image(payload,supplied,check_cancel,&sheet);const auto bytes=encode_png(image);if(bytes.size()>16*1024*1024)throw Error("limit_exceeded","Native rendered PNG exceeds 16 MiB");if(check_cancel)check_cancel();atomic_text(destination,bytes,16*1024*1024);
+ Json result={{"width",image.width},{"height",image.height},{"bytes",bytes.size()},{"sha256",sha256(bytes)},{"method","native_cpu_rasterizer"}};
+ if(!sheet.is_null())result["sheet"]=std::move(sheet);return result;
 }
 }

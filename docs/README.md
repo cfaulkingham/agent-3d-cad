@@ -63,6 +63,7 @@ paths may need regeneration.
 - [1.0 host acceptance](RELEASE_1_0.md), [release notes](RELEASE_NOTES.md) and
   [milestone roadmap](ROADMAP.md)
 - [Product and architecture invariants](SPEC.md), [tool/document protocol](PROTOCOL.md)
+- [Searchable native help and verification examples](NATIVE_HELP.md)
   and [agent instructions](../AGENTS.md)
 - [Development](DEVELOPMENT.md), [distribution](DISTRIBUTION.md) and
   [dependency pins and provenance](DEPENDENCIES.md)

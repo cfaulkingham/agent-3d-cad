@@ -5,6 +5,7 @@
 #include "agentcad/image.hpp"
 #include "agentcad/jobs.hpp"
 #include "agentcad/model.hpp"
+#include "agentcad/render.hpp"
 #include "agentcad/render_settings.hpp"
 #include "agentcad/visual.hpp"
 #include <random>
@@ -31,13 +32,33 @@ Json settings_schema(){
   const auto unit=vector(3,-1,1);
   auto clip=object({{"normal",unit},{"offset_mm",{{"type","number"},{"minimum",-1e12},{"maximum",1e12}}},{"keep",{{"enum",{"positive","negative"}}}}},{"normal","offset_mm","keep"});
   auto explode=object({{"distance_mm",{{"type","number"},{"minimum",0},{"maximum",1e6}}},{"directions",{{"type","array"},{"maxItems",1024},{"items",object({{"part_id",occurrence_schema()},{"direction",unit}},{"part_id","direction"})}}}},{"distance_mm","directions"});
-  return object({
+  auto schema=object({
     {"width",{{"type","integer"},{"minimum",16},{"maximum",2048}}},{"height",{{"type","integer"},{"minimum",16},{"maximum",2048}}},
+    {"view",{{"enum",{"single","sheet"}}}},
     {"camera",object({{"yaw",{{"type","number"},{"minimum",-1e6},{"maximum",1e6}}},{"pitch",{{"type","number"},{"minimum",-1e6},{"maximum",1e6}}},{"zoom",{{"type","number"},{"minimum",.01},{"maximum",1000}}},{"pan",vector(2,-1e6,1e6)}},{"yaw","pitch","zoom","pan"})},
     {"render",render_settings_schema()},{"appearance",visual_appearance_schema()},
     {"presentation",object({{"clip",{{"anyOf",Json::array({Json{{"type","null"}},clip})}}},{"explode",explode}},{"clip","explode"})},
     {"hidden_part_ids",{{"type","array"},{"maxItems",1024},{"uniqueItems",true},{"items",occurrence_schema()}}}
   });
+  schema["allOf"]=Json::array({Json{
+    {"if",{{"required",{"view"}},{"properties",{{"view",{{"const","sheet"}}}}}}},
+    {"then",{{"not",{{"required",{"camera"}}}},{"properties",{
+      {"width",{{"minimum",128}}},{"height",{{"minimum",128}}},
+      {"render",{{"properties",{{"projection",{{"const","orthographic"}}}}}}}
+    }}}}
+  }});
+  return schema;
+}
+Json sheet_schema(){
+  auto dimension=Json{{"type","integer"},{"minimum",1},{"maximum",2048}};
+  auto coordinate=Json{{"type","integer"},{"minimum",0},{"maximum",2048}};
+  auto view=object({{"name",{{"enum",{"front","top","right","iso"}}}},
+    {"x",coordinate},{"y",coordinate},{"width",dimension},{"height",dimension}},
+    {"name","x","y","width","height"});
+  return object({{"projection",{{"const","orthographic"}}},
+    {"pixels_per_mm",{{"type","number"},{"exclusiveMinimum",0}}},
+    {"views",{{"type","array"},{"items",view},{"minItems",4},{"maxItems",4}}}},
+    {"projection","pixels_per_mm","views"});
 }
 std::string token(){std::random_device random;return "render_"+std::to_string(random())+"_"+std::to_string(random());}
 }
@@ -57,7 +78,7 @@ Json render_tool_definition(){
   Json gif_condition={{"properties",{{"format",{{"const","gif"}}}}},{"required",{"format"}}};
   Json gif_rules={{"required",{"animation"}},{"properties",{
     {"source",{{"required",{"document_id"}}}},
-    {"settings",{{"not",{{"required",{"presentation"}}}}}}
+    {"settings",{{"not",{{"required",{"presentation"}}}},{"properties",{{"view",{{"const","single"}}}}}}}
   }}};
   Json animation_condition={{"anyOf",Json::array({Json{{"required",{"animation"}}},Json{{"required",{"loop"}}}})}};
   Json animation_rules={{"required",{"format"}},{"properties",{{"format",{{"const","gif"}}}}}};
@@ -67,6 +88,7 @@ Json render_tool_definition(){
     {"source",{{"oneOf",Json::array({native,external})}}},{"format",{{"enum",{"png","gif"}}}},{"path",{{"type","string"}}},
     {"width",{{"type","integer"},{"minimum",16},{"maximum",2048}}},{"height",{{"type","integer"},{"minimum",16},{"maximum",2048}}},
     {"bytes",{{"type","integer"},{"minimum",1},{"maximum",gif_limit}}},{"sha256",hash()},{"method",{{"const","native_cpu_rasterizer"}}},
+    {"sheet",sheet_schema()},
     {"frame_count",{{"type","integer"},{"minimum",2},{"maximum",256}}},{"duration_s",{{"type","number"},{"exclusiveMinimum",0},{"maximum",3600}}},
     {"loop",{{"type","boolean"}}},{"palette",{{"const","RGB 3-3-2; alpha composited onto white"}}},
     {"image",object({{"type",{{"const","image"}}},{"mimeType",{{"enum",{"image/png","image/gif"}}}},{"data",{{"type","string"},{"maxLength",(inline_limit+2)/3*4}}}},{"type","mimeType","data"})},
@@ -76,7 +98,7 @@ Json render_tool_definition(){
   },{"source","format","path","width","height","bytes","sha256","method"});
   output["allOf"]=Json::array({Json{{"if",gif_condition},{"then",{{"required",{"frame_count","duration_s","loop","palette"}},{"properties",{{"source",{{"required",{"sequence_sha256","sequence_name","sample_rate_hz"}}}}}}}}}});
   output["$defs"]=defs;
-  return {{"name","cad_render"},{"description","Render a source-qualified native revision or verified external review to PNG without an open viewer. Native saved sequences also render to GIF (2–256 frames, 64 MiB); sequence presentation owns clipping and exploded placement. Shared camera, render modes, materials and visibility are explicit. A bounded native worker returns image content up to 2 MiB plus an independent file. No model revision changes."},
+  return {{"name","cad_render"},{"description","Render a source-qualified native revision or verified external review to PNG without an open viewer. settings.view:sheet makes labeled front/top/right/iso views at one fitted orthographic scale; omit camera, use PNG and at least 128x128. Native saved sequences also render to GIF (2–256 frames, 64 MiB); sequence presentation owns clipping and exploded placement. A bounded native worker returns image content up to 2 MiB plus an independent file. No model revision changes."},
     {"inputSchema",input},{"outputSchema",output},{"annotations",{{"readOnlyHint",true},{"destructiveHint",false},{"openWorldHint",false}}}};
 }
 void validate_render_arguments(const Json& args){
@@ -103,10 +125,11 @@ void validate_render_arguments(const Json& args){
     if(source.contains("configuration")&&!source.at("configuration").is_object())throw Error("invalid_argument","External pose configuration must be an object");
   }
   const auto settings=args.value("settings",Json::object());
-  fields(settings,{},{"width","height","camera","render","presentation","appearance","hidden_part_ids"});
+  fields(settings,{},{"width","height","view","camera","render","presentation","appearance","hidden_part_ids"});
   for(const auto* key:{"width","height"})if(settings.contains(key)&&(!settings.at(key).is_number_integer()||settings.at(key)<16||settings.at(key)>2048))
     throw Error("invalid_argument","Headless image dimensions must be 16 to 2048 pixels");
   normalize_render_settings(settings.value("render",Json::object()));
+  if(render_is_sheet(settings)&&format!="png")throw Error("invalid_argument","Sheet view requires PNG output");
 }
 Json render_visual_output(Store& store,const Json& args){
   validate_render_arguments(args);
@@ -156,6 +179,7 @@ Json render_visual_output(Store& store,const Json& args){
     if(width!=generated.at("width")||height!=generated.at("height")||bytes.size()!=generated.at("bytes")||sha256(bytes)!=text_field(generated,"sha256"))
       throw Error("artifact_mismatch","Native rendered image identity differs");
     Json result={{"source",source},{"format",format},{"path",path_to_utf8(target)},{"width",width},{"height",height},{"bytes",bytes.size()},{"sha256",sha256(bytes)},{"method","native_cpu_rasterizer"}};
+    if(generated.contains("sheet"))result["sheet"]=generated.at("sheet");
     if(format=="gif")for(const auto* key:{"frame_count","duration_s","loop","palette"})result[key]=generated.at(key);
     check_job_cancelled();publish_file(stage,target);
     if(args.value("inline_image",true)&&bytes.size()<=inline_limit)result["image"]={{"type","image"},{"mimeType","image/"+format},{"data",image_base64(bytes)}};

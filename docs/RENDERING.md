@@ -179,6 +179,41 @@ host's install/reload journey or hardware GPU acceptance.
 
 ## Native CPU images
 
+### Shared-scale verification sheet
+
+Set `cad_render.settings.view` to `sheet` for one PNG with front, top, right and
+isometric views in a 2×2 grid, in reading order. `single` remains the default.
+All views use orthographic projection and one common pixels-per-millimeter
+scale, fitted conservatively to the displayed bounds after clipping, hiding and
+explosion. Each tile has its own centered projection, an external label and an
+eight-pixel fitting margin. Width/height describe the complete image and must
+each be 128–2048; odd dimensions are supported.
+
+Front looks from −Y with Z up, top from +Z with Y up, right from +X with Z up,
+and iso from (+X,−Y,+Z). The isometric camera has equal axis foreshortening.
+Omit `settings.camera`. An explicit perspective projection and GIF sheets fail
+with `invalid_argument`; a Render-mode sheet defaults to orthographic as well.
+Materials, render modes, hidden leaves and presentation settings apply to all
+four views. All-hidden or fully clipped scenes retain their labels and empty
+viewports. A sheet is a visual check, not a dimensioned engineering drawing.
+
+```json
+{"source":{"document_id":"plate","revision":1},
+ "settings":{"view":"sheet","width":1024,"height":768}}
+```
+
+The result adds `sheet:{projection:"orthographic",pixels_per_mm,views}`.
+`views` contains four `{name,x,y,width,height}` pixel rectangles for the geometry
+viewports, excluding labels. Names are `front`, `top`, `right`, `iso`. The
+scale applies to orthographic screen-plane lengths; axes seen in iso are
+foreshortened. Geometry and textures are prepared once. One shared 200-million
+pixel-operation budget and cancellation monitor cover the complete sheet.
+PNG hashes, inline images, downloads, source identity and durable jobs use the
+same path as single views. Both native revisions and verified external reviews
+are supported; no source geometry or revisions are changed.
+
+### Renderer behavior and limits
+
 `cad_render` rasterizes a committed native revision or a hash-verified external
 review without an open viewer. The native worker uses display triangles and
 source curves; it preserves exact geometry and committed revisions. Camera,

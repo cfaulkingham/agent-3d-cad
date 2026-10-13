@@ -222,13 +222,25 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-Twenty-nine application tools expose create/read/apply/restore/import,
+The native catalog contains 34 tools, including searchable `cad_help`, and exposes create/read/apply/restore/import,
 query/measurement/export/BOM/drawing/manufacturing/process review, G-code review,
 slicing/printer plans, robot handoff, external artifact review, view/preview/
 selection resolution, comparison, jobs, model discovery and live view context.
 `cad_open` attaches the bundled MCP App resource; `cad_viewer` is an
 app-only transport tool. This is a local stdio service with no HTTP endpoint.
 No global host configuration is installed for you.
+
+Focused help and render-sheet checks:
+
+```sh
+ctest --test-dir build -R '^(help|render_sheet|render|visual_service|app_protocol)$' --output-on-failure
+python tests/visual_mcp_sdk_smoke.py build/agent-3d-cad .local/evidence/help-sheet-sdk.json
+```
+
+The native tests cover search, exact schema discovery, UTF-8 guide pagination,
+analytic shared-scale projections, native/external geometry, source preservation
+and cancellation. The official SDK check validates help and sheet schemas,
+real PNG/image/download delivery and rejected contradictory settings.
 
 `cad_drawing` creates revision-qualified vector drawings in isolated native
 workers, with aligned first-/third-angle layouts, hatched planar sections,

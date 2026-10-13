@@ -1,11 +1,160 @@
 # Implementation handoff
 
-Updated: 2026-10-11. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-12. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Help and sheet plugin installed in Codex — 2026-10-12
+
+At the user's request, rebuilt and installed the local help/four-view increment
+at `~/Applications/Agent3DCAD/agent-cad-help-sheet-20261012`, updating the enabled
+`agent-cad@agent-cad-local` preview.2 plugin and its cache. Both manifests preserve
+the existing `Documents/Agent3DCAD` workspace. The previous source remains;
+the prior cache is backed up at
+`~/.codex/plugins/cache-backups/agent-cad-before-help-sheet-20261012`, with a
+mode-0600 configuration backup in the evidence directory. Unrelated parsed
+Codex configuration is unchanged.
+
+The complete **457-file inventory** matches source and installed cache, and
+**428 packaged documentation links** resolve. Empty-PATH packaged MCP/viewer,
+create/edit/reopen/history, STEP inspection and export checks passed. The
+installed executable passed **550 official MCP SDK 2.3.0 checks** in
+**14.124 seconds** (6.916 seconds Python CPU), including compiled help examples
+and native/external four-view images. A fresh isolated Codex runtime
+(`0.162.0-alpha.17.2`) discovers all **34 tools and six skills**, matches every
+native schema, and validates help and sheet requests. Packaged binary SHA-256:
+`699cf1cccd422e26c62257453bfcc4cfc8657fe3a6ab43fbf439979c3c2b4f84`.
+Evidence is in `.local/evidence/help-sheet-install-20261012/`.
+
+**The running app has not reloaded.** A direct call from this chat still rejects
+`settings.view` with `Unknown field: view`. Computer Use explicitly denies access
+to `com.openai.codex`, and the installed CLI exposes no current-session reload
+command. No UI restriction bypass or forced process restart was attempted.
+Quit and reopen Codex to load the updated plugin. Fresh-runtime checks do not
+establish current-session reload or desktop viewer acceptance.
+
+## Searchable native help and four-view verification — 2026-10-12
+
+Added `cad_help` to the shared native Service/CLI/MCP catalog (now 34 tools).
+It searches tool, feature and edit-operation contracts plus 37 compiled product
+guides, with deterministic word ranking and common modeling synonyms. Exact
+topics return the running tool schemas or standalone feature/operation schemas
+with their referenced definitions, source-attributed guide sections, related
+guides and UTF-8-safe text pagination. Help works offline without the repository,
+runtime documentation files, geometry workers or caller code. The compiled
+fillet/create/edit/render recipe is exercised through the official MCP SDK.
+See [NATIVE_HELP.md](NATIVE_HELP.md).
+
+`cad_render` now accepts `settings.view:"sheet"` for a labeled 2×2 PNG in
+front/top/right/iso order. All four fixed orthographic views fit displayed bounds
+at one shared scale; output metadata includes pixels/mm and viewport rectangles.
+Native revisions and hash-verified external reviews use the same renderer.
+The external-file SDK check exposed and fixed an existing static-review bug:
+empty pose configurations now use the verified captured geometry; nonempty
+configurations still require a supported pose format and validated coordinates.
+Clipping, visibility, exploded placement, materials and render styles retain
+their existing behavior. One work/cancellation budget covers the whole sheet;
+publication remains atomic. Existing single PNG and sequence GIF behavior is
+preserved. Sheets require at least 128×128 pixels, omit custom cameras and reject
+explicit perspective or GIF. See [RENDERING.md](RENDERING.md).
+
+Validation on macOS arm64: the Release build succeeded without compiler warnings
+and the broad run passed all **88 CTest suites** in **344.38 seconds**, including
+the new help and render-sheet suites. After the final help-ranking refinement
+and static-review fix, the ten relevant suites passed across the recorded runs.
+The new Service fixture initially assumed an STL export returned a top-level
+hash; it now hashes the actual exported bytes, preserving the intended assertion.
+No production code changed after the final build. Independent schema conformance
+passed **885 checks across 34 tools**. Official MCP SDK **2.3.0** passed **550
+checks** in **8.118 seconds** (5.048 seconds Python CPU), including real compiled
+help examples, schema validation, native/external PNG delivery, static single
+images, rejected unsupported poses and existing GIF/GLB/concurrent screenshots.
+Help also passed a CLI read from an empty temporary working directory. Sheet
+tests compare actual pixels against analytic box projections, including
+isometric foreshortening, odd image dimensions, hidden/clipped/exploded geometry,
+external mesh equivalence, cancellation and an aggregate-work-budget boundary.
+Service tests cover durable jobs and deterministic source-qualified output.
+The real fillet-example PNG was visually inspected. Evidence is under
+`.local/evidence/help-sheet-*`.
+
+This increment is local and uncommitted. The subsequent local installation and
+pending desktop reload are recorded above. Linux/Windows and actual host
+acceptance are not claimed by these local runs. Run the release platform/host
+gates before publishing it.
+
+## Doubled job budgets installed locally — 2026-10-12
+
+At the user's request after the ribbed lamp shade reached its five-minute
+wall deadline, raised the native maximum job timeout from 300,000 to 600,000 ms
+and defaults from 30,000 ms / 2,048 MiB to 60,000 ms / 4,096 MiB. Shared constants
+keep admission, synchronous workers and tool schemas aligned. Explicit memory
+budgets remain supported above 4 GiB; a 600,000 ms / 8,192 MiB job is verified.
+Retries preserve saved values for omitted budget fields across default changes;
+explicit budget changes on an existing request ID still conflict. Existing jobs
+retain their original budgets. Updated protocol/slicing docs and benchmark bounds.
+
+Validation: full Release build succeeded. Native `transactions`, `protocol`,
+`cli_smoke`, `renamed_worker`, `jobs` and `slicer` passed across the recorded runs;
+job tests cover defaults, partial budgets, the ten-minute boundary, durable
+saved deadlines, legacy retries, cancellation and memory/time containment.
+The new budget fixtures were isolated after initially changing an older test's
+expected job inventory; existing assertions were preserved. Independent schema
+conformance passed **879 checks across 33 tools**. The packaged plugin passed
+empty-PATH MCP/viewer discovery, create/edit/reopen, STEP inspection and exports.
+
+Installed a versioned local bundle at
+`~/Applications/Agent3DCAD/agent-cad-limits-20261012`, retaining the prior source
+and backing up the plugin cache/config. Both manifests preserve the existing
+Documents/Agent3DCAD workspace. The Agent Plugins manifest uses a contained
+relative executable path; `.mcp.json` retains the absolute-path compatibility
+form. All **454 inventoried files** match between source and installed cache.
+A fresh isolated Codex runtime discovers all **33 tools and six skills**, matches
+the packaged schemas, accepts 600,000 ms / 8 GiB and rejects 600,001 ms.
+Evidence and scripts are in `.local/evidence/job-limits-20261012/`.
+
+A subsequent user-requested rebuild and plugin registration refresh completed
+successfully. Rebuilt source identity matches the installed package; source and
+cache inventories reverified. A direct tool call from the running chat still
+rejects 600,000 ms, confirming that its service has not reloaded. The current
+app-server runs over private stdio with no accessible control socket, and
+Computer Use explicitly denies `com.openai.codex`. No forced process restart or
+UI restriction bypass was attempted. See `app-reload-status.json` in the same
+evidence directory.
+
+The open desktop session was not restarted; quit and reopen Codex to load the
+new executable. No lamp jobs or saved CAD documents were edited by this update.
+Changes remain local and uncommitted; no release or PR was published.
+
+## Workflow plugin installed in Codex — 2026-10-11
+
+At the user's request, installed the verified workflow package from merged and
+pushed `main` at `dfe97a01c49a53eeda533056e37df1b8c27c4607` into the enabled
+`agent-cad@agent-cad-local` preview.2 plugin. The source is
+`~/Applications/Agent3DCAD/agent-cad-workflows-dfe97a0-20261011`; the cache remains
+`~/.codex/plugins/cache/agent-cad-local/agent-cad/0.1.0-preview.2`. Both host
+manifests retain the Documents/Agent3DCAD workspace and point to the contained
+`agent-3d-cad-workflows-dfe97a0-20261011` executable. Previous source/cache and a
+mode-0600 configuration backup remain available.
+
+Verification: source and installed cache match all **456 inventoried files plus
+provenance**, and **421 relative documentation links** resolve. The installed
+binary retains SHA-256
+`c1b4fc55bbbcbecec3e76ee2613602b034727b16699625ff773c1e06c0dcdcad`.
+A fresh isolated runtime from this Codex app (`0.162.0-alpha.17.2`) discovers all
+**six skills and 33 tools**; every input/output schema matches the packaged
+native catalog and independently validates. All **159 saved model files** and
+unrelated parsed host settings are unchanged. Evidence is in
+`.local/evidence/plugin-workflow-reload-20261011/`.
+
+**The running desktop session has not reloaded.** Its CAD processes still run
+the previous `agent-3d-cad-visual-7b94725-20261011` executable. The desktop uses
+its own stdio app-server, separate from the managed CLI daemon. No current-session
+reload tool is exposed, and Computer Use blocks the Codex app. Quit and reopen
+Codex to activate the update; fresh isolated runtime discovery does not establish
+current-session reload or embedded-viewer acceptance.
 
 ## Progressive viewing, viewport markup and manufacturing — 2026-10-11
 
@@ -105,7 +254,8 @@ manifest. Motion drafts, external reviews and offline views retain monolithic
 meshes; occurrences share source transfers but expand into separate GPU buffers.
 Native/browser/package checks do not establish current-source cross-platform CI,
 hardware GPU behavior, signing/notarization or target-host install/reload/download
-acceptance. This increment has not replaced installed plugins or user projects.
+acceptance. The local Codex installation is recorded above; saved user projects
+remain unchanged.
 
 ## Local build cleanup — 2026-10-11
 

@@ -430,7 +430,7 @@ int main() {try {
   std::error_code symlink_error;fs::create_directory_symlink(temporary.path/"views"/"main",temporary.path/"views"/"alias",symlink_error);
   if(!symlink_error)fails("storage_error",[&]{call(reopened,"cad_open",{{"view_id","alias"}});});
   const auto definitions=tool_definitions();
-  require(definitions.size()==33,"Native authoring capture/import, STEP inspection, drawings, manufacturing, review, visual and live tools remain published");
+  require(definitions.size()==34,"Native authoring capture/import, STEP inspection, drawings, manufacturing, review, visual and live tools remain published");
   require(std::any_of(definitions.begin(),definitions.end(),[](const Json& tool){return tool.at("name")=="cad_printer_handoff";}),"native offline printer handoff is included in discovery");
   for(const auto* name:{"cad_artifact","cad_artifact_show"})require(std::any_of(definitions.begin(),definitions.end(),[&](const Json& tool){return tool.at("name")==name;}),std::string(name)+" is included in discovery");
   for(const auto& tool:definitions) {

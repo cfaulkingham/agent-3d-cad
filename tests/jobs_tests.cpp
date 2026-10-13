@@ -163,6 +163,10 @@ void legacy_mutation_receipts() {
   require(!recovered.at("result").contains("model")&&recovered.at("result").at("model_sha256")==sha256(source.dump()),"Legacy full result hashes its captured source rather than current HEAD");
   unchanged("legacyFull",full_bytes);
   require(dispatch(temp.path,{{"action","submit"},{"request_id","legacyFull"},{"tool","cad_create"},{"arguments",create}}).at("result")==created,"Duplicate submit returns the same projected legacy full receipt");
+  const Json replay={{"action","submit"},{"request_id","legacyFull"},{"tool","cad_create"},{"arguments",create},{"budget",{{"memory_mb",2048}}}};
+  require(dispatch(temp.path,replay).at("budget")==Json{{"timeout_ms",30000},{"memory_mb",2048}},"partial retry retains original pre-upgrade default timeout");
+  auto changed_budget=replay; changed_budget["budget"]["timeout_ms"]=60000;
+  expect_error("request_conflict","explicit budget changes still conflict on existing jobs",[&]{dispatch(temp.path,changed_budget);});
   unchanged("legacyFull",full_bytes);require(read_text(temp.path/"documents/part/HEAD.json")==part_head,"Legacy full-result recovery never republishes HEAD");
 
   service.call("cad_create",{{"document_id","sketch"},{"model",box()}});
@@ -215,9 +219,30 @@ int run_tests(int argc, const char* const* argv) {
     Json query = {{"action","submit"},{"request_id","queryJob"},{"tool","cad_query"},{"arguments",{{"document_id","part"},{"revision",1}}}};
     auto submitted = dispatch(temp.path,query);
     require(submitted.at("state")=="queued","job submits without waiting for geometry");
+    require(submitted.at("budget")==Json{{"timeout_ms",60000},{"memory_mb",4096}},"omitted job budget uses doubled time and memory defaults");
     const auto queried=finished(temp.path,"queryJob");
     require(queried.at("state")=="succeeded","job query succeeds");
     require(dispatch(temp.path,query).at("result")==queried.at("result"),"job submission deduplicated");
+    {
+      Temp budget_temp; Service budget_service(budget_temp.path);
+      budget_service.call("cad_create",{{"document_id","part"},{"model",box()}});
+      auto extended=query; extended["request_id"]="extendedBudget";
+      extended["budget"]={{"timeout_ms",600000},{"memory_mb",8192}};
+      const auto admitted=dispatch(budget_temp.path,extended);
+      require(admitted.at("budget")==extended.at("budget"),"ten-minute and eight-GiB job budgets are retained");
+      const auto persisted=stored_state(budget_temp.path/"jobs"/"extendedBudget");
+      require(persisted.at("deadline_unix_ms").get<std::int64_t>()-persisted.at("submitted_at_unix_ms").get<std::int64_t>()==600000,"persisted job deadline uses the extended timeout");
+      require(finished(budget_temp.path,"extendedBudget").at("state")=="succeeded","real coordinator and worker accept the extended budget");
+      auto partial=query; partial["request_id"]="partialBudget"; partial["budget"]={{"memory_mb",8192}};
+      require(dispatch(budget_temp.path,partial).at("budget")==Json{{"timeout_ms",60000},{"memory_mb",8192}},"partial budget keeps explicit memory and new default timeout");
+      require(finished(budget_temp.path,"partialBudget").at("state")=="succeeded","partial budget completes");
+      partial["request_id"]="explicitTimeout"; partial["budget"]={{"timeout_ms",30000}};
+      require(dispatch(budget_temp.path,partial).at("budget")==Json{{"timeout_ms",30000},{"memory_mb",4096}},"explicit timeout keeps new default memory");
+      require(finished(budget_temp.path,"explicitTimeout").at("state")=="succeeded","explicit timeout completes");
+      extended["request_id"]="overBudget"; extended["budget"]["timeout_ms"]=600001;
+      expect_error("invalid_argument","timeout above ten minutes is rejected",[&]{dispatch(budget_temp.path,extended);});
+      require(!fs::exists(budget_temp.path/"jobs"/"overBudget"),"rejected timeout records no job");
+    }
     McpSession session(service);
     const auto initial_cache=cache_entries(temp.path);
     const Json initialization = {{"protocolVersion","2025-11-25"},{"capabilities",Json::object()},

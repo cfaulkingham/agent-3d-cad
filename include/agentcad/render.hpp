@@ -4,6 +4,8 @@
 #include <functional>
 
 namespace agentcad {
+// Shared service/worker validation for the fixed orthographic sheet option.
+bool render_is_sheet(const Json& settings);
 // Rasterize worker display geometry only. Exact source/model geometry is never
 // altered. The destination is staged; publication belongs to the coordinator.
 RgbaImage render_rgba(const Json& payload, const Json& settings,

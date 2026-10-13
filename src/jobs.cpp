@@ -73,7 +73,7 @@ fs::path worker_executable;
 fs::path cancellation_file;
 Json request_context = Json::object();
 std::int64_t job_deadline = 0;
-Json current_budget = {{"timeout_ms", 30000}, {"memory_mb", 2048}};
+Json current_budget = {{"timeout_ms", default_job_timeout_ms}, {"memory_mb", default_job_memory_mb}};
 std::int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::system_clock::now().time_since_epoch()).count();
@@ -110,8 +110,8 @@ bool mutation(const std::string& tool) {
 }
 Json budget(const Json& value) {
   fields(value, {}, {"timeout_ms", "memory_mb"});
-  Json result = {{"timeout_ms", 30000}, {"memory_mb", 2048}};
-  for (auto [key, minimum, maximum] : {std::tuple{"timeout_ms", 1, 300000}, std::tuple{"memory_mb", 128, std::numeric_limits<int>::max()}}) {
+  Json result = {{"timeout_ms", default_job_timeout_ms}, {"memory_mb", default_job_memory_mb}};
+  for (auto [key, minimum, maximum] : {std::tuple{"timeout_ms", 1, maximum_job_timeout_ms}, std::tuple{"memory_mb", 128, std::numeric_limits<int>::max()}}) {
     if (!value.contains(key)) continue;
     if (!value.at(key).is_number_integer() || value.at(key) < minimum || value.at(key) > maximum)
       throw Error("invalid_argument", std::string(key) + " is outside its supported integer range");
@@ -897,7 +897,10 @@ int geometry_worker_main(const fs::path& input, const fs::path& output) {
     atomic_text(output.parent_path() / "building.json", Json{{"phase","building"}}.dump());
     validate_model(payload.at("model"));
     if(kind=="external_render") {
-      const auto& review=request.at("guides");const auto& identity=request.at("identity");auto mesh=pose_external_artifact(review,identity.at("configuration"));auto summary=review.at("summary");
+      const auto& review=request.at("guides");const auto& identity=request.at("identity");const auto& configuration=identity.at("configuration");
+      // An empty configuration is the captured review, including static formats
+      // such as STL and STEP that have no pose coordinates to evaluate.
+      auto mesh=configuration.empty()?review.at("geometry"):pose_external_artifact(review,configuration);auto summary=review.at("summary");
       Json bounds={{"min",{0,0,0}},{"max",{0,0,0}}};bool first=true;
       const auto point=[&](const Json& p){if(first){bounds["min"]=p;bounds["max"]=p;first=false;}else for(int i=0;i<3;++i){bounds["min"][i]=std::min(number(bounds.at("min").at(i)),number(p.at(i)));bounds["max"][i]=std::max(number(bounds.at("max").at(i)),number(p.at(i)));}};
       for(const auto& p:mesh.at("positions"))point(p);for(const auto& curve:mesh.at("polylines"))for(const auto& p:curve.at("points"))point(p);summary["bounds"]=first?Json(nullptr):bounds;
@@ -1127,7 +1130,8 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
   // Malformed arguments fail now, with the code a direct call would return.
   validate_tool_arguments(tool, input);
   const auto fingerprint = request_fingerprint(tool, input);
-  const auto limits = budget(arguments.value("budget", Json::object()));
+  const auto supplied_limits = arguments.value("budget", Json::object());
+  auto limits = budget(supplied_limits);
   bool retry = false;
   std::error_code status_error;
   if (fs::exists(fs::symlink_status(path / "state.json", status_error))) {
@@ -1138,6 +1142,10 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
       if (e.code != "job_record_corrupt") throw;
       return corrupt_view(id, file_time_ms(path / "state.json"), e);
     }
+    // Replay and interrupted-job retries retain the original defaults. Only
+    // explicitly supplied fields may conflict after a default-budget upgrade.
+    for (const auto& [key, value] : record.state.at("budget").items())
+      if (!supplied_limits.contains(key)) limits[key] = value;
     if (record.state.at("fingerprint") != fingerprint || record.state.at("budget") != limits)
       throw Error("request_conflict", "request_id already belongs to a different job request");
     recover_job(workspace, path, record);

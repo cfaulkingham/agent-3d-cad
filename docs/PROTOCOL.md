@@ -374,6 +374,7 @@ replay behavior.
 
 | Tool | Arguments beyond document_id | Result |
 |---|---|---|
+| `cad_help` | No document ID; optional `query`/`limit` to search or `topic`/`offset` to read | Ranked native tool/feature/operation/guide matches, or compiled guidance and exact standalone schemas; see [native help](NATIVE_HELP.md) |
 | `cad_create` | `model`, optional `request_id` | Compact committed revision/hash/summary receipt, revision 1 |
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
 | `cad_capture_sketch` | No document ID; `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions and optional source hash | Worker-validated portable text/SVG/DXF sketch, captured bytes/hash and contour/segment counts |
@@ -405,7 +406,7 @@ replay behavior.
 | `cad_show` | `document_id`, optional `view_id` | Retarget a workspace view without opening another app |
 | `cad_context` | Optional `view_id` | Validated selection, camera, visibility, presentation, appearance/render settings, optional artifact pose, prompt and explicit stale state |
 | `cad_screenshot` | No document ID; optional `view_id`, `timeout_ms` | Actual displayed source/context-qualified PNG image content, path, dimensions, byte count and SHA-256; requires a rendered open viewer |
-| `cad_render` | No top-level document ID; native/external `source`, optional `settings`, `format`, `animation`, `loop`, `inline_image` | Native CPU PNG or native-sequence GIF, source/file hashes, dimensions and bounded image/download delivery; no open viewer required |
+| `cad_render` | No top-level document ID; native/external `source`, optional `settings` (including `view: single/sheet`), `format`, `animation`, `loop`, `inline_image` | Native CPU PNG or native-sequence GIF, source/file hashes, dimensions and bounded image/download delivery; PNG sheets add four viewports and common `pixels_per_mm`; no open viewer required |
 | `cad_viewer` | App-only actions below | Asynchronous view state, mesh chunks, context publication |
 
 `cad_viewer` context accepts optional closed `presentation` settings for a unit
@@ -1043,9 +1044,11 @@ fail. It reads as a `failed` job with error `job_record_corrupt`, and counts
 toward admission only while a live coordinator still owns it. Use a new
 request_id instead of a damaged one.
 
-Budgets: timeout 1–300,000 ms; memory at least 128 MiB, up to the native signed
+Budgets: timeout 1–600,000 ms; memory at least 128 MiB, up to the native signed
 32-bit MiB representation (2,147,483,647). There is no 4 GiB policy ceiling; choose
-a memory budget appropriate for the machine. Defaults are 30 seconds/2,048 MiB.
+a memory budget appropriate for the machine. Defaults are 60 seconds/4,096 MiB.
+On retries, omitted budget fields retain the original job's saved values, even
+after defaults change; explicitly different values still return `request_conflict`.
 Queue time counts toward the asynchronous deadline. Synchronous geometry uses
 default budgets. Workers run via native process spawning, without model-supplied
 code. Coordinators and workers execute the running service image itself, whatever

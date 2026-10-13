@@ -219,9 +219,11 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     call("cad_read", {"document_id": "large_schema"})
     budget_args = {"action": "submit", "tool": "cad_import", "request_id": "large_budget_schema",
                    "arguments": {"document_id": "large_budget_schema", "path": str(large_path)},
-                   "budget": {"memory_mb": 8192}}
+                   "budget": {"memory_mb": 8192, "timeout_ms": 600000}}
     assert Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(budget_args)
-    checks += 2
+    budget_args["budget"]["timeout_ms"] = 600001
+    assert not Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(budget_args)
+    checks += 3
     step_hash = hashlib.sha256(step_bytes).hexdigest()
     purchase = {"supplier": "Schema fixture supplier", "part_number": "FIXTURE-1", "source_url": "https://example.invalid/FIXTURE-1"}
     bought = call("cad_import", {"document_id": "purchased_schema", "path": exported["path"],
@@ -281,7 +283,10 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
         call("cad_view", {"document_id": document_id, "revision": 2})
         call("cad_export", {"document_id": document_id, "revision": 2, "format": "step"})
     job = call("cad_job", {"action": "submit", "request_id": "async_query", "tool": "cad_query",
-        "arguments": {"document_id": "part", "revision": 3, "kind": "topology"}})
+        "arguments": {"document_id": "part", "revision": 3, "kind": "topology"},
+        "budget": {"timeout_ms": 600000, "memory_mb": 8192}})
+    assert job["budget"] == {"timeout_ms": 600000, "memory_mb": 8192}
+    checks += 1
     for _ in range(100):
         job = call("cad_job", {"action": "get", "job_id": job["job_id"]})
         if job["state"] in ["succeeded", "failed", "cancelled", "interrupted"]:

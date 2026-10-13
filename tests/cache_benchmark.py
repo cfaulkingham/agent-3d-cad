@@ -17,10 +17,10 @@ parser.add_argument("output", type=pathlib.Path)
 parser.add_argument("--resume", type=pathlib.Path)
 parser.add_argument("--views", choices=("section", "standard"), default="section")
 parser.add_argument("--cold-only", action="store_true", help="Measure creation and the first drawing, without warm/style/edit scenarios")
-parser.add_argument("--timeout-ms", type=int, default=240000, help="Per-job budget, 1–300000 ms (default 240000)")
+parser.add_argument("--timeout-ms", type=int, default=240000, help="Per-job budget, 1–600000 ms (default 240000)")
 args = parser.parse_args()
-if not 1 <= args.timeout_ms <= 300000:
-    parser.error("--timeout-ms must be between 1 and 300000")
+if not 1 <= args.timeout_ms <= 600000:
+    parser.error("--timeout-ms must be between 1 and 600000")
 exe = args.executable.resolve()
 executable_digest = hashlib.sha256(exe.read_bytes()).hexdigest()
 args.output.mkdir(parents=True, exist_ok=True)

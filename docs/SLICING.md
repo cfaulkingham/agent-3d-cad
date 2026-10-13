@@ -120,9 +120,9 @@ Windows Job Objects contain descendants. Cancellation, deadline, supervisor
 death and coordinator death stop the contained processes. Publication occurs
 only in the coordinator under the document lock after validation.
 
-Job budgets use 1–300,000 ms and at least 128 MiB, with memory configurable above
-4 GiB up to the native signed 32-bit MiB representation (defaults 30 seconds /
-2,048 MiB). Aggregate staging is bounded to 128 MiB / 4,096 entries and logs to
+Job budgets use 1–600,000 ms and at least 128 MiB, with memory configurable above
+4 GiB up to the native signed 32-bit MiB representation (defaults 60 seconds /
+4,096 MiB). Aggregate staging is bounded to 128 MiB / 4,096 entries and logs to
 2 MiB, sampled every 10 ms; sample overshoot is possible. Native profile inputs
 are at most 1 MiB, executables at most 512 MiB and plain G-code at most 64 MiB.
 macOS samples group physical footprint; Linux sums group RSS with shared pages

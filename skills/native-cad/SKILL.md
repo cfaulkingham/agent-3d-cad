@@ -423,6 +423,17 @@ pixels, and 16 MiB. Native CPU output paints bounded PNG textures, ASCII text an
 hatch holes; JPEG textures and unsupported glyphs fail explicitly. Inspect those
 errors instead of accepting substituted surfaces or missing labels.
 
+Use `cad_help` with `query` to find native tools, features, edit operations and
+bundled guidance (for example `{"query":"round the edges","limit":5}`). Read a
+returned `topic` for exact schemas and related examples. Continue long guide
+reads using `entry.next_offset`. See [NATIVE_HELP.md](NATIVE_HELP.md).
+
+For a four-view verification PNG, use `settings.view:"sheet"`, omit `camera`,
+and use dimensions of at least 128×128. Front/top/right/iso views share a fitted
+orthographic scale. The result's `sheet` supplies `pixels_per_mm` and viewport
+rectangles. Explicit perspective and GIF are rejected for sheets. Check the
+same revision's numerical dimensions as well as its pictures.
+
 For native saved-sequence GIF, set `format:"gif"` and
 `animation:{view_id,sequence_name,sample_rate_hz?,max_frames?}`. The default rate
 is 15 Hz; limits are 1–60 Hz, 2–256 frames, 128 million total frame pixels and

@@ -92,6 +92,7 @@ in [advanced client setup](docs/GETTING_STARTED.md) and
 - [Saved inspection notes and revision-qualified pins](docs/ANNOTATIONS.md)
 - [Coordinated mechanism and presentation sequences](docs/PLAYBACK.md)
 - [Modeling tools and CLI protocol](docs/PROTOCOL.md)
+- [Searchable native help and verification examples](docs/NATIVE_HELP.md)
 - [Shell, offset and thickening](docs/SHELL_OFFSET_THICKEN.md)
 - [Exact sketch operations, mirror and split](docs/SKETCH_OPERATIONS.md)
 - [Editable text, SVG and DXF](docs/AUTHORING_IMPORTS.md)

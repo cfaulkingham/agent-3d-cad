@@ -2,6 +2,9 @@
 #include "agentcad/storage.hpp"
 
 namespace agentcad {
+inline constexpr int default_job_timeout_ms = 60000;
+inline constexpr int maximum_job_timeout_ms = 600000;
+inline constexpr int default_job_memory_mb = 4096;
 // All OCCT work runs in a fresh native process. Input is bounded structured JSON.
 // Geometry results carry summary; non-geometry inspection returns its report.
 Json evaluate_model(const fs::path& workspace, const Json& model,

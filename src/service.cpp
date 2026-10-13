@@ -1,5 +1,6 @@
 #include "agentcad/download.hpp"
 #include "agentcad/service.hpp"
+#include "agentcad/help.hpp"
 #include "agentcad/authoring.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/print_export.hpp"
@@ -283,10 +284,10 @@ Json tool_definitions() {
       {{"action",{{"type","string"}}}},{"action"},{{"type","object"},{"oneOf",Json::array({Json{{"$ref","#/$defs/artifact_review_result"}},Json{{"$ref","#/$defs/mesh_recognition_result"}}})}},false),
     tool("cad_job","Submit, inspect, list or cancel a durable job. Submit a tool and arguments with request_id; retries return the same job. Geometry runs in bounded native workers.",
       {{"action",{{"enum",{"submit","get","cancel","list"}}}},{"request_id",id},{"job_id",id},{"tool",text},{"arguments",{{"type","object"}}},
-        {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array())}},
+        {"budget",object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",maximum_job_timeout_ms}}},{"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array())}},
       {"action"},{{"type","object"}},false)
   });
-  const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",300000}}},
+  const auto budgets=object({{"timeout_ms",{{"type","integer"},{"minimum",1},{"maximum",maximum_job_timeout_ms}}},
     {"memory_mb",{{"type","integer"},{"minimum",128},{"maximum",std::numeric_limits<int>::max()}}}},Json::array());
   for(auto& definition:tools)if(definition.at("name")=="cad_artifact") {
     definition["inputSchema"]={{"type","object"},{"$ref","#/$defs/artifact_arguments"},{"$defs",definitions}};
@@ -344,6 +345,7 @@ Json tool_definitions() {
   tools.back()["outputSchema"]={{"type","object"},{"oneOf",Json::array({job_reference,
     object({{"jobs",array(job_reference,1000)},{"limit",{{"const",1000}}}},{"jobs","limit"})})},{"$defs",job_definitions}};
   for (auto& definition : live_tool_definitions()) tools.push_back(std::move(definition));
+  tools.push_back(help_tool_definition());
   // Each standalone schema keeps only the model definitions it references.
   for(auto& definition:tools)for(const auto* key:{"inputSchema","outputSchema"}) {
     auto& schema=definition[key];
@@ -805,6 +807,7 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
+  if(tool=="cad_help"){validate_help_arguments(args);return;}
   if(tool=="cad_render"){validate_render_arguments(args);return;}
   if(tool=="cad_import_sketch") {
     fields(args,{"document_id","expected_revision","format","path","feature_id","workplane"},{"request_id","expected_sha256","text","height","spacing","scale","face_index","fonts"});if(args.contains("fonts")){if(args.at("format")!="dxf")throw Error("invalid_argument","Only DXF accepts fonts");validate_authoring_fonts(args.at("fonts"),true);}identifier(text_field(args,"document_id"));revision_number(args.at("expected_revision"));identifier(text_field(args,"feature_id"));text_field(args,"path");if(args.contains("request_id"))identifier(text_field(args,"request_id"));const auto format=text_field(args,"format");if(format!="text"&&format!="svg"&&format!="dxf")throw Error("invalid_argument","Import format must be text, svg or dxf");
@@ -919,6 +922,7 @@ Json Service::read_resource(const std::string& uri) {
 }
 
 Json Service::execute(const std::string& tool,const Json& args) {
+  if(tool=="cad_help")return native_help(args);
   if(tool=="cad_screenshot")return capture_view_screenshot(store_,args);
   if(tool=="cad_render")return render_visual_output(store_,args);
   if(tool=="cad_artifact_show"||tool=="cad_open"||tool=="cad_show"||tool=="cad_list"||tool=="cad_context"||tool=="cad_viewer")
