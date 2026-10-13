@@ -218,6 +218,15 @@ async def smoke(executable, workspace, evidence_path):
                 'Bundled edit recipe rebuilds and commits its intended thickness')
         await call('cad_render', examples[1])
 
+        for name in ('variable-fillet', 'g2-fillet', 'helix-sweep'):
+            example = json.loads((Path(__file__).resolve().parent.parent / 'examples' / f'{name}.create.json').read_text())
+            created = await call('cad_create', example)
+            require(created['summary']['valid'] and created['summary']['solid_count'] == 1,
+                    f'{name} example builds a valid native solid through the official SDK')
+            await call('cad_export', {'document_id': name, 'revision': 1, 'format': 'step'})
+            await call('cad_render', {'source': {'document_id': name, 'revision': 1},
+                                     'settings': {'view': 'sheet', 'width': 800, 'height': 600}})
+
         await call('cad_create', {'document_id': 'plate', 'model': support.box_model()})
         original = await call('cad_read', {'document_id': 'plate'})
         settings = {'width': 128, 'height': 128, 'camera': {'yaw': 0, 'pitch': 1.5707963267948966, 'zoom': 1, 'pan': [0, 0]},

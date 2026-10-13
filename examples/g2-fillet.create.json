@@ -1,0 +1,42 @@
+{
+  "document_id": "g2-fillet",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "radius": 3
+    },
+    "features": [
+      {
+        "id": "base",
+        "type": "cylinder",
+        "radius": 12,
+        "height": 20
+      },
+      {
+        "id": "part",
+        "type": "fillet",
+        "input": "base",
+        "edges": {
+          "type": "geometric",
+          "feature_id": "base",
+          "curve_kind": "circle",
+          "expected_count": 1,
+          "center": {
+            "point": [
+              0,
+              0,
+              20
+            ],
+            "tolerance": 1e-06
+          }
+        },
+        "radius": {
+          "parameter": "radius"
+        },
+        "continuity": "G2"
+      }
+    ],
+    "output": "part"
+  }
+}

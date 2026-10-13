@@ -126,6 +126,13 @@ Json model_definitions() {
     object({{"id", id}, {"type", {{"const", "fillet"}}}, {"input", id}, {"radius", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "radius", "edges"}),
     object({{"id", id}, {"type", {{"const", "chamfer"}}}, {"input", id}, {"distance", scalar_ref}, {"edges", {{"oneOf", Json::array({Json{{"const", "all"}}, Json{{"$ref", "#/$defs/selector"}}})}}}}, {"id", "type", "input", "distance", "edges"})
   });
+  auto& fillet=features[4];
+  fillet["properties"]["radius_end"]=scalar_ref;
+  fillet["properties"]["continuity"]={{"enum",{"G1","G2"}}};
+  fillet["properties"]["start"]=object({{"point",vector_ref},{"tolerance",scalar_ref}},{"point","tolerance"});
+  fillet["dependentRequired"]={{"radius_end",{"start"}},{"start",{"radius_end"}}};
+  fillet["allOf"]=Json::array({Json{{"if",{{"required",{"radius_end"}}}},
+    {"then",{{"properties",{{"edges",{{"allOf",Json::array({Json{{"$ref","#/$defs/selector"}},Json{{"properties",{{"expected_count",{{"const",1}}}}}}})}}}}}}}}});
   // Non-symmetric chamfers bind their side to a geometric face rule.
   auto& chamfer=features.back();
   chamfer["properties"]["distance2"]=scalar_ref;
@@ -291,7 +298,7 @@ Json model_definitions() {
   auto sweep_schema=object({{"id",id},{"type",{{"const","sweep"}}},{"input",id},
     {"sections",{{"type","array"},{"items",id},{"minItems",2},{"maxItems",32}}},{"path",{{"oneOf",Json::array({
     Json{{"type","array"},{"items",vector_ref},{"minItems",2},{"maxItems",64}},
-    sweep_wire
+    sweep_wire,id
   })}}},{"orientation",{{"enum",{"corrected_frenet","frenet","fixed"}}}},
     {"binormal",vector_ref},{"guide",sweep_wire},{"transition",{{"enum",{"transformed","right_corner","round_corner"}}}}}, {"id","type","path"});
   sweep_schema["oneOf"]=Json::array({Json{{"required",{"input"}},{"not",{{"required",{"sections"}}}}},Json{{"required",{"sections"}},{"not",{{"required",{"input"}}}}}});
@@ -924,8 +931,17 @@ void validate_model(const Json& model) {
     } else if (type == "fillet" || type == "chamfer") {
       const auto dimension=type=="fillet"?"radius":"distance";
       if(type=="chamfer")fields(feature, {"id", "type", "input", dimension, "edges"},{"distance2","angle_deg","reference_face"});
-      else fields(feature, {"id", "type", "input", dimension, "edges"});
+      else fields(feature, {"id", "type", "input", dimension, "edges"},{"radius_end","start","continuity"});
       dependency("input"); positive(feature.at(dimension));
+      if(type=="fillet") {
+        if(feature.contains("continuity")&&feature.at("continuity")!="G1"&&feature.at("continuity")!="G2")throw Error("invalid_model","Fillet continuity must be G1 or G2");
+        if(feature.contains("radius_end")!=feature.contains("start"))throw Error("invalid_model","Variable fillets require both radius_end and a geometric start endpoint");
+        if(feature.contains("radius_end")) {
+          positive(feature.at("radius_end"));const auto& start=feature.at("start");fields(start,{"point","tolerance"});vector3(start.at("point"),parameters);
+          if(scalar(start.at("tolerance"),parameters)<1e-9)throw Error("invalid_model","Fillet start tolerance must be at least 1e-9 mm");
+          if(!feature.at("edges").is_object()||feature.at("edges").value("expected_count",0)!=1)throw Error("invalid_model","Variable fillets require one geometrically selected edge");
+        }
+      }
       if(type=="chamfer") {
         const bool asymmetric=feature.contains("distance2")||feature.contains("angle_deg");
         if(feature.contains("distance2")&&feature.contains("angle_deg"))throw Error("invalid_model","Chamfer distance2 and angle_deg are mutually exclusive");
@@ -1129,7 +1145,10 @@ void validate_model(const Json& model) {
         for(const auto& section:sections) {if(!section.is_string())throw Error("invalid_model","Sweep sections must name sketch features");sketch_dependency(section.get<std::string>());}
       }
       const auto& path = feature.at("path");
-      if (path.is_object()) {
+      if (path.is_string()) {
+        const auto target=path.get<std::string>();
+        if(!prior.contains(target)||!is_curve_feature_type(types.at(target)))throw Error("invalid_model","Sweep path must name an earlier curve feature",{{"source_feature_id",target}});
+      } else if (path.is_object()) {
         fields(path,{"type","segments"});
         if (text_field(path,"type")!="wire") throw Error("invalid_model","A curved sweep path must have type wire");
         curve_segments(path.at("segments"),parameters,3);

@@ -117,13 +117,20 @@ with `cad_show` for edits. Use `cad_import` when an opaque editable STEP source 
 edit; imported geometry does not recover original design history.
 
 Use `chamfer` with `input`, `distance` and `edges` for symmetric bevels. It uses
-the same geometric edge selector as fillet. For curved profiles, use a sketch
+the same geometric edge selector as fillet. Variable fillets add `radius_end`
+and `start:{point,tolerance}`, with one selected edge and an unambiguous endpoint
+of its open tangent contour. `continuity:"G2"` requests curvature continuity to
+the adjacent supports. Read PARITY_SOLIDS.md for contact-size semantics and
+supported strip topology; never substitute a G1 fillet after a G2 failure.
+For curved profiles, use a sketch
 `profile: {type: "wire", segments: [...]}` with ordered `line` (start/end),
 `arc` (start/mid/end), `bezier` (control points) or `spline` (interpolation
 points) segments in workplane-local 2D coordinates. Close boundaries explicitly;
 optional `holes` is an array of disjoint closed segment arrays. Sweep paths can
 use the same wire form in world 3D coordinates; the first tangent must follow
-the sketch normal. Open splines accept paired start/end tangent directions;
+the sketch normal. Alternatively, `sweep.path` may name an earlier saved curve,
+including a helix or trimmed/extracted curve; this reuses its native wire.
+The sketch origin must coincide with the saved curve's start. Open splines accept paired start/end tangent directions;
 periodic splines close implicitly without repeating their first point. Loft
 sections support holes and endpoint vertices; multiple holes require explicit
 correspondence. See PARITY_SOLIDS.md before supplying that correspondence.

@@ -1,11 +1,97 @@
 # Implementation handoff
 
-Updated: 2026-10-12. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-13. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Fillet/curve plugin installed in Codex — 2026-10-13
+
+At the user's request, rebuilt and installed the variable/G2 fillet and saved-
+curve sweep increment at
+`~/Applications/Agent3DCAD/agent-cad-fillet-curves-20261013`. The enabled
+`agent-cad@agent-cad-local` preview.2 registration and cache now point to that
+bundle. Both MCP manifests preserve `~/Documents/Agent3DCAD`; unrelated parsed
+Codex settings are unchanged. The prior application folder remains, and the old
+cache is backed up at
+`~/.codex/plugins/cache-backups/agent-cad-before-fillet-curves-20261013`.
+A private configuration backup is in the evidence directory.
+
+Packaging caught three newly added repository-relative example links that did
+not resolve in relocated product/skill guides. Replaced those links with bundled
+example filenames, rebuilt the compiled help, and reran packaging validation.
+All **460 inventoried files** match source and installed cache; **431 packaged
+links** resolve. Empty-PATH native MCP/viewer and create/edit/reopen/export checks
+passed. The installed executable passed **112 feature/schema checks** and **670
+official MCP SDK 2.3.0 visual checks** in **14.626 seconds**, including real variable
+fillet, closed G2 and helix-sweep creation, STEP exports and four-view PNGs.
+A fresh isolated Codex runtime discovers all **34 tools and six skills**, exactly
+matches every native schema and validates all three new example requests.
+Packaged executable SHA-256:
+`1a521d0638fc52fca0ca804a27d0d1d6250d2db1714dbf2ee706344e9075e3b2`.
+Evidence is in `.local/evidence/fillet-curves-install-20261013/`.
+
+**The running chat has not reloaded.** A direct `cad_help` call after installation
+still omits `radius_end` and `continuity`. The generated app-server protocol
+exposes `config/mcpServer/reload`, but the supported local control-socket proxy
+could not complete initialization with either the app-bundled CLI or the managed
+daemon's matching CLI. Bounded probes timed out before sending a reload request;
+no app/daemon restart or UI restriction bypass was attempted. Quit and reopen
+Codex to load the updated plugin. Fresh-runtime verification does not establish
+current-chat reload or desktop viewer acceptance.
+
+## Variable/G2 fillets and saved-curve sweeps — 2026-10-13
+
+Added optional `radius_end` and an explicit geometric `start` endpoint to native
+`fillet`. One selected edge seeds an open tangent contour; positive endpoint
+radii follow OCCT's smooth interpolation, with no claim of a linear radius law.
+Missing or ambiguous endpoints reject the feature without changing HEAD.
+`continuity:"G2"` builds quintic Hermite strips against the actual support
+surfaces, using conventional fillet contact rails to define their extent.
+The implementation converts every strip in the propagated tangent contours.
+Independent off-grid checks enforce position, tangent-plane and complete
+curvature-tensor bounds. Closed strips use true C2 periodic cubic interpolation;
+OCCT's ordinary periodic interpolation is only C1 at its seam. Sewing retains
+solid ownership, including internal cavity shells and disconnected solids.
+Unsupported corner patches or incompatible terminal supports fail explicitly;
+there is no G1 substitution. See [PARITY_SOLIDS.md](PARITY_SOLIDS.md).
+
+`sweep.path` can now name an earlier native curve, including a helix, trimmed
+curve or extracted edge. It reuses the saved connected wire directly, with its
+oriented start and tangent. Path and varying-section dependencies both survive
+provenance, cache invalidation and portable component capture. Existing inline
+paths remain compatible. Shared schemas, runtime validation, compiled help,
+the authoring skill and three editable examples document the new contracts.
+See [RICHER_MODELING.md](RICHER_MODELING.md).
+
+The G2 regression exposed OCCT adaptive Gauss returning zero for a naturally
+bounded nonrational B-spline face. Those exact surfaces now use knot-aware GK
+integration with the existing 1e-9 tolerance. Independent STEP integration
+agrees with native summaries; there is no relaxed tolerance or mesh fallback.
+
+Validation on macOS arm64: the Release build completed without warnings. The
+broad run passed all **89 CTest suites** in **187.45 seconds**. After final
+contour-propagation hardening, `fillet_curves` passed **1,747 checks** in **9.43
+seconds**, and ten relevant existing suites passed in **38.53 seconds**. Tests
+re-import STEP to check variable contact positions, G2 directional curvature,
+C2 periodic seams, material volume, cavity/disconnected-solid preservation,
+cache reload, portable components, rollback and durable jobs. The final focused
+Draft 2020-12 check passed **112 checks** over three actual native models and
+standalone help schemas. The full schema and official MCP SDK 2.3.0 checks passed
+**895 checks across 34 tools** and **2,057 interoperability checks**, respectively,
+before the last contour-only refinement. The final visual SDK run passed **698
+checks** in **16.113 seconds**, creating/exporting/rendering all three examples.
+Their four-view PNGs were inspected; final image hashes match the inspected
+images. No production code changed after these final checks. Evidence and
+executable identity are in `.local/evidence/fillet-curves/`.
+
+This is a local source/build increment on `codex/fillet-curves`. Its subsequent
+local installation and pending desktop reload are recorded above. Linux/Windows builds, publisher signing and
+actual desktop-host acceptance remain separate release gates; no new claims
+are made for those platforms. Run the relevant platform/host release gates
+before publishing.
 
 ## Help and sheet plugin installed in Codex — 2026-10-12
 

@@ -242,6 +242,15 @@ analytic shared-scale projections, native/external geometry, source preservation
 and cancellation. The official SDK check validates help and sheet schemas,
 real PNG/image/download delivery and rejected contradictory settings.
 
+Fillet and saved-curve checks use `ctest --test-dir build -R '^fillet_curves$'
+--output-on-failure` and `python tests/fillet_curves_schema_tests.py
+build/agent-3d-cad`. Native tests independently re-import STEP and compare contact
+positions, tangent planes, directional curvature and periodic seam derivatives;
+they also cover parameter edits, rollback, cache reload, components and jobs.
+The visual SDK suite creates, exports and renders the editable
+`variable-fillet`, `g2-fillet` and `helix-sweep` examples. These are geometry
+demonstrations, not manufactured spring or fatigue design specifications.
+
 `cad_drawing` creates revision-qualified vector drawings in isolated native
 workers, with aligned first-/third-angle layouts, hatched planar sections,
 hidden-line views, geometry-checked linear/angular dimensions and explicit tolerances,
