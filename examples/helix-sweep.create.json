@@ -1,0 +1,104 @@
+{
+  "document_id": "helix-sweep",
+  "model": {
+    "schema_version": 1,
+    "units": "mm",
+    "parameters": {
+      "coil_radius": 12,
+      "pitch": 8,
+      "turns": 4,
+      "wire_radius": 1.3
+    },
+    "features": [
+      {
+        "id": "spine",
+        "type": "curve_helix",
+        "frame": {
+          "origin": [
+            0,
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        },
+        "radius": {
+          "parameter": "coil_radius"
+        },
+        "pitch": {
+          "parameter": "pitch"
+        },
+        "turns": {
+          "parameter": "turns"
+        }
+      },
+      {
+        "id": "profile",
+        "type": "sketch",
+        "profile": {
+          "type": "circle",
+          "radius": {
+            "parameter": "wire_radius"
+          }
+        },
+        "workplane": {
+          "origin": [
+            {
+              "parameter": "coil_radius"
+            },
+            0,
+            0
+          ],
+          "normal": [
+            0,
+            1,
+            {
+              "expression": {
+                "op": "divide",
+                "args": [
+                  {
+                    "parameter": "pitch"
+                  },
+                  {
+                    "expression": {
+                      "op": "multiply",
+                      "args": [
+                        {
+                          "parameter": "coil_radius"
+                        },
+                        6.283185307179586
+                      ],
+                      "unit": "dimensionless"
+                    }
+                  }
+                ],
+                "unit": "dimensionless"
+              }
+            }
+          ],
+          "x_direction": [
+            1,
+            0,
+            0
+          ]
+        }
+      },
+      {
+        "id": "part",
+        "type": "sweep",
+        "input": "profile",
+        "path": "spine",
+        "orientation": "frenet"
+      }
+    ],
+    "output": "part"
+  }
+}

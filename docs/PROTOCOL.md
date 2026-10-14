@@ -86,7 +86,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `cylinder` | `radius`, `height` | `origin` defaults to base center `[0,0,0]`; +Z |
 | `external_thread` | `major_diameter`, `pitch`, `length` | +Z; optional `origin`, `handedness` (`right` default or `left`) |
 | `cut`, `fuse` | `left`, `right` | Earlier solid features |
-| `fillet` | `input`, `radius`, `edges` | `edges` is `"all"` or a geometric selector |
+| `fillet` | `input`, `radius`, `edges` | Optional `radius_end` with geometric `start` endpoint; optional `continuity: G1|G2` (default G1); see [fillet contracts](PARITY_SOLIDS.md#variable-radius-and-g2-fillets) |
 | `chamfer` | `input`, `distance`, `edges` | Symmetric by default; optional `distance2` or `angle_deg` requires geometric `reference_face` selecting one adjacent side |
 | `scale` | `input`, `origin`, `factors` | Positive uniform scalar or world XYZ factors, including imported solids |
 | `draft` | `input`, `faces`, `angle_deg`, `direction`, `neutral_plane` | Signed draft of selected existing planar/cylindrical/conical faces about an explicit neutral plane |
@@ -126,7 +126,7 @@ Every feature requires `id` and `type`. Fields below are additional fields.
 | `twist_extrude` | `input`, `distance`, `angle_deg` | Signed travel along sketch normal with rotation about that normal; optional world `center` in the sketch plane |
 | `revolve` | `input`, `axis`, `angle_deg` | Sketch; angle in (0,360] |
 | `loft` | `sections` | 1–32 single-region sketches with matching holes; optional `ruled`, `start_vertex`, `end_vertex`; at least two sections including vertices; explicit `hole_order` landmarks for multiple holes |
-| `sweep` | Either `input` or `sections`, plus `path` | Exact path; optional orientation/binormal/guide and transition controls; 2–32 varying sketch stations with matching holes |
+| `sweep` | Either `input` or `sections`, plus `path` | Inline exact path or earlier curve feature ID, including helices; optional orientation/binormal/guide and transition controls; 2–32 varying sketch stations with matching holes |
 | `transform`, `instance` | `input` | Optional `translation`, `rotation`; solid reuse |
 | `pattern` | `input`, `count`, `step` | Count is a dimensionless scalar evaluating to an integer 2–64; translated copies including original; replication budget below |
 | `circular_pattern` | `input`, `count`, `axis`, `angle_deg` | Same parameterized count; rotated copies with signed angular step, including original |
@@ -240,7 +240,11 @@ whether an interior is removed. Interiors must be strictly contained, disjoint,
 non-nested, and separated from other boundaries by more than 1e-7 mm.
 
 A sweep may use `path: {type:"wire", segments:[...]}` with world-coordinate 3D
-points. Existing array-valued polyline paths remain supported. Segment forms:
+points, or `path:"curve_feature_id"` to consume one connected wire from an earlier
+curve, helix, trim or extracted-edge feature. The saved wire is used directly;
+it is not sampled into a polyline or refitted. The first profile origin and normal
+must match the path start and tangent. Existing array-valued polyline paths remain
+supported. Segment forms:
 
 | Type | Fields | Meaning |
 |---|---|---|

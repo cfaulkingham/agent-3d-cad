@@ -1323,7 +1323,7 @@ Json feature_provenance(const Json& feature,const Json& history,bool history_tru
   if(feature.contains("path")&&feature.at("path").is_string())dependencies.push_back(feature.at("path"));
   if(feature.contains("boundaries"))for(const auto& b:feature.at("boundaries"))if(b.contains("input")&&std::find(dependencies.begin(),dependencies.end(),b.at("input"))==dependencies.end())dependencies.push_back(b.at("input"));
   if(feature.contains("constraints"))for(const auto& c:feature.at("constraints"))if(c.contains("edge")&&std::find(dependencies.begin(),dependencies.end(),c.at("edge").at("feature_id"))==dependencies.end())dependencies.push_back(c.at("edge").at("feature_id"));
-  if (feature.contains("sections")) dependencies=feature.at("sections");
+  if (feature.contains("sections")) for(const auto& section:feature.at("sections"))dependencies.push_back(section);
   if (feature.contains("inputs")) dependencies=feature.at("inputs");
   if (feature.at("type")=="assembly") {
     std::set<std::string> added;
@@ -1783,6 +1783,227 @@ TopoDS_Face filling_surface(const Json& feature,const Json& parameters,const std
   }
 }
 using Spline=occ::handle<Geom_BSplineCurve>;
+// G2 fillets retain the rolling fillet's contact rails, then replace its
+// circular section with a quintic Hermite blend. Matching the support's
+// second fundamental form supplies curvature continuity, not just internal
+// B-spline smoothness. Longitudinal interpolation is independently verified.
+struct G2Rail {TopoDS_Edge edge;TopoDS_Face support;double cross;};
+struct G2Patch {TopoDS_Face original,face;std::vector<std::pair<TopoDS_Edge,TopoDS_Edge>> ends;};
+Spline periodic_c2_interpolation(const NCollection_HArray1<gp_Pnt>& samples) {
+  // Uniform periodic cubic interpolation: C[i-1]+4*C[i]+C[i+1]=6*P[i].
+  // Solve the cyclic tridiagonal system by a rank-one correction. Unlike
+  // GeomAPI_Interpolate's periodic mode this has a simple knot at the seam,
+  // so the longitudinal second derivative is continuous there as well.
+  const int n=samples.Length();std::vector<double> diagonal(n,4);diagonal[0]=8;diagonal[n-1]=4.25;
+  for(int i=1;i<n;++i)diagonal[i]-=1/diagonal[i-1];
+  const auto solve=[&](auto rhs) {for(int i=1;i<n;++i)rhs[i]-=rhs[i-1]/diagonal[i-1];rhs[n-1]/=diagonal[n-1];for(int i=n-2;i>=0;--i)rhs[i]=(rhs[i]-rhs[i+1])/diagonal[i];return rhs;};
+  std::vector<double> correction(n,0);correction[0]=-4;correction[n-1]=1;correction=solve(correction);
+  const auto origin=samples.Value(samples.Lower()).XYZ();std::vector<gp_XYZ> values;values.reserve(n);
+  for(int i=0;i<n;++i)values.push_back((samples.Value(samples.Lower()+i).XYZ()-origin)*6);
+  values=solve(values);const auto factor=(values[0]-values[n-1]/4)/(1+correction[0]-correction[n-1]/4);
+  for(int i=0;i<n;++i)values[i]-=factor*correction[i];
+  NCollection_Array1<gp_Pnt> poles(1,n);NCollection_Array1<double> knots(1,n+1);NCollection_Array1<int> mults(1,n+1);mults.Init(1);
+  // OCCT's first periodic span is centered on pole 2.
+  for(int i=0;i<n;++i)poles.SetValue(i+1,gp_Pnt(origin+values[(i+n-1)%n]));
+  for(int i=0;i<=n;++i)knots.SetValue(i+1,static_cast<double>(i)/n);
+  return new Geom_BSplineCurve(poles,knots,mults,3,true);
+}
+gp_Dir surface_normal(const TopoDS_Face& face,const gp_Pnt& point) {
+  const auto surface=BRep_Tool::Surface(face);GeomAPI_ProjectPointOnSurf projection(point,surface);
+  if(!projection.IsDone()||projection.NbPoints()==0)throw Error("invalid_shape","Cannot project G2 contact onto support");
+  double u,v;projection.LowerDistanceParameters(u,v);GeomLProp_SLProps props(surface,u,v,1,1e-10);
+  if(!props.IsNormalDefined())throw Error("invalid_shape","G2 contact has undefined normal");return props.Normal();
+}
+std::array<std::array<double,3>,3> curvature_tensor(GeomLProp_SLProps& props) {
+  std::array<std::array<double,3>,3> result{};const auto normal=props.Normal();
+  if(props.IsUmbilic()) {const double k=(props.MinCurvature()+props.MaxCurvature())/2;
+    for(int i=0;i<3;++i)for(int j=0;j<3;++j)result[i][j]=k*((i==j?1.:0.)-normal.Coord(i+1)*normal.Coord(j+1));
+  } else {gp_Dir high,low;props.CurvatureDirections(high,low);
+    for(int i=0;i<3;++i)for(int j=0;j<3;++j)result[i][j]=props.MaxCurvature()*high.Coord(i+1)*high.Coord(j+1)+props.MinCurvature()*low.Coord(i+1)*low.Coord(j+1);
+  }return result;
+}
+G2Patch g2_patch(const TopoDS_Face& original,const TopoDS_Shape& rounded,const ShapeMap& blends) {
+  const auto old_surface=BRep_Tool::Surface(original);std::vector<G2Rail> rails;int cross_axis=-1;
+  double u0,u1,v0,v1;BRepTools::UVBounds(original,u0,u1,v0,v1);
+  ShapeMap boundary;TopExp::MapShapes(original,TopAbs_EDGE,boundary);
+  for(int i=1;i<=boundary.Extent();++i) {
+    const auto edge=TopoDS::Edge(boundary(i));BRepAdaptor_Curve curve(edge);const auto midpoint=curve.Value((curve.FirstParameter()+curve.LastParameter())/2);
+    for(TopExp_Explorer it(rounded,TopAbs_FACE);it.More();it.Next()) {
+      const auto support=TopoDS::Face(it.Current());if(support.IsSame(original)||blends.Contains(support))continue;
+      ShapeMap edges;TopExp::MapShapes(support,TopAbs_EDGE,edges);if(!edges.Contains(edge))continue;
+      if(std::abs(surface_normal(original,midpoint).Dot(surface_normal(support,midpoint)))<1-1e-8)continue;
+      double first,last;const auto uv=BRep_Tool::CurveOnSurface(edge,original,first,last);if(uv.IsNull())throw Error("invalid_shape","G2 contact has no native UV curve");
+      const auto a=uv->Value(first),b=uv->Value(last),m=uv->Value((first+last)/2);
+      const bool const_u=std::abs(a.X()-b.X())<1e-8&&std::abs(a.X()-m.X())<1e-8;
+      const bool const_v=std::abs(a.Y()-b.Y())<1e-8&&std::abs(a.Y()-m.Y())<1e-8;
+      if(const_u==const_v)throw Error("invalid_model","G2 contact rails must bound a regular parametric strip");
+      const int axis=const_u?0:1;if(cross_axis!=-1&&cross_axis!=axis)throw Error("invalid_model","G2 contact rails have incompatible surface directions");cross_axis=axis;
+      rails.push_back({edge,support,const_u?a.X():a.Y()});
+    }
+  }
+  if(rails.size()!=2)throw Error("invalid_model","G2 blend requires two unambiguous support rails",{{"support_rails",rails.size()}});
+  std::sort(rails.begin(),rails.end(),[](const auto& a,const auto& b){return a.cross<b.cross;});
+  const double lo=cross_axis==0?v0:u0,hi=cross_axis==0?v1:u1,span=rails[1].cross-rails[0].cross;
+  if(hi-lo<1e-10||span<1e-10)throw Error("invalid_shape","G2 strip has collapsed parameter bounds");
+  const auto uv=[&](double t,double c){return cross_axis==0?gp_Pnt2d(c,lo+(hi-lo)*t):gp_Pnt2d(lo+(hi-lo)*t,c);};
+  const auto poles_at=[&](double t) {
+    std::array<gp_Pnt,6> poles;
+    for(int side=0;side<2;++side) {
+      const auto p=uv(t,rails[side].cross);gp_Pnt point;gp_Vec du,dv;old_surface->D1(p.X(),p.Y(),point,du,dv);
+      const auto support=BRep_Tool::Surface(rails[side].support);GeomAPI_ProjectPointOnSurf projection(point,support);
+      if(!projection.IsDone()||projection.NbPoints()==0||projection.LowerDistance()>1e-6)throw Error("invalid_shape","G2 rail does not lie on its support");
+      double su,sv;projection.LowerDistanceParameters(su,sv);gp_Pnt q;gp_Vec a,b,aa,bb,ab;support->D2(su,sv,q,a,b,aa,bb,ab);
+      const auto normal=a.Crossed(b).Normalized();auto d=(cross_axis==0?du:dv)*span;d-=normal*d.Dot(normal);
+      if(d.Magnitude()<1e-8)throw Error("invalid_shape","G2 section tangent is undefined");
+      const double e=a.Dot(a),f=a.Dot(b),g=b.Dot(b),det=e*g-f*f;
+      if(det<=1e-20)throw Error("invalid_shape","G2 support parameterization is singular");
+      const double x=(g*d.Dot(a)-f*d.Dot(b))/det,y=(e*d.Dot(b)-f*d.Dot(a))/det;
+      const auto acceleration=normal*(aa*(x*x)+ab*(2*x*y)+bb*(y*y)).Dot(normal);
+      if(side==0) {poles[0]=point;poles[1]=point.Translated(d/5);poles[2]=point.Translated(d*.4+acceleration/20);}
+      else {poles[5]=point;poles[4]=point.Translated(-d/5);poles[3]=point.Translated(-d*.4+acceleration/20);}
+    }return poles;
+  };
+  const auto first=poles_at(0),last=poles_at(1);bool periodic=true;for(int i=0;i<6;++i)if(first[i].Distance(last[i])>1e-7)periodic=false;
+  occ::handle<Geom_BSplineSurface> surface;
+  bool verified=false;Json verification=Json::object();
+  for(int intervals:{8,16,32,64,128,256,512}) {
+    const int size=periodic?intervals:intervals+1;
+    std::array<occ::handle<NCollection_HArray1<gp_Pnt>>,6> samples;
+    for(auto& points:samples)points=new NCollection_HArray1<gp_Pnt>(1,size);
+    occ::handle<NCollection_HArray1<double>> parameters=new NCollection_HArray1<double>(1,intervals+1);
+    for(int i=0;i<=intervals;++i) {parameters->SetValue(i+1,static_cast<double>(i)/intervals);if(i>=size)continue;
+      const auto values=poles_at(static_cast<double>(i)/intervals);for(int j=0;j<6;++j)samples[j]->SetValue(i+1,values[j]);}
+    std::array<Spline,6> curves;
+    for(int j=0;j<6;++j){
+      if(periodic){curves[j]=periodic_c2_interpolation(*samples[j]);continue;}
+      GeomAPI_Interpolate interpolation(samples[j],parameters,false,1e-10);interpolation.Perform();if(!interpolation.IsDone())throw Error("kernel_failure","G2 rail interpolation failed");curves[j]=interpolation.Curve();
+    }
+    const auto& c=curves[0];NCollection_Array2<gp_Pnt> poles(1,c->NbPoles(),1,6);
+    for(int j=0;j<6;++j) {
+      if(curves[j]->NbPoles()!=c->NbPoles()||curves[j]->NbKnots()!=c->NbKnots()||curves[j]->Degree()!=c->Degree())throw Error("kernel_failure","G2 interpolation grids differ");
+      for(int i=1;i<=c->NbKnots();++i)if(curves[j]->Knot(i)!=c->Knot(i)||curves[j]->Multiplicity(i)!=c->Multiplicity(i))throw Error("kernel_failure","G2 interpolation knots differ");
+      for(int i=1;i<=c->NbPoles();++i)poles.SetValue(i,j+1,curves[j]->Pole(i));
+    }
+    NCollection_Array1<double> cross_knots(1,2);NCollection_Array1<int> cross_mults(1,2);
+    cross_knots.SetValue(1,0);cross_knots.SetValue(2,1);cross_mults.Init(6);
+    surface=new Geom_BSplineSurface(poles,c->Knots(),cross_knots,c->Multiplicities(),cross_mults,c->Degree(),5,periodic,false);
+    verified=true;
+    // Off-grid samples test the actual interpolated boundary, its tangent
+    // plane and its entire curvature tensor, including principal directions.
+    for(int i=0;i<=intervals*4&&verified;++i)for(int side=0;side<2&&verified;++side) {
+      const double t=static_cast<double>(i)/(intervals*4);const auto p=uv(t,rails[side].cross);const auto expected=old_surface->Value(p.X(),p.Y());
+      const auto actual=surface->Value(t,side);if(expected.Distance(actual)>1e-7){verification={{"quantity","contact_position"},{"error",expected.Distance(actual)},{"station",t},{"side",side}};verified=false;break;}
+      const auto support=BRep_Tool::Surface(rails[side].support);GeomAPI_ProjectPointOnSurf projection(actual,support);if(!projection.IsDone()||projection.NbPoints()==0||projection.LowerDistance()>1e-7){verified=false;break;}
+      double a,b;projection.LowerDistanceParameters(a,b);GeomLProp_SLProps lhs(surface,t,side,2,1e-10),rhs(support,a,b,2,1e-10);
+      if(!lhs.IsNormalDefined()||!rhs.IsNormalDefined()||!lhs.IsCurvatureDefined()||!rhs.IsCurvatureDefined()){verified=false;break;}
+      const double dot=lhs.Normal().Dot(rhs.Normal());if(std::acos(std::clamp(std::abs(dot),0.,1.))>1e-5){verification={{"quantity","normal_angle"},{"error",std::acos(std::clamp(std::abs(dot),0.,1.))},{"station",t},{"side",side}};verified=false;break;}
+      const auto ta=curvature_tensor(lhs),tb=curvature_tensor(rhs);for(int r=0;r<3;++r)for(int k=0;k<3;++k)if(std::abs(ta[r][k]-tb[r][k]*(dot<0?-1:1))>1e-5){verification={{"quantity","curvature_tensor"},{"error",std::abs(ta[r][k]-tb[r][k]*(dot<0?-1:1))},{"station",t},{"side",side}};verified=false;}
+    }
+    if(verified)break;
+  }
+  if(!verified)throw Error("invalid_shape","G2 blend failed position, normal or curvature verification within its interpolation budget",verification);
+  BRepBuilderAPI_MakeFace builder(surface,1e-7);if(!builder.IsDone())throw Error("kernel_failure","G2 surface face construction failed");auto face=builder.Face();
+  const auto mid=uv(.5,(rails[0].cross+rails[1].cross)/2);GeomLProp_SLProps before(old_surface,mid.X(),mid.Y(),1,1e-10),after(surface,.5,.5,1,1e-10);
+  if(!before.IsNormalDefined()||!after.IsNormalDefined())throw Error("invalid_shape","G2 blend interior normal is undefined");
+  const double orientation=original.Orientation()==TopAbs_REVERSED?-1:1;if(before.Normal().Dot(after.Normal())*orientation<0)face.Reverse();
+  G2Patch result{original,face,{}};
+  if(!periodic)for(int i=1;i<=boundary.Extent();++i) {
+    const auto edge=TopoDS::Edge(boundary(i));if(edge.IsSame(rails[0].edge)||edge.IsSame(rails[1].edge))continue;
+    double first_parameter,last_parameter;const auto pc=BRep_Tool::CurveOnSurface(edge,original,first_parameter,last_parameter);
+    if(pc.IsNull())throw Error("invalid_shape","G2 end boundary has no pcurve");const auto a=pc->Value(first_parameter),b=pc->Value(last_parameter);
+    const double along_a=cross_axis==0?a.Y():a.X(),along_b=cross_axis==0?b.Y():b.X();
+    if(std::abs(along_a-along_b)>1e-8)throw Error("invalid_model","G2 end boundaries must be transverse surface sections");
+    const double end=std::abs(along_a-lo)<std::abs(along_a-hi)?0:1;
+    TopoDS_Edge replacement;
+    for(TopExp_Explorer it(face,TopAbs_EDGE);it.More();it.Next()) {
+      const auto candidate=TopoDS::Edge(it.Current());double f,l;const auto uv_curve=BRep_Tool::CurveOnSurface(candidate,face,f,l);
+      if(uv_curve.IsNull())continue;const auto p=uv_curve->Value(f),q=uv_curve->Value(l);
+      if(std::abs(p.X()-end)<1e-8&&std::abs(q.X()-end)<1e-8){replacement=candidate;break;}
+    }
+    if(replacement.IsNull())throw Error("invalid_shape","G2 end replacement is missing");
+    const auto start=BRep_Tool::Pnt(TopExp::FirstVertex(edge,true));
+    if(start.Distance(BRep_Tool::Pnt(TopExp::FirstVertex(replacement,true)))>1e-6)replacement.Reverse();
+    if(start.Distance(BRep_Tool::Pnt(TopExp::FirstVertex(replacement,true)))>1e-6)throw Error("invalid_shape","G2 end replacement does not preserve its endpoint");
+    result.ends.emplace_back(edge,replacement);
+  }
+  return result;
+}
+struct G2Fillet {
+  TopoDS_Shape shape;std::vector<std::pair<TopoDS_Shape,TopoDS_Shape>> replacements;
+  std::unique_ptr<BRepBuilderAPI_Sewing> sewing;
+  TopoDS_Shape mapped(const TopoDS_Shape& original) {
+    auto result=original;for(const auto& [from,to]:replacements)if(from.IsSame(result)){result=to;break;}
+    if(sewing->IsModified(result))return sewing->Modified(result);
+    if(sewing->IsModifiedSubShape(result))return sewing->ModifiedSubShape(result);return result;
+  }
+};
+G2Fillet g2_fillet(BRepFilletAPI_MakeFillet& operation) {
+  const auto rounded=operation.Shape();ShapeMap blends,vertices;
+  // Selection seeds entire tangent contours. Convert every generated strip,
+  // including edges reached by native propagation beyond the selected edge.
+  for(int contour=1;contour<=operation.NbContours();++contour)for(int index=1;index<=operation.NbEdges(contour);++index) {
+    const auto& edge=operation.Edge(contour,index);TopExp::MapShapes(edge,TopAbs_VERTEX,vertices);
+    for(const auto& generated:operation.Generated(edge))if(generated.ShapeType()==TopAbs_FACE)blends.Add(generated);
+  }
+  for(int i=1;i<=vertices.Extent();++i)for(const auto& generated:operation.Generated(vertices(i)))
+    if(generated.ShapeType()==TopAbs_FACE&&!blends.Contains(generated))throw Error("invalid_model","G2 corner patches require a supported two-rail strip");
+  if(blends.IsEmpty())throw Error("invalid_shape","G2 fillet generated no blend faces");
+  std::vector<G2Patch> patches;for(int i=1;i<=blends.Extent();++i)patches.push_back(g2_patch(TopoDS::Face(blends(i)),rounded,blends));
+  G2Fillet result;result.sewing=std::make_unique<BRepBuilderAPI_Sewing>(1e-6,true,true,false,false);
+  for(const auto& patch:patches){result.replacements.emplace_back(patch.original,patch.face);for(const auto& pair:patch.ends)result.replacements.emplace_back(pair.first,pair.second);}
+  for(TopExp_Explorer it(rounded,TopAbs_FACE);it.More();it.Next()) {
+    const auto original=TopoDS::Face(it.Current());if(blends.Contains(original)){for(const auto& patch:patches)if(patch.original.IsSame(original))result.sewing->Add(patch.face);continue;}
+    bool modified=false;std::vector<TopoDS_Wire> wires;const auto forward=TopoDS::Face(original.Oriented(TopAbs_FORWARD));
+    for(TopoDS_Iterator wire_it(forward);wire_it.More();wire_it.Next()) {
+      BRepBuilderAPI_MakeWire wire;
+      for(BRepTools_WireExplorer edge_it(TopoDS::Wire(wire_it.Value()),forward);edge_it.More();edge_it.Next()) {
+        auto edge=edge_it.Current();
+        for(const auto& patch:patches)for(const auto& [from,to]:patch.ends)if(from.IsSame(edge)) {
+          auto replacement=to;if(from.Orientation()!=edge.Orientation())replacement.Reverse();edge=replacement;modified=true;
+          const auto support=BRep_Tool::Surface(original);BRepAdaptor_Curve curve(edge);
+          for(int n=0;n<=16;++n){GeomAPI_ProjectPointOnSurf on(curve.Value(curve.FirstParameter()+(curve.LastParameter()-curve.FirstParameter())*n/16.),support);if(!on.IsDone()||on.NbPoints()==0||on.LowerDistance()>1e-6)throw Error("invalid_model","G2 blend end cannot remain on its terminal support face");}
+        }
+        wire.Add(edge);
+      }
+      if(!wire.IsDone())throw Error("invalid_shape","G2 terminal wire is disconnected");wires.push_back(wire.Wire());
+    }
+    if(!modified){result.sewing->Add(original);continue;}
+    BRepBuilderAPI_MakeFace face;face.Init(BRep_Tool::Surface(original),false,1e-7);for(const auto& wire:wires)face.Add(wire);
+    if(!face.IsDone())throw Error("kernel_failure","G2 terminal face reconstruction failed");auto rebuilt=face.Face();rebuilt.Orientation(original.Orientation());
+    result.replacements.emplace_back(original,rebuilt);result.sewing->Add(rebuilt);
+  }
+  result.sewing->Perform();const auto sewed=result.sewing->SewedShape();
+  if(sewed.IsNull()||result.sewing->NbFreeEdges()!=0||result.sewing->NbMultipleEdges()!=0||result.sewing->NbDeletedFaces()!=0)throw Error("invalid_shape","G2 fillet must form closed manifold shells",{{"free_edges",result.sewing->NbFreeEdges()},{"multiple_edges",result.sewing->NbMultipleEdges()}});
+  // Keep each shell with its original solid, including oppositely oriented
+  // cavity shells. Turning every sewn shell into its own solid fills voids.
+  std::vector<ShapeMap> owners;std::vector<int> shell_counts;
+  for(TopExp_Explorer it(rounded,TopAbs_SOLID);it.More();it.Next()) {
+    ShapeMap faces;for(TopExp_Explorer face(it.Current(),TopAbs_FACE);face.More();face.Next())TopExp::MapShapes(result.mapped(face.Current()),TopAbs_FACE,faces);
+    owners.push_back(std::move(faces));shell_counts.push_back(count(it.Current(),TopAbs_SHELL));
+  }
+  std::vector<std::vector<TopoDS_Shell>> shells(owners.size());
+  for(TopExp_Explorer it(sewed,TopAbs_SHELL);it.More();it.Next()) {
+    const auto shell=TopoDS::Shell(it.Current());if(BRepCheck_Shell(shell).Closed()!=BRepCheck_NoError)throw Error("invalid_shape","G2 fillet shell is open");
+    int owner=-1;
+    for(TopExp_Explorer face(shell,TopAbs_FACE);face.More();face.Next()) {
+      int match=-1;for(std::size_t i=0;i<owners.size();++i)if(owners[i].Contains(face.Current())){if(match!=-1)throw Error("invalid_shape","G2 shell has ambiguous solid ownership");match=static_cast<int>(i);}
+      if(match<0||(owner>=0&&owner!=match))throw Error("invalid_shape","G2 shell lost its original solid ownership");owner=match;
+    }
+    if(owner<0)throw Error("invalid_shape","G2 fillet produced an empty shell");shells[owner].push_back(shell);
+  }
+  BRep_Builder builder;TopoDS_Compound compound;builder.MakeCompound(compound);
+  for(std::size_t i=0;i<shells.size();++i) {
+    if(static_cast<int>(shells[i].size())!=shell_counts[i])throw Error("invalid_shape","G2 fillet changed the shell count of a source solid");
+    BRepBuilderAPI_MakeSolid solid;for(const auto& shell:shells[i])solid.Add(shell);check_shape(solid.Shape());builder.Add(compound,solid.Shape());
+  }
+  result.shape=compound;check_shape(result.shape);BRepAlgoAPI_Check interference(result.shape,false,true);if(!interference.IsValid())throw Error("invalid_shape","G2 fillet self-intersects");return result;
+}
+struct G2FilletHistory {
+  BRepFilletAPI_MakeFillet& operation;G2Fillet& result;
+  bool IsDeleted(const TopoDS_Shape& s){return operation.IsDeleted(s);}
+  NCollection_List<TopoDS_Shape> Modified(const TopoDS_Shape& s){NCollection_List<TopoDS_Shape> list;list.Append(result.mapped(s));for(const auto& item:operation.Modified(s))list.Append(result.mapped(item));return list;}
+  NCollection_List<TopoDS_Shape> Generated(const TopoDS_Shape& s){NCollection_List<TopoDS_Shape> list;for(const auto& item:operation.Generated(s))list.Append(result.mapped(item));return list;}
+};
 Spline network_curve(const Json& value,const Json& parameters) {
   const auto wire=curve_wire(Json::array({value}),parameters).wire;const auto edge=TopoDS::Edge(TopExp_Explorer(wire,TopAbs_EDGE).Current());double first,last;auto curve=BRep_Tool::Curve(edge,first,last);
   auto spline=GeomConvert::CurveToBSplineCurve(new Geom_TrimmedCurve(curve,first,last));if(spline->IsRational()||spline->IsPeriodic())throw Error("invalid_model","Gordon curves must be nonperiodic polynomial curves");
@@ -3036,7 +3257,13 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
         Json segments=path.is_object()?path.at("segments"):Json::array();
         if (path.is_array()) for (std::size_t i=1;i<path.size();++i)
           segments.push_back({{"type","line"},{"start",path[i-1]},{"end",path[i]}});
-        const auto spine=curve_wire(segments,parameters);
+        const auto spine=[&]() -> CurveWire {
+          if(!path.is_string())return curve_wire(segments,parameters);
+          const auto wire=single_curve_wire(shapes.at(path.get<std::string>()));
+          const CurvePath measured(wire);const auto& first=measured.spans.front();
+          const auto start=measured.on_span(first,0);
+          return {wire,start.point,gp_Vec(start.tangent)};
+        }();
         if (spine.start.Distance(planes.at(input).Location()) > 1e-7 || std::abs(gp_Dir(spine.tangent).Dot(planes.at(input).Direction())) < 1-1e-9) {
           throw Error("invalid_model","Sweep path must start at the sketch origin with a tangent perpendicular to its plane");
         }
@@ -3372,7 +3599,27 @@ BuiltModel::BuiltModel(const Json& model,const FeatureCache& cache) : impl_(std:
           if (!operation.IsDone()) throw Error("kernel_failure",type+" failed; change its dimension or the input geometry");
           shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
         };
-        if (type=="fillet") {BRepFilletAPI_MakeFillet operation(copy.Shape());finish(operation,"radius");}
+        if (type=="fillet") {
+          BRepFilletAPI_MakeFillet operation(copy.Shape());
+          if(!feature.contains("radius_end"))finish(operation,"radius");
+          else {
+            const auto edge=TopoDS::Edge(copy.ModifiedShape(edges(selected.front())));operation.Add(edge);
+            const auto contour=operation.Contour(edge);if(!contour)throw Error("invalid_model","Selected edge does not define a fillet contour");
+            const auto first=operation.FirstVertex(contour),last=operation.LastVertex(contour);
+            if(first.IsNull()||last.IsNull()||first.IsSame(last))throw Error("invalid_model","Variable fillet needs an open tangent contour with distinct endpoints");
+            const auto& start=feature.at("start");const auto anchor=parameter_point(start.at("point"),parameters);const auto tolerance=scalar(start.at("tolerance"),parameters);
+            const bool at_first=anchor.Distance(BRep_Tool::Pnt(first))<=tolerance,at_last=anchor.Distance(BRep_Tool::Pnt(last))<=tolerance;
+            if(at_first==at_last)throw Error(at_first?"selection_ambiguous":"selection_missing","Fillet start must identify exactly one contour endpoint");
+            const double r0=scalar(feature.at("radius"),parameters),r1=scalar(feature.at("radius_end"),parameters);
+            operation.SetRadius(at_first?r0:r1,contour,first);operation.SetRadius(at_first?r1:r0,contour,last);
+            operation.Build();if(!operation.IsDone())throw Error("kernel_failure","Variable fillet failed; change radii or input geometry");
+            shape=operation.Shape();record_history(operation,source,input,shape,history,history_truncated,&copy);
+          }
+          if(feature.value("continuity",std::string("G1"))=="G2") {
+            auto blended=g2_fillet(operation);shape=blended.shape;history=Json::array();history_truncated=false;
+            G2FilletHistory evidence{operation,blended};record_history(evidence,source,input,shape,history,history_truncated,&copy);
+          }
+        }
         else {
           BRepFilletAPI_MakeChamfer operation(copy.Shape());
           if(!feature.contains("reference_face"))finish(operation,"distance");
@@ -3540,10 +3787,15 @@ Json BuiltModel::summary(const std::string& feature_id) const {
           };
           for(TopExp_Explorer faces(body,TopAbs_FACE);faces.More();faces.Next()) {
             const auto face=TopoDS::Face(faces.Current());BRepGProp_Face support(face,true);BRepGProp_Domain domain(face);
-            if(rational_support(BRep_Tool::Surface(face))) {
+            // Pinned OCCT adaptive Gauss returns zero for some naturally
+            // bounded nonrational B-spline patches (including the quintic G2
+            // strip). Knot-aware GK integrates those exact surfaces as well;
+            // changing the reference cannot repair a discarded integral.
+            if(rational_support(BRep_Tool::Surface(face))||
+               (support.NaturalRestriction()&&BRepAdaptor_Surface(face).GetType()==GeomAbs_BSplineSurface)) {
               BRepGProp_VinertGK properties;properties.SetLocation(reference);
               const double error=support.NaturalRestriction()?properties.Perform(support,1e-9,true,false):properties.Perform(support,domain,1e-9,true,false);
-              if(error<0||!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Rational surface volume integration failed");
+              if(error<0||!std::isfinite(error)||!std::isfinite(properties.Mass()))throw Error("kernel_failure","Knot-aware surface volume integration failed");
               accumulate(properties,face);
             } else {
               BRepGProp_Vinert properties;properties.SetLocation(reference);

@@ -31,13 +31,30 @@ invalidation, component capture and provenance.
 ## Sweep
 
 `sweep` takes either one sketch `input` or an ordered `sections` array of 2–32
-sketches, plus `path`. The path remains an authored point array or exact wire of
-line, arc, Bezier and interpolated spline segments. Each varying section has one
+sketches, plus `path`. The path is an authored point array, exact wire of
+line, arc, Bezier and interpolated spline segments, or the ID of an earlier curve
+feature. Saved curves include `curve_helix`, `curve_trim` and `curve_extract`.
+The native wire, orientation and surface-curve representation are retained;
+there is no polyline sampling or spline refitting. Curve edits invalidate the
+sweep cache and participate in component capture and provenance, including
+sweeps with multiple section sketches. A saved curve must contain one connected
+unbranched wire; solids and sketches must first yield a curve through explicit
+edge extraction. Each varying section has one
 planar outer region and the same number of interior boundaries. Interior
 boundaries are paired by their centers in the local sketch frame.
 Section origins must lie at unambiguous strictly increasing path stations,
 including both endpoints, with each plane perpendicular to its path tangent.
 Sections are not moved automatically to the path.
+
+For a right-handed helix on the world Z axis, radius R and pitch P, its start
+is `[R,0,0]` and its tangent is parallel to `[0,2*pi*R,P]`. A circle sketch at
+that location with the same normal and X direction `[1,0,0]` can sweep directly
+with `{"id":"spring","type":"sweep","input":"wire_profile","path":"helix",
+"orientation":"frenet"}`. Use dimensioned parameter expressions to keep the
+profile frame consistent with editable helix dimensions. Curve queries return
+native start points and oriented tangents for other frames or trimmed paths.
+The bundled `helix-sweep.create.json` example keeps its radius,
+pitch and profile frame connected through editable parameter expressions.
 
 Optional orientation controls are mutually exclusive:
 

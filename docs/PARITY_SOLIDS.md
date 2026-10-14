@@ -6,6 +6,54 @@ exact feature caches and transaction rollback. No sibling runtime or Python code
 is part of the implementation. These are solid-modeling capabilities, not a
 claim of complete build123d API parity or host/release readiness.
 
+## Variable-radius and G2 fillets
+
+The existing `fillet` with one `radius` remains a conventional tangent (G1)
+fillet. Optional `radius_end` adds a positive endpoint radius, and requires
+`start:{point:[x,y,z],tolerance:...}`. The geometric edge selector must have
+`expected_count:1`. Its native tangent contour must be open; the start point
+must identify exactly one contour endpoint within the supplied tolerance.
+`radius` applies there, and `radius_end` at the other endpoint. OCCT smoothly
+interpolates the endpoint constraints; a linear radius at every intermediate
+distance is not promised. The contour can follow tangent-connected edges.
+No orientation is inferred from an evaluated edge number. Both radii, the
+anchor point and its tolerance accept ordinary scalar parameters/expressions.
+
+```json
+{"id":"rounded","type":"fillet","input":"base","radius":2,"radius_end":4,
+ "start":{"point":[20,30,0],"tolerance":0.000001},
+ "edges":{"type":"geometric","feature_id":"base","curve_kind":"line",
+ "expected_count":1,"center":{"point":[20,30,20],"tolerance":0.000001}}}
+```
+
+Optional `continuity:"G2"` requests a curvature-continuous blend against both
+adjacent support faces; `"G1"` is the default. G2 retains the conventional
+fillet's contact rails and replaces the circular cross-section with a quintic
+Hermite blend. Consequently `radius` sets the conventional contact extent,
+not a constant curvature radius within the G2 surface. Variable-radius G2
+uses the same endpoint controls. This does not use OCCT's `SetContinuity`
+switch: that switch controls continuity *inside* a conventional fillet surface
+and does not establish G2 against its supports.
+
+The native construction matches support tangents and normal second derivatives,
+then interpolates their longitudinal trajectories in a bounded B-spline surface.
+Independent off-grid checks compare contact positions (1e-7 mm), normal angles
+(1e-5 rad) and the complete world-space curvature tensor (1e-5 per mm), including
+principal directions. Interpolation uses at most 512 longitudinal intervals;
+failure to satisfy these bounds rejects the feature. Exact B-reps, not meshes,
+remain the model and STEP output. Sewing is bounded to 1e-6 mm, retains source
+support surfaces and requires a valid closed manifold result without self-interference.
+Closed strips use a periodic cubic with C2 continuity at the longitudinal seam.
+Original solid ownership and cavity shells are preserved during sewing.
+
+G2 currently requires regular strips bounded by two unambiguous contact rails.
+Open strip ends must remain on their terminal support faces. Unsupported corner
+networks, singular or incompatible boundaries and failed curvature verification
+are explicit feature errors; they never fall back to a conventional G1 fillet.
+Failed construction or endpoint selection preserves the previous revision.
+The bundled examples directory includes `variable-fillet.create.json` and
+`g2-fillet.create.json` as editable demonstrations.
+
 ## Scaling
 
 `scale` requires `input`, `origin` and `factors`. `factors` is one dimensionless
