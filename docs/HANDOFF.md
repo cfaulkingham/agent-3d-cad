@@ -7,6 +7,33 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Windows and Intel macOS SDK deadline repair — 2026-10-15
+
+Run `38765048843` at `33571fa` passed both complete Ubuntu jobs and macOS arm64.
+Windows job `116526969387` passed all **91 native CTests** and **1,001 independent
+schema checks**, then hit the SDK auto session's cumulative 90-second deadline:
+**1,324 completed checks**, **90.158 seconds wall / 68.500 seconds Python CPU**.
+Intel macOS job `116526969427` passed all **92 native CTests**, then hit the same
+deadline at **923 checks**, **90.057 seconds wall / 79.384 seconds Python CPU**.
+These are full-suite harness deadlines, not individual RPC or geometry failures.
+
+The expanded auto session now has a **300-second** budget, while the smaller
+reopened legacy session retains **90 seconds**. The aggregate cap is **420
+seconds**, including cleanup headroom. All request/response schema validation,
+SDK behavior, per-call limits, native worker budgets and CI gates are unchanged.
+Deadline regressions cover explicit budget cancellation/cleanup, the selected
+budget in diagnostics, independent restart budgets, and inner timeout attribution.
+
+Local validation on macOS arm64 against the existing native Release executable:
+**5 deadline tests**, **9 schema-validator tests**, and the complete official MCP
+SDK 2.3.0 smoke with native slicer fixture passed: **1,764 checks**, auto session
+**44.841 / 32.496 seconds wall / Python CPU**, reopened session **4.893 / 4.259
+seconds**. Poll-dependent check counts vary by host. `git diff --check` passed.
+Native C++ source is unchanged; this does not claim a fresh native rebuild or
+Windows runtime acceptance. The repaired branch still needs remote CI, including
+the previously blocked Windows packaging stages. Evidence is in
+`.local/evidence/windows-sdk-deadline-20261015/` in the isolated repair checkout.
+
 ## Windows CI manifest-byte repair — 2026-10-15
 
 Windows job `116504694986` in run `38758925813` passed all **91 available native

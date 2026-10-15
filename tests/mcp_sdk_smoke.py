@@ -41,29 +41,36 @@ APP_URI = "ui://agent-3d-cad/viewer.html"
 APP_MIME = "text/html;profile=mcp-app"
 TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
 checks = 0
+# The auto session runs the full modeling/viewer/export suite, including Python
+# schema validation for every request and response. Its cumulative wall time is
+# not a per-operation latency contract: Windows CI reached 1,324 checks before
+# the former 90s deadline, with 68.5s spent on Python CPU alone.
+AUTO_LIFECYCLE_TIMEOUT_SECONDS = 300
 LIFECYCLE_TIMEOUT_SECONDS = 90
-TOTAL_TIMEOUT_SECONDS = 2 * LIFECYCLE_TIMEOUT_SECONDS
+TOTAL_TIMEOUT_SECONDS = AUTO_LIFECYCLE_TIMEOUT_SECONDS + LIFECYCLE_TIMEOUT_SECONDS + 30
 
 
 @asynccontextmanager
-async def lifecycle(name):
+async def lifecycle(name, *, timeout_seconds=None):
     """Bound each independent SDK session, including launch and shutdown."""
+    if timeout_seconds is None:
+        timeout_seconds = LIFECYCLE_TIMEOUT_SECONDS
     started = time.perf_counter()
     started_cpu = time.process_time()
     started_checks = checks
     deadline = None
     outcome = "failed"
-    print(f"MCP SDK lifecycle {name}: starting ({LIFECYCLE_TIMEOUT_SECONDS}s deadline)",
+    print(f"MCP SDK lifecycle {name}: starting ({timeout_seconds}s deadline)",
           file=sys.stderr, flush=True)
     try:
-        with anyio.fail_after(LIFECYCLE_TIMEOUT_SECONDS) as deadline:
+        with anyio.fail_after(timeout_seconds) as deadline:
             yield
         outcome = "passed"
     except TimeoutError as error:
         if deadline is not None and deadline.cancelled_caught:
             outcome = "timed out"
             raise TimeoutError(
-                f"MCP SDK {name} lifecycle exceeded {LIFECYCLE_TIMEOUT_SECONDS}s") from error
+                f"MCP SDK {name} lifecycle exceeded {timeout_seconds}s") from error
         raise
     finally:
         print(f"MCP SDK lifecycle {name}: {outcome}; "
@@ -213,7 +220,7 @@ async def smoke(executable, workspace):
     created = None
     # Default auto mode independently probes modern discovery, then negotiates
     # the legacy lifecycle; the test never manufactures those protocol frames.
-    async with lifecycle("auto"), Client(params, read_timeout_seconds=15) as client:
+    async with lifecycle("auto", timeout_seconds=AUTO_LIFECYCLE_TIMEOUT_SECONDS), Client(params, read_timeout_seconds=15) as client:
         definitions = await discover(client)
         example_dir = Path(__file__).resolve().parents[1] / "examples"
         assembly_args = json.loads((example_dir / "assembly.create.json").read_text())
