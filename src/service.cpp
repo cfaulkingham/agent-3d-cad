@@ -1,6 +1,7 @@
 #include "agentcad/download.hpp"
 #include "agentcad/service.hpp"
 #include "agentcad/help.hpp"
+#include "agentcad/failure.hpp"
 #include "agentcad/authoring.hpp"
 #include "agentcad/kernel.hpp"
 #include "agentcad/print_export.hpp"
@@ -88,11 +89,6 @@ Json save_evaluation(const fs::path& root,const Json& record,Json result,bool dr
 }
 }
 
-Json committed_record_receipt(Json record) {
-  record["model_sha256"]=sha256(record.at("model").dump());
-  record.erase("model");return record;
-}
-
 Json tool_definitions() {
   const Json id={{"$ref","#/$defs/model_id"}};
   const Json revision={{"$ref","#/$defs/revision"}};
@@ -142,6 +138,7 @@ Json tool_definitions() {
   const Json record_properties={{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},
     {"kernel_version",{{"const","8.0.1"}}},{"model",{{"$ref","#/$defs/model"}}},{"summary",summary_schema()}};
   auto receipt_properties=record_properties;receipt_properties.erase("model");receipt_properties["model_sha256"]=hash;
+  definitions["commit_changes"]=changes_schema();receipt_properties["changes"]={{"$ref","#/$defs/commit_changes"}};
   auto source_properties=record_properties;source_properties.erase("summary");
   const Json identity={{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},
     {"kernel_version",{{"const","8.0.1"}}},{"evaluation_id",id},{"feature_id",id},{"draft",{{"type","boolean"}}},
@@ -165,16 +162,16 @@ Json tool_definitions() {
   Json tools=Json::array({
     tool("cad_create","Build editable parts or an assembly with rigid or articulated frame mates, and commit revision 1. Optional request_id deduplicates retries. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"model",{{"$ref","#/$defs/model"}}},{"request_id",id}}, {"document_id","model"},
-      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
+      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary","changes"}),false),
     tool("cad_read","Read saved editable intent. Omit revision to read HEAD.",
       {{"document_id",id},{"revision",revision}},{"document_id"},
       object(source_properties,{"schema_version","document_id","revision","kernel_version","model"}),true),
     tool("cad_apply","Build atomic semantic edits, including revision-pinned editable components, and commit only if expected_revision still matches. Failures preserve HEAD. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"expected_revision",revision},{"operations",operations},{"request_id",id}},
-      {"document_id","expected_revision","operations"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
+      {"document_id","expected_revision","operations"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary","changes"}),false),
     tool("cad_restore","Rebuild a historical model as a new revision. History remains immutable; expected_revision must match HEAD. Returns a compact revision/hash/summary receipt; cad_read retrieves the full source.",
       {{"document_id",id},{"expected_revision",revision},{"source_revision",revision},{"request_id",id}},
-      {"document_id","expected_revision","source_revision"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
+      {"document_id","expected_revision","source_revision"},object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary","changes"}),false),
     tool("cad_inspect_step","Inspect a local STEP before importing, including invalid geometry. Reports per-solid validity, tessellation, bounds and diagnostic entities. Source solid indices are scoped to the returned SHA-256 and pinned kernel; use that hash with cad_import solid_indices. No repair, document or revision is created.",
       {{"path",text},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}}}, {"path"},
       object({{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"kernel_version",text},{"index_lifetime",{{"const","source_sha256_and_kernel"}}},
@@ -187,13 +184,13 @@ Json tool_definitions() {
         {"source_sha256","kernel_version","index_lifetime","valid","meshable","solid_count","solids","errors"}),true),
     tool("cad_import_sketch","Capture a local font, SVG or ASCII DXF and atomically append its exact editable sketch to an existing document. Requires expected_revision; validates every source contour in a bounded worker before publication. Returns compact revision/source identity; cad_read retrieves embedded bytes. Then extrude, cut or thicken by feature_id through ordinary cad_apply. Optional request_id deduplicates retries and source deletion does not affect rebuilds.",
       {{"document_id",id},{"expected_revision",revision},{"request_id",id},{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"$ref","#/$defs/scalar"}}},{"spacing",{{"$ref","#/$defs/scalar"}}},{"scale",{{"$ref","#/$defs/scalar"}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}},{"fonts",authoring_font_sources_schema()}}, {"document_id","expected_revision","format","path","feature_id","workplane"},
-      object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"model_sha256",hash},{"summary",summary_schema()}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","model_sha256","summary"}),false),
+      object({{"schema_version",{{"const",1}}},{"document_id",id},{"revision",revision},{"kernel_version",{{"const","8.0.1"}}},{"feature_id",id},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"model_sha256",hash},{"summary",summary_schema()},{"changes",{{"$ref","#/$defs/commit_changes"}}}},{"schema_version","document_id","revision","kernel_version","feature_id","source_sha256","model_sha256","summary","changes"}),false),
     tool("cad_capture_sketch","Capture a local font, SVG or ASCII DXF as a portable editable sketch feature. Embeds exact source bytes and SHA-256, validates closed exact planar geometry in a bounded native worker, and returns a feature for cad_create/add_feature. Text uses captured unhinted Unicode font outlines with editable text/height; SVG/DXF support documented filled planar curves and reject unsupported entities. No document is committed.",
       {{"format",{{"enum",{"text","svg","dxf"}}}},{"path",text},{"feature_id",id},{"workplane",{{"$ref","#/$defs/workplane"}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"text",{{"type","string"},{"minLength",1},{"maxLength",256}}},{"height",{{"type","number"},{"minimum",0.00001},{"maximum",100000}}},{"spacing",{{"type","number"},{"minimum",-1000000},{"maximum",1000000}}},{"scale",{{"type","number"},{"minimum",0.000001},{"maximum",1000000}}},{"face_index",{{"type","integer"},{"minimum",0},{"maximum",31}}},{"fonts",authoring_font_sources_schema()}}, {"format","path","feature_id","workplane"},
       object({{"feature",{{"$ref","#/$defs/authoring_feature"}}},{"source_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"contour_count",{{"type","integer"},{"minimum",1},{"maximum",128}}},{"segment_count",{{"type","integer"},{"minimum",1},{"maximum",8192}}}}, {"feature","source_sha256","contour_count","segment_count"}),true),
     tool("cad_import","Create a document from a local STEP file without a fixed source byte limit; geometry runs within the job memory/time budget. Preserves exact source bytes and SHA-256. geometry defaults to solid; surface explicitly imports face/shell-only sources without material semantics. Optional expected_sha256 verifies the downloaded artifact; purchase binds caller supplier/part/source identity to those bytes for assemblies and packages. Optional solid_indices explicitly extracts a subset discovered by cad_inspect_step and requires expected_sha256. Does not fetch URLs or infer editable history. Returns a compact revision/hash/summary receipt; cad_read retrieves the captured source.",
       {{"document_id",id},{"path",text},{"request_id",id},{"geometry",{{"enum",{"solid","surface"}}}},{"expected_sha256",{{"type","string"},{"pattern","^[a-f0-9]{64}$"}}},{"purchase",{{"$ref","#/$defs/purchase"}}},{"solid_indices",{{"type","array"},{"items",{{"type","integer"},{"minimum",1},{"maximum",4096}}},{"minItems",1},{"maxItems",4096},{"uniqueItems",true}}}}, {"document_id","path"},
-      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary"}),false),
+      object(receipt_properties,{"schema_version","document_id","revision","kernel_version","model_sha256","summary","changes"}),false),
     tool("cad_query","Query a committed revision. Topology and mesh IDs belong only to the returned evaluation. Optional feature_id scopes geometry.",
       {{"document_id",id},{"revision",revision},{"kind",{{"enum",{"summary","topology","mesh","curve","component_manifest","component_mesh"}}}},{"feature_id",id},{"curve",{{"$ref","#/$defs/curve_query"}}},{"evaluation_id",id},{"geometry_id",id},{"level",{{"type","integer"},{"minimum",0},{"maximum",2}}}},
       {"document_id","revision"},object(progressive_identity,{"document_id","revision","kernel_version","feature_id","summary"}),true),
@@ -316,12 +313,14 @@ Json tool_definitions() {
   }
   for(auto& tool:tools)if(tool.at("name")=="cad_import_sketch"||tool.at("name")=="cad_capture_sketch")tool["inputSchema"]["allOf"].push_back({{"if",{{"required",{"fonts"}}}},{"then",{{"properties",{{"format",{{"const","dxf"}}}}}}}});
   tools.insert(tools.end()-1,render_tool_definition());
-  const std::set<std::string> job_tools={"cad_render","cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
+  tools.insert(tools.end()-1,failure_tool_definition());
+  const std::set<std::string> job_tools={"cad_failure","cad_render","cad_import_sketch","cad_capture_sketch","cad_inspect_step","cad_artifact","cad_create","cad_apply","cad_restore","cad_import","cad_query","cad_measure","cad_export","cad_manufacture","cad_fabrication_review","cad_gcode_review","cad_printer_handoff","cad_slice","cad_robot_export","cad_bom","cad_drawing","cad_preview","cad_view"};
   Json submits=Json::array(),results=Json::array();
   std::set<std::string> result_contracts;
   for(const auto& definition:tools) {
     const auto name=definition.at("name").get<std::string>();if(!job_tools.contains(name))continue;
     auto input=definition.at("inputSchema");input.erase("$defs");
+    if(name=="cad_failure")input["properties"]["action"]["const"]="replay";
     auto output=definition.at("outputSchema");output.erase("$defs");
     // Mutations share an identical committed-record contract. An anyOf only
     // needs each distinct result once; retain every tool's input discriminator.
@@ -807,6 +806,7 @@ Json tool_definitions() {
 }
 
 void validate_tool_arguments(const std::string& tool,const Json& args) {
+  if(tool=="cad_failure"){validate_failure_arguments(args);return;}
   if(tool=="cad_help"){validate_help_arguments(args);return;}
   if(tool=="cad_render"){validate_render_arguments(args);return;}
   if(tool=="cad_import_sketch") {
@@ -906,6 +906,7 @@ Error service_error(std::exception_ptr error) {
 }
 
 Json Service::call(const std::string& tool,const Json& args) {
+  FailureCallScope failure_scope(tool,args);
   try {
     auto result=execute(tool,args);
     if(tool=="cad_export"||tool=="cad_drawing")attach_export_downloads(store_,result);
@@ -922,6 +923,7 @@ Json Service::read_resource(const std::string& uri) {
 }
 
 Json Service::execute(const std::string& tool,const Json& args) {
+  if(tool=="cad_failure")return failure_call(store_.root(),args);
   if(tool=="cad_help")return native_help(args);
   if(tool=="cad_screenshot")return capture_view_screenshot(store_,args);
   if(tool=="cad_render")return render_visual_output(store_,args);
@@ -980,7 +982,7 @@ Json Service::execute(const std::string& tool,const Json& args) {
     const auto expected=create?0:revision_number(args.at("expected_revision"));
     Json model;
     auto precondition=[&]() -> std::optional<Json> {
-      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)){return committed_record_receipt(*replay);}
+      if(!request_id.empty()) if(auto replay=store_.request_replay(id,request_id,fingerprint)){return committed_record_receipt(store_,*replay);}
       if(create) {
         try {store_.read(id);throw Error("already_exists","Document already exists: "+id);}
         catch(const Error& e) {if(e.code!="not_found")throw;}
@@ -1028,9 +1030,10 @@ Json Service::execute(const std::string& tool,const Json& args) {
     check_job_cancelled();
     Json receipt=Json::object();
     Json result_fields={{"summary",evaluated.at("summary")}};
+    result_fields["changes"]=model_changes(create?Json():store_.read(id,expected).at("model"),model,create?Json():Json(expected));
     if(tool=="cad_import_sketch"){result_fields["feature_id"]=args.at("feature_id");for(const auto& feature:model.at("features"))if(feature.at("id")==args.at("feature_id")){const auto& profile=feature.at("profile");result_fields["source_sha256"]=profile.at("type")=="text"?profile.at("font").at("sha256"):profile.at("sha256");}}
     if(!request_id.empty()) receipt={{"request_id",request_id},{"fingerprint",fingerprint},{"result",result_fields}};
-    auto record=store_.commit(id,model,create,receipt);record.update(result_fields);return committed_record_receipt(std::move(record));
+    auto record=store_.commit(id,model,create,receipt);record.update(result_fields);return committed_record_receipt(store_,std::move(record));
   }
   if(tool=="cad_compare") {
     const auto from=store_.read(id,revision_number(args.at("from_revision"))),to=store_.read(id,revision_number(args.at("to_revision")));

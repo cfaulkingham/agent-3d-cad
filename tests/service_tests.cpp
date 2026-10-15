@@ -197,8 +197,8 @@ void publication_wait_tests() {
 
 void compact_receipt_tests() {
   Temp temp;Service service(temp.path);
-  const auto inspect=[&](const Json& receipt,std::size_t fields=6) {
-    require(receipt.size()==fields&&!receipt.contains("model"),"Mutation receipt contains only committed identity, model hash and summary");
+  const auto inspect=[&](const Json& receipt,std::size_t fields=7) {
+    require(receipt.size()==fields&&!receipt.contains("model"),"Mutation receipt contains committed identity, model hash, change lists and summary");
     require(receipt.at("schema_version")==1&&receipt.at("kernel_version")==kernel_version(),"Receipt pins schema and kernel version");
     const auto source=test::receipt_source(service,receipt);
     require(receipt.at("model_sha256")==sha256(source.dump()),"Receipt digest matches independently read source at its exact revision");
@@ -220,9 +220,52 @@ void compact_receipt_tests() {
   fs::remove(path_from_utf8(step.at("path")));require(service.call("cad_import",import_args)==imported,"Compact STEP replay does not reopen a deleted source file");
   const std::string svg="<svg><rect width='2' height='3'/></svg>";const auto sketch_path=temp.path/"source.svg";atomic_text(sketch_path,svg);
   const Json sketch={{"document_id","part"},{"expected_revision",3},{"format","svg"},{"path",path_to_utf8(sketch_path)},{"feature_id","artwork"},{"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"request_id","compactSketch"}};
-  const auto captured=service.call("cad_import_sketch",sketch);const auto captured_source=inspect(captured,8);
+  const auto captured=service.call("cad_import_sketch",sketch);const auto captured_source=inspect(captured,9);
   require(captured.at("feature_id")=="artwork"&&captured.at("source_sha256")==sha256(svg)&&captured_source.at("features").back().at("profile").at("content")==svg,"Sketch receipt qualifies the committed feature and captured source");
   fs::remove(sketch_path);require(service.call("cad_import_sketch",sketch)==captured,"Compact sketch replay preserves identity after source deletion");
+}
+
+void change_list_tests() {
+  Temp temp;Service service(temp.path);
+  auto model=box();model["parameters"]["unused"]=1;
+  model["features"].push_back({{"id","copy"},{"type","transform"},{"input","base"},{"translation",{30,0,0}}});
+  model["features"].push_back({{"id","independent"},{"type","cylinder"},{"radius",2},{"height",3}});
+  const Json create={{"document_id","delta"},{"model",model},{"request_id","first"}};
+  const auto created=service.call("cad_create",create);
+  const auto& c=created.at("changes");
+  require(c.at("base_revision").is_null()&&c.at("features").at("created")==Json::array({"base","copy","independent"}),"Creation lists all new feature IDs in sorted order");
+  require(c.at("parameters").at("created")==Json::array({"height","unused"}),"Creation lists driving and unused parameters");
+  const Json change={{"document_id","delta"},{"expected_revision",1},{"request_id","height"},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","height"},{"value",9}}})}};
+  const auto edited=service.call("cad_apply",change);const auto& e=edited.at("changes");
+  require(e.at("base_revision")==1&&e.at("parameters").at("modified")==Json::array({"height"}),"Edit identifies the actual predecessor and changed parameter");
+  require(e.at("features").at("modified").empty()&&e.at("affected_features")==Json::array({"base","copy"}),"Parameter edits affect dependents without inventing declaration changes or touching independent features");
+  require(!e.at("feature_order_changed").get<bool>()&&!e.at("output_changed").get<bool>(),"Parameter edit preserves feature order and output choice");
+  const auto unused=service.call("cad_apply",{{"document_id","delta"},{"expected_revision",2},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","unused"},{"value",2}}})}});
+  require(unused.at("changes").at("affected_features").empty(),"Unused parameter edits do not claim geometry impact");
+  const auto noop=service.call("cad_apply",{{"document_id","delta"},{"expected_revision",3},
+    {"operations",Json::array({{{"op","set_parameter"},{"name","unused"},{"value",2}}})}});
+  require(noop.at("changes").at("parameters").at("modified").empty()&&noop.at("changes").at("affected_features").empty(),"A no-op revision has empty changes");
+  const auto restored=service.call("cad_restore",{{"document_id","delta"},{"expected_revision",4},{"source_revision",1}});
+  require(restored.at("changes").at("base_revision")==4&&restored.at("changes").at("parameters").at("modified")==Json::array({"height","unused"}),"Restore compares against the previous HEAD, not the restored source revision");
+  require(service.call("cad_apply",change)==edited&&service.call("cad_create",create)==created,"Historical retries retain their exact original changes after later edits");
+  auto legacy=edited;legacy.erase("changes");
+  require(committed_record_receipt(Store(temp.path),legacy)==edited,"Legacy compact receipts reconstruct historical deltas");
+  const auto before=service.call("cad_read",{{"document_id","delta"}});
+  fails("invalid_model",[&]{service.call("cad_apply",{{"document_id","delta"},{"expected_revision",5},
+    {"operations",Json::array({{{"op","remove_feature"},{"id","base"}}})}});});
+  require(service.call("cad_read",{{"document_id","delta"}})==before,"Failed edit publishes neither source nor change receipt");
+  auto a=assembly();a["features"].push_back({{"id","nested"},{"type","assembly"},{"parts",Json::array({{{"id","left"},{"input","fixture"}},{{"id","right"},{"input","fixture"}}})}});a["output"]="nested";
+  const auto ac=service.call("cad_create",{{"document_id","assembly_delta"},{"model",a}});
+  require(ac.at("changes").at("occurrences").at("created")==Json::array({"left/p1","left/p2","right/p1","right/p2"}),"Nested leaf paths distinguish repeated instances");
+  const auto moved=service.call("cad_apply",{{"document_id","assembly_delta"},{"expected_revision",1},
+    {"operations",Json::array({{{"op","set_part_placement"},{"assembly_id","nested"},{"part_id","left"},{"placement",{{"translation",{0,20,0}}}}}})}});
+  require(moved.at("changes").at("occurrences").at("modified")==Json::array({"left/p1","left/p2"}),"Moving an ancestor modifies only its authored descendant chains");
+  require(moved.at("changes").at("features").at("modified")==Json::array({"nested"}),"Assembly edit identifies its authored feature");
+  auto changed=a;changed["features"][0]["size"]={4,3,4};changed["features"].erase(1);changed["features"].back()["parts"]=Json::array({{{"id","solo"},{"input","block"}}});
+  const auto direct=model_changes(a,changed,1);
+  require(direct.at("features").at("removed")==Json::array({"fixture"})&&direct.at("occurrences").at("created")==Json::array({"solo"})&&direct.at("occurrences").at("removed").size()==4,"Removal and replacement preserve explicit feature and leaf lists");
 }
 
 void receipt_tests() {
@@ -437,7 +480,7 @@ int main(int argc, char** argv) {
     const std::string only = argc > 1 ? argv[1] : "";
     const std::vector<std::pair<std::string, void(*)()>> sections = {
       {"identifiers", identifier_tests}, {"utf8", utf8_tests}, {"locks", lock_wait_tests},
-      {"receipts", receipt_tests}, {"compact_receipts", compact_receipt_tests}, {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
+      {"receipts", receipt_tests}, {"compact_receipts", compact_receipt_tests}, {"changes", change_list_tests}, {"errors", error_mapping_tests}, {"publication", publication_wait_tests}};
     for (const auto& [name, run] : sections) if (only.empty() || only == name) run();
     std::cout << "service: " << checks << " checks passed\n";
     return 0;

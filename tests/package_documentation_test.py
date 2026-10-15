@@ -60,7 +60,7 @@ def verify(root, source=None):
     directories = [docs, docs / 'skills/native-cad']
     if (root / 'plugin.json').is_file():
         directories.append(root / 'skills/native-cad')
-    required = {'COMMIT_RECEIPTS', 'PARAMETRIC_EXPRESSIONS', 'EXPORT_DOWNLOADS', 'MESH_RECONSTRUCTION',
+    required = {'COMMIT_RECEIPTS', 'FAILURE_REPLAY', 'PARAMETRIC_EXPRESSIONS', 'EXPORT_DOWNLOADS', 'MESH_RECONSTRUCTION',
                 'PARITY_SHEET_METAL', 'PARITY_SOLIDS', 'PARITY_SURFACES', 'PARITY_CURVES',
                 'PARITY_AUTHORING', 'RELEASE_1_0', 'LOCAL_PACKAGE_ACCEPTANCE',
                 'MARKUP', 'PROGRESSIVE_VIEWER'}

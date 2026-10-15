@@ -57,6 +57,46 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     model = {"schema_version": 1, "units": "mm", "parameters": {"height": 6},
              "features": [{"id": "base", "type": "box", "size": [20, 10, {"parameter": "height"}]}], "output": "base"}
     created = call("cad_create", {"document_id": "part", "model": model, "request_id": "create_once"})
+    assert created["changes"]["features"]["created"] == ["base"]
+    assert created["changes"]["parameters"]["created"] == ["height"]
+    assert created["changes"]["base_revision"] is None
+    without_changes = dict(created)
+    without_changes.pop("changes")
+    assert not Draft202012Validator(tools["cad_create"]["outputSchema"]).is_valid(without_changes)
+    failed_model = json.loads(json.dumps(model))
+    failed_model["features"].append({"id": "bad_round", "type": "fillet", "input": "base", "edges": "all", "radius": 100})
+    failed_model["output"] = "bad_round"
+    failure_args = {"document_id": "schema_failure", "model": failed_model}
+    Draft202012Validator(tools["cad_create"]["inputSchema"]).validate(failure_args)
+    failure_run = subprocess.run([exe, "call", "cad_create", "--workspace", workspace, "--input", "-"],
+                                 input=json.dumps(failure_args), text=True, capture_output=True, timeout=45)
+    assert failure_run.returncode != 0
+    failure_ref = json.loads(failure_run.stderr)["error"]["details"]["failure_package"]
+    failure_id = failure_ref["failure_id"]
+    call("cad_failure", {"action": "list", "limit": 1})
+    report = call("cad_failure", {"action": "get", "failure_id": failure_id})
+    assert report["sha256"] == failure_ref["sha256"]
+    portable = {"path": report["path"], "expected_sha256": report["sha256"]}
+    call("cad_failure", dict(portable, action="get"))
+    replay = call("cad_failure", dict(portable, action="replay", budget={"timeout_ms": 5000}))
+    assert replay["outcome"] == "reproduced"
+    replay_args = {"action": "replay", "failure_id": failure_id}
+    replay_job = call("cad_job", {"action": "submit", "request_id": "schema_replay", "tool": "cad_failure", "arguments": replay_args})
+    for _ in range(500):
+        replay_job = call("cad_job", {"action": "get", "job_id": replay_job["job_id"]})
+        if replay_job["state"] not in {"queued", "running", "cancelling"}:
+            break
+        time.sleep(.01)
+    assert replay_job["state"] == "succeeded" and replay_job["result"]["outcome"] == "reproduced"
+    for bad in [{"action": "replay"}, {"action": "get", "failure_id": failure_id, "budget": {}},
+                {"action": "replay", "failure_id": failure_id, **portable},
+                {"action": "replay", "failure_id": "../escape"},
+                {"action": "list", "limit": 0}]:
+        assert not Draft202012Validator(tools["cad_failure"]["inputSchema"]).is_valid(bad)
+        checks += 1
+    assert not Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(
+        {"action": "submit", "request_id": "invalid_replay", "tool": "cad_failure", "arguments": {"action": "list"}})
+    checks += 8
     gcode = pathlib.Path(workspace) / "review fixture.gcode"
     raw_gcode = b"G21\nG90\nM83\nM104S210\nM140S60\nG1X10Y5Z.2E1\nG91\nG1X15E1\n"
     gcode.write_bytes(raw_gcode)

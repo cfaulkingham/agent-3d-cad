@@ -132,7 +132,7 @@ async def smoke(executable, workspace, evidence_path):
     evidence = {'sdk': support.EXPECTED_SDK, 'executable_sha256': sha(executable.read_bytes()), 'calls': [], 'images': []}
     async with support.lifecycle('visual-auto'), Client(params, mode='auto', read_timeout_seconds=20) as client:
         definitions = await support.discover(client)
-        require(len(definitions) == 34 and {'cad_render', 'cad_screenshot'} <= definitions.keys(), 'SDK discovers the final 34-tool visual catalog')
+        require(len(definitions) == 35 and {'cad_render', 'cad_screenshot'} <= definitions.keys(), 'SDK discovers the final 35-tool visual catalog')
 
         async def call(name, arguments, *, expected_error=None, validate_input=True):
             if validate_input:

@@ -1,11 +1,70 @@
 # Implementation handoff
 
-Updated: 2026-10-13. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-14. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Receipt changes, executable skills and failure replay — 2026-10-14
+
+Mutation receipts now include sorted created/modified/removed feature,
+parameter and output-assembly leaf IDs, order/output flags, and conservative
+dependency impact. These compare against the committed revision's immediate
+predecessor under the publication lock and require no second geometry build.
+Durable retries preserve their historical changes; legacy receipts and job
+results recover missing lists from their exact saved revisions without rewriting
+stored bytes. See [COMMIT_RECEIPTS.md](COMMIT_RECEIPTS.md).
+
+The native skill ships measured plate, workplane and nested-assembly requests.
+The new `skill_workflows` CTest executes those exact Markdown examples through
+real stdio MCP. Independent analytic checks cover volumes, hole positions,
+workplane axes, repeated part placement, a 3–12 mm parameter-range walk,
+historical retry, rollback/replay, STEP reimport and a four-view PNG. It also
+checks the tool vocabulary in every shipped skill and executes the compiled
+fillet help example. Developer Python drives these tests; the product remains
+native. See [the executable workflow guide](../skills/native-cad/references/verified-workflows.md).
+
+Geometry evaluation errors now capture best-effort local two-file failure
+packages containing the candidate, internal request, available historical
+source, originating tool/job, error, budgets, build identity and SHA-256 ledger.
+The shared `cad_failure` tool (35 tools total) lists and verifies packages or
+replays captured geometry in a cold temporary workspace, including through
+durable jobs. Replay never reapplies the Service mutation, publishes a revision,
+or uses original output paths. It reports reproduced/different/success outcomes;
+matching error signatures do not establish an identical root cause. Captures are
+bounded to 64 MiB payloads and 1 MiB reports, with retention of 32 generated
+packages within 256 MiB. See [FAILURE_REPLAY.md](FAILURE_REPLAY.md).
+
+Validation on macOS arm64: the final Release build completed without compiler
+warnings, and all **91 CTest suites passed in 357.34 seconds**. Independent
+Draft 2020-12 conformance passed **910 checks across 35
+tools**, including replay, job admission and receipt schemas. That run preceded
+the final non-object replay-job admission guard; the final native `failure`
+test covers that guard. The final official MCP SDK 2.3.0 run passed **1,876
+interoperability checks** across auto and reopened legacy sessions. Relocated
+bundle verification checked **397 inventoried files**, **272 packaged relative
+documentation links**, and existing native MCP/create/edit/reopen/export/viewer
+smoke tests. All **158 executable skill checks**, with independent schema
+validation, also passed against the relocated executable with an empty `PATH`.
+Evidence and build/binary identities are in
+`.local/evidence/mcp-feedback-replay/`.
+
+Capture excludes cancellation, busy admission, pre-evaluation validation,
+coordinator crashes and external slicer processes. Uncaptured external-input
+requests (currently G-code review) remain inspectable but cannot replay; cold
+replay may not reproduce cache-sensitive or transient failures. Capture storage
+failure preserves the original error. Native regressions cover actual failed
+fillets, killed/timed-out workers, replay relocation/integrity, retained original
+output bytes, retention and unchanged HEAD.
+
+This increment was implemented on `codex/mcp-feedback-replay`, based on
+`5cf26ff`, the completed merge of `codex/fillet-curves` into `main` and push to
+`origin/main`. Follow-up installation and host reload evidence are recorded
+separately. Run platform CI and the appropriate plugin/host acceptance gates
+before release. This implementation validation makes no new
+Linux/Windows, signing, desktop-host or current-chat reload claim is made.
 
 ## Fillet/curve plugin installed in Codex — 2026-10-13
 
