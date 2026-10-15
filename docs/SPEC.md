@@ -53,14 +53,12 @@ explicit physical inputs. `ROBOT_EXPORT.md` describes the handoff and validation
 limits. `MODELING_MOTION.md`
 records the full completion contract; `PROTOCOL.md` defines implemented inputs.
 
-Desktop/install extension (2026-10-07): the user requested simple client setup,
-versioned platform artifacts, a standalone CLI viewer, exports and old-project
-access. A Tauri shell reuses the existing renderer and communicates only with the
-bundled native service over stdio. It shares workspace/view selection context
-with connected agents; geometry stays in C++ workers. Export dialogs write
-independent STEP/STL/PDF/SVG/DXF outputs. No Electron runtime or end-user language
-installation is permitted. See `DISTRIBUTION.md` for release gates and platform
-runtime prerequisites.
+Install revision (2026-10-15): remove the standalone Tauri app, launcher and
+archive pipeline. The product is a native engine with an embedded MCP Apps viewer
+and offline HTML/PNG output. Provide concise setup for Codex / ChatGPT, Claude
+Desktop, Grok Build, OpenCode and other local MCP clients. Keep editable projects
+outside the installation. No end-user language installation is permitted.
+See `GETTING_STARTED.md` for setup and `DISTRIBUTION.md` for packaging.
 
 Presentation extension (2026-10-08): saved live clipping planes and exploded leaf
 inspection are independent of source geometry and revision history. CPU picking
@@ -110,13 +108,14 @@ recovered editable history. `COMPOSITION_FABRICATION_REVIEW.md` records the
 combined implementation scope; HANDOFF records its validation status.
 
 Release focus (2026-10-07): 1.0 targets ChatGPT desktop and Claude Desktop plugins
-with the embedded viewer and local CAD engine. Standalone Tauri and CLI onboarding
-are deferred. Installation and actual two-host acceptance gates are in
+with the embedded viewer and local CAD engine. The 2026-10-15 install revision
+removes the standalone app and documents additional local MCP clients.
+Installation and actual two-host acceptance gates are in
 `RELEASE_1_0.md`; prior preview implementation does not establish 1.0 readiness.
 
 An agent can create a saved design, reopen it in another session, make a targeted
 edit, inspect the resulting geometry, and export a manufacturing file. The user
-installs a native application bundle, not a language environment or compiler.
+installs a native service bundle, not a language environment or compiler.
 
 The agent supplies structured modeling intent. A C++ service evaluates it with
 OpenCascade. There is no generated C++ compilation, generated Rust compilation,

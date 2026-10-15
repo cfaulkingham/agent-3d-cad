@@ -1,3 +1,21 @@
+# Agent CAD 0.1.0-preview.2 — unreleased
+
+Agent CAD now ships as a native engine, local Codex / ChatGPT plugin and Claude
+Desktop extension. The standalone Tauri app, its launcher and desktop archives
+are removed. The embedded viewer and offline HTML/PNG output remain available.
+Both download installers select the native engine by default.
+
+See [the setup guide](GETTING_STARTED.md) for Codex / ChatGPT, Claude Desktop,
+Grok Build, OpenCode and other local MCP clients. Current packages default to
+Documents/Agent CAD; use an explicit workspace to reopen existing projects.
+Published preview.1 packages and their requirements remain unchanged.
+
+These are source changes for the next preview, not a newly published release.
+Validation and limitations are recorded in [HANDOFF](HANDOFF.md). Publisher
+signing/notarization and full host acceptance remain release gates.
+
+---
+
 # Agent CAD 0.1.0-preview.1
 
 Local editable CAD through MCP and a native CLI, with a standalone Tauri viewer.

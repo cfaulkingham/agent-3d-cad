@@ -21,35 +21,27 @@ components keep their own licences; it is not MIT-licensed as a whole. See
 installed in every bundle under `share/agent-3d-cad/notices` — for the exact
 licence texts, your LGPL rights, and how to obtain the corresponding source.
 
-## Install in Claude Desktop
+## Install
 
-Claude uses a self-contained `.mcpb` extension containing the CAD engine and
-embedded viewer. You do not need a standalone viewer application.
+Choose your host in the [setup guide](docs/GETTING_STARTED.md):
 
-1. Download the `.mcpb` for your Mac or Windows PC from
-   [Releases](https://github.com/cfaulkingham/agent-3d-cad/releases).
-2. Open Claude **Settings → Extensions → Advanced settings → Install extension**
-   and select the file.
-3. Enable Agent CAD and start a new chat.
+| Host | Setup |
+|---|---|
+| [Codex / ChatGPT desktop](docs/GETTING_STARTED.md#codex--chatgpt-desktop) | Add the local plugin, or connect the native engine through MCP |
+| [Claude Desktop](docs/GETTING_STARTED.md#claude-desktop) | Install the `.mcpb` extension |
+| [Grok Build](docs/GETTING_STARTED.md#grok-build) | Register the native engine with `grok mcp add` |
+| [OpenCode](docs/GETTING_STARTED.md#opencode) | Add one local MCP entry to your config |
+| [Other agents](docs/GETTING_STARTED.md#other-agents) | Connect a local stdio MCP server |
 
-The published preview still asks you to select a project folder and requires the
-matching CPU build. The next extension build defaults to **Documents/Agent CAD**
-with an optional folder setting for existing projects. Host installation,
-publisher signing and automatic architecture selection remain 1.0 gates.
-[Claude's extension guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
+Get platform packages from [Releases](https://github.com/cfaulkingham/agent-3d-cad/releases).
+The engine and viewer are bundled; no separate Agent CAD app is needed. Hosts
+with MCP Apps show the viewer in chat; other clients can request offline HTML
+or PNG previews. The standalone app has been removed from current source.
 
-## Install in ChatGPT desktop
-
-The local plugin package contains the native engine, embedded viewer and setup
-workflow. Its source and packaging are implemented; an end-user installer and
-actual host acceptance are still in development. It is **not yet listed in the
-public plugin directory**. We will keep CAD local.
-
-Local marketplace testing is documented in [the 1.0 delivery plan](docs/RELEASE_1_0.md).
-OpenAI currently requires a remote HTTPS endpoint for normal public MCP plugin
-submission, or an approved local MCP route. We must resolve that distribution
-requirement before promising a public Install button.
-[OpenAI plugin packaging](https://developers.openai.com/plugins/build/plugins).
+Current source/CI packages include the local plugin and default project folder.
+The older `0.1.0-preview.1` downloads require an explicit project folder; see the
+setup guide. Public plugin-directory listing, signing and complete host acceptance
+remain [release gates](docs/RELEASE_1_0.md).
 
 ## Create your first project
 
@@ -85,13 +77,6 @@ A saved native project remains the editable source. Use `cad_show` to return to
 that project, or explicitly import a STEP file with `cad_import` to create an
 opaque native feature. Final combined validation and desktop-host acceptance
 remain pending. See the [external artifact guide](docs/ARTIFACT_REVIEW.md).
-
-## Other clients and development previews
-
-CLI agents, OpenCode and the standalone Tauri viewer are deferred from the 1.0
-install path. Existing preview archives and their manual setup remain documented
-in [advanced client setup](docs/GETTING_STARTED.md) and
-[distribution](docs/DISTRIBUTION.md).
 
 ## More
 

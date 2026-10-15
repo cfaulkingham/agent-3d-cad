@@ -183,7 +183,10 @@ reopen/revision/retarget behavior, pending context races and unchanged model/BOM
 See `ASSEMBLIES.md` for the implemented subset and `HANDOFF.md` for executed
 evidence; no additional platform acceptance is implied by source implementation.
 
-## M7 — installation and standalone Tauri viewer (2026-10-07)
+## M7 — historical installation and standalone viewer preview (2026-10-07)
+
+The standalone portion of this milestone was removed on 2026-10-15. The notes
+below record historical preview evidence, not the current distribution.
 
 - Usage-first README and per-client configuration generation.
 - Versioned core/desktop archives for the five existing native platform lanes;
@@ -213,7 +216,8 @@ install/create/select/edit/reopen/export/upgrade journey. Native plugin packagin
 default persistent workspace and an onboarding skill are implemented foundations;
 actual two-host installation/rendering, accessible exports, architecture selection,
 publisher signing and public distribution are unfinished acceptance gates.
-Tauri and other CLI hosts are deferred. Passing CI does not authorize a 1.0 tag.
+The standalone app is removed. Additional local MCP hosts have setup guidance;
+end-to-end acceptance remains separate. Passing CI does not authorize a 1.0 tag.
 
 ## Modeling flexibility and moving mechanisms (authorized 2026-10-07)
 

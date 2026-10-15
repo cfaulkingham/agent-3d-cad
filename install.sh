@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Install a published, checksum-verified native or desktop release without build tools.
+# Install a published, checksum-verified native release without build tools.
 set -euo pipefail
-usage() { echo 'Usage: bash install.sh VERSION [--core] [--prefix DIRECTORY]'; }
+usage() { echo 'Usage: bash install.sh VERSION [--prefix DIRECTORY]'; }
 die() { echo "agent-3d-cad: $*" >&2; exit 1; }
 if [[ ${1:-} == --help ]]; then usage; exit 0; fi
 version=${1:-}; [[ $# -gt 0 ]] && shift
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-preview\.[1-9][0-9]*)?$ ]] || { usage >&2; exit 1; }
 prefix=${HOME:?}/.local/share/agent-3d-cad
-package=agent-3d-cad-desktop
+package=agent-3d-cad
 while [[ $# -gt 0 ]]; do
   case $1 in
     --core) package=agent-3d-cad; shift ;;
@@ -70,6 +70,4 @@ echo "Installed: $exe"
 echo 'Keep your CAD workspace outside this application directory.'
 echo 'Generate client settings with:'
 printf '  %q config --client codex --workspace %q\n' "$exe" "$HOME/Documents/Agent CAD"
-if [[ $package == agent-3d-cad-desktop ]]; then
-  printf 'Open the standalone viewer:\n  %q viewer --workspace %q\n' "$exe" "$HOME/Documents/Agent CAD"
-fi
+echo "Setup: https://github.com/cfaulkingham/agent-3d-cad/blob/main/docs/GETTING_STARTED.md"

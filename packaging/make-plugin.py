@@ -1,4 +1,4 @@
-"""Package the native engine as a local Agent Plugins bundle; no Tauri runtime."""
+"""Package the native engine as a local Agent Plugins bundle with an embedded viewer."""
 import json
 from pathlib import Path
 import shutil
@@ -36,7 +36,7 @@ catalog.write_text(json.dumps({
 shutil.copytree(repo / 'plugins/agent-cad/skills', destination / 'skills')
 shutil.copytree(root / 'share/agent-3d-cad/skills', destination / 'skills', dirs_exist_ok=True)
 (destination / 'assets').mkdir()
-shutil.copy2(repo / 'desktop/icons/icon.png', destination / 'assets/icon.png')
+shutil.copy2(repo / 'plugins/agent-cad/assets/icon.png', destination / 'assets/icon.png')
 for notice in ['LICENSE', 'NOTICE']:
     shutil.copy2(repo / notice, destination / notice)
 provenance['plugin'] = {'format': 'Agent Plugins', 'format_version': '1.0.0', 'viewer': 'embedded MCP App', 'transport': 'stdio'}

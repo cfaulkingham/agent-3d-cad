@@ -134,7 +134,7 @@ dd{margin:0;text-align:right;font-variant-numeric:tabular-nums}
 .popover-right-top{right:12px;top:56px;width:min(260px,calc(100% - 24px))}
 .popover-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
 .workspace-label{font-size:11px;color:var(--text-2);overflow-wrap:anywhere;margin:6px 0}
-.workspace-button,#project-search,#recent-workspaces{width:100%;margin-bottom:10px}
+#project-search{width:100%;margin-bottom:10px}
 #documents{max-height:260px;overflow:auto}
 #documents button{display:flex;align-items:center;gap:9px;width:100%;margin:2px 0;border-color:transparent;text-align:left;background:transparent;padding:7px 8px;font-size:12px}
 #documents button:hover:not(:disabled){background:var(--hover)}

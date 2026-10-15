@@ -1,60 +1,82 @@
-# Connect Agent CAD
+# Install Agent CAD
 
-The 1.0 focus is ChatGPT desktop and Claude Desktop plugins with local CAD and
-an embedded viewer. See [the delivery plan](RELEASE_1_0.md) for current package
-status and unfinished host acceptance. The manual and standalone setup below
-documents the older development previews and other clients.
+Choose your host below. Agent CAD runs locally and includes its native CAD engine
+and viewer. No Python, Node, Rust or compiler is required.
 
-Install a release bundle first (see the [README](../README.md)). Replace the
-executable and workspace paths below with absolute paths. Use the same workspace
-in every agent and viewer that should share your projects.
+## Get a package
 
-## ChatGPT desktop and Codex
+Download from [Releases](https://github.com/cfaulkingham/agent-3d-cad/releases):
 
-In Settings → MCP servers → Add server, choose **STDIO**, then enter:
+- **Claude Desktop:** use the `.mcpb` for your OS and CPU.
+- **Codex / ChatGPT desktop plugin:** use `agent-cad-plugin-…zip` when available.
+- **Grok Build, OpenCode and other MCP clients:** use the native
+  `agent-3d-cad-VERSION-OS-CPU` archive (`.tar.gz` on macOS/Linux, `.zip` on Windows).
 
-- Command: the installed `bin/agent-3d-cad` (`.exe` on Windows)
-- Arguments: `serve`, `--workspace`, `/absolute/path/to/CAD workspace`
+Extract archives to a permanent folder and keep their contents together.
+The native executable is `bin/agent-3d-cad` (`bin/agent-3d-cad.exe` on Windows).
+Replace `/absolute/path/to/agent-3d-cad` below with that file's full path.
+On Windows, use forward slashes in JSON paths, such as `C:/AgentCAD/bin/agent-3d-cad.exe`.
 
-Save and restart the server. Alternatively, register with Codex CLI:
+**Version note:** these steps use current source/CI packages, which default to
+**Documents/Agent CAD**. For `0.1.0-preview.1`, replace `--default-workspace` with
+`--workspace "/absolute/path/to/your/CAD projects"` (two separate entries in JSON
+arrays), and select that folder during Claude installation. Local plugin ZIPs are
+produced by current CI; do not expect them in the original preview. Historical
+standalone archives are no longer needed. See [distribution](DISTRIBUTION.md)
+for checksum-verifying installers and package validation.
+
+## Codex / ChatGPT desktop
+
+For a local plugin ZIP, extract it, then register its folder:
 
 ```sh
-codex mcp add agent-3d-cad -- /absolute/install/bin/agent-3d-cad serve --workspace "/absolute/path/to/CAD workspace"
-codex mcp get agent-3d-cad
+codex plugin marketplace add "/absolute/path/to/extracted/agent-cad-plugin-VERSION-OS-CPU"
 ```
 
-To configure by hand, `agent-3d-cad config --client codex --workspace PATH` prints
-a TOML block for `~/.codex/config.toml`. Merge the block; do not replace your whole
-configuration. The current desktop and local Codex clients share the configuration
-for the same host. [Official MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+Refresh or restart the desktop host, open its plugin browser, find **Agent CAD**
+under **Agent CAD local testing**, and install/enable it. Start a new chat and ask
+it to open your CAD library. Keep the extracted folder for future plugin updates.
+This is local marketplace installation, not a public-directory listing.
+[Official local plugin setup](https://developers.openai.com/plugins/build/plugins).
+
+Alternatively, with a native archive, register the MCP server:
+
+```sh
+codex mcp add agent-3d-cad -- "/absolute/path/to/agent-3d-cad" serve --default-workspace
+codex mcp list
+```
+
+Use one route to avoid duplicate CAD tools. Restart the host or start a new session
+after registration. The MCP route provides the tools and embedded viewer;
+the plugin also installs the bundled skills.
+[Official Codex MCP setup](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 ## Claude Desktop
 
-Download the `.mcpb` matching your operating system **and CPU architecture**.
-In Settings → Extensions → Advanced settings → Install extension, select it and
-choose a persistent CAD workspace. Keep that folder outside the extension's own
-installation. This uses the bundled native binary directly.
-[Claude extension installation](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
+1. Open **Settings → Extensions → Advanced settings → Install Extension**.
+2. Select the downloaded `.mcpb` and complete the prompts.
+3. Enable Agent CAD and start a new chat.
 
-Manual alternative: run `agent-3d-cad config --client claude --workspace PATH`.
-Merge the generated `mcpServers.agent-3d-cad` entry into the configuration opened
-by Claude's developer settings, then restart Claude. Typical locations are
-`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS and
-`%APPDATA%\Claude\claude_desktop_config.json` on Windows.
+The extension includes the native engine and viewer. Its optional project-folder
+setting can point to existing projects outside the extension installation.
+[Official extension setup](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
 
-The extension contains the CAD service and embedded MCP App. For a separate
-desktop window as well, install the desktop archive and point it at the same
-workspace. User workspaces survive extension replacement/removal.
+## Grok Build
 
-The next extension build makes the folder setting optional, defaulting to
-Documents/Agent CAD. That change is in source/CI packages; it is not in the
-immutable `0.1.0-preview.1` download. A separate desktop window is outside the
-1.0 plugin install path.
+After extracting the native archive:
 
-## OpenCode desktop and CLI
+```sh
+grok mcp add agent-3d-cad -- "/absolute/path/to/agent-3d-cad" serve --default-workspace
+grok mcp doctor agent-3d-cad
+```
 
-Run `agent-3d-cad config --client opencode --workspace PATH` and merge its `mcp`
-entry into your `opencode.json`. It uses OpenCode's local-server command array:
+Start a new session, or refresh the server in `/mcps`.
+[Official Grok MCP setup](https://docs.x.ai/build/features/mcp-servers).
+
+## OpenCode
+
+Merge this entry into your `opencode.json` or `opencode.jsonc`, preserving existing
+settings, then restart OpenCode:
 
 ```json
 {
@@ -62,79 +84,57 @@ entry into your `opencode.json`. It uses OpenCode's local-server command array:
   "mcp": {
     "agent-3d-cad": {
       "type": "local",
-      "command": ["/absolute/install/bin/agent-3d-cad", "serve", "--workspace", "/absolute/CAD workspace"],
+      "command": ["/absolute/path/to/agent-3d-cad", "serve", "--default-workspace"],
       "enabled": true
     }
   }
 }
 ```
 
-Use the standalone viewer if your client does not render MCP Apps.
-[OpenCode MCP configuration](https://opencode.ai/docs/mcp-servers/).
+This follows the [current OpenCode MCP guide](https://opencode.ai/docs/mcp-servers/).
+If using the separate OpenCode V2 preview, follow its
+[V2 MCP guide](https://dev.opencode.ai/v2/docs/mcp-servers/): place the server under
+`mcp.servers` and omit `enabled`.
 
-## Grok Build, Muse, and other CLI agents
+## Other agents
 
-Use local stdio MCP if the client supports it: command = the native executable,
-arguments = `serve --workspace ABSOLUTE_PATH`. Client-specific configuration names
-and compatibility for these clients have not been validated; do not assume the
-Claude JSON format applies to every client.
+Add a **local / stdio MCP server** using these fields:
 
-An agent with shell access can use the same service directly:
+| Field | Value |
+|---|---|
+| Command | Full path to `bin/agent-3d-cad` (`.exe` on Windows) |
+| Arguments | `serve`, `--default-workspace` |
 
-```sh
-agent-3d-cad tools
-agent-3d-cad call cad_list --workspace "/absolute/CAD workspace" --input - <<'JSON'
-{}
-JSON
-agent-3d-cad viewer --workspace "/absolute/CAD workspace" --view main
-```
+Use your client's own MCP settings format. For Claude-compatible JSON,
+`agent-3d-cad config --client claude --workspace PATH` prints a ready-to-merge
+entry; `--client codex` and `--client opencode` generate their respective formats.
+These commands print settings without changing them. Point your agent to the
+bundled `share/agent-3d-cad/skills/native-cad/SKILL.md` for modeling guidance.
 
-Give the agent the bundled `share/agent-3d-cad/skills/native-cad/SKILL.md` for
-modeling guidance. The viewer exposes selection and camera through `cad_context`;
-the agent edits through `cad_apply`, and the window follows committed revisions.
+## Try it
 
-## Reference faces and edges from chat
+> Create an editable 80 × 50 × 6 mm plate with four mounting holes. Save it as
+> mounting_plate, show it, then make it 8 mm thick and export STEP.
 
-Open the viewer with the same absolute workspace used in your MCP settings.
-Click a face or edge, then ask: “Use the selection in `cad_context` for view
-`main`.” The agent receives exact revision-qualified geometry, resolves it with
-`cad_resolve_selection`, and applies a supported edit. For separate concurrent
-chats, launch with `--view my_chat` and name `my_chat` in the agent’s tool calls.
+In a host with MCP Apps, select a face or edge in the viewer and describe your
+edit in the main chat. Other clients can ask for an offline HTML view (`cad_view`)
+or PNG (`cad_render`). Offline views are snapshots; regenerate them after edits.
 
-**Copy request** carries the selection and workspace into any chat. This is the
-standalone window’s handoff; embedded MCP Apps can also use **Send to chat** when
-the host supports it. Selecting geometry does not itself submit an edit request
-or identify which chat should receive one. Saved edits refresh the open window.
+## Existing projects and troubleshooting
 
-## ChatGPT web
+- **Missing projects:** replace `--default-workspace` with `--workspace` and the
+  full path to your existing project folder. Use that same folder in every host.
+- **No tools:** check the executable path, OS/CPU package and the client's MCP
+  connection status, then restart its server/session.
+- **No inline viewer:** tools require MCP; an interactive viewer additionally
+  requires MCP Apps. Ask for offline HTML or PNG if the host lacks it.
+- **Upgrade or remove:** install the new package separately and update the host's
+  connection. Keep projects outside installation folders so they survive removal.
+- **OS blocks a preview:** publisher signing/notarization remain unfinished.
+  Installers do not remove quarantine or other OS protections.
+- **ChatGPT web:** a local executable path cannot connect this service to the web
+  app. This project ships local stdio; a remote connection is a separate setup.
 
-Web connections are a separate setup. OpenAI documents a public HTTPS MCP endpoint
-or Secure MCP Tunnel, which can reach a configured stdio server. This project
-ships local stdio, not a hosted authenticated MCP endpoint or an automatic tunnel
-installer. A local executable path or the viewer window alone does not make it
-available to ChatGPT web. Follow the current account/workspace connection flow
-and verify the tools before relying on it.
-[OpenAI connection guidance](https://developers.openai.com/plugins/deploy/connect-chatgpt).
-
-## Viewer and troubleshooting
-
-- `viewer_not_installed`: install the **desktop** archive. The core and `.mcpb`
-  downloads contain the service and embedded viewer, not the Tauri executable.
-- Empty library: the agent and viewer must use the same workspace. Use **Open
-  workspace** to select an older project folder; **Recent workspaces** remembers it.
-- No inline viewer: MCP tools and MCP Apps rendering are different capabilities.
-  Use the standalone window, or `cad_view` for a self-contained offline HTML file.
-- No direct chat delivery: standalone Quick Edit uses **Copy request**. Paste it
-  into the agent, or ask the agent to read `cad_context` for the current view.
-- Linux desktop: install your distribution's GTK 3 / WebKitGTK 4.1 runtime packages
-  (`sudo apt install libgtk-3-0t64 libwebkit2gtk-4.1-0` on Ubuntu 24.04). Core
-  service bundles do not require those GUI libraries.
-- Windows desktop: install Microsoft's WebView2 Evergreen Runtime if it is absent.
-  It is normally present on Windows 11. The portable archive does not install it.
-- Unsigned preview blocked by the OS: current builds have no publisher signing
-  or notarization. This is a release limitation; installers do not remove OS
-  security protections or quarantine flags.
-
-Configuration examples are based on the linked documentation checked 2026-10-07.
-They do not establish successful end-to-end integration in every named client.
-Executed native, Tauri, and MCP-host evidence is recorded in [HANDOFF](HANDOFF.md).
+Host configuration references checked 2026-10-15. Grok Build and OpenCode setup
+is documentation-based; full host acceptance remains separate. See
+[HANDOFF](HANDOFF.md) for executed tests and [1.0 acceptance](RELEASE_1_0.md).

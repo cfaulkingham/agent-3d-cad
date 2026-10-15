@@ -2,7 +2,10 @@
 
 Decision, 2026-10-07: focus 1.0 on **ChatGPT desktop and Claude Desktop**.
 The CAD engine stays on the user's computer. The viewer runs inside the connected
-chat as an MCP App. Standalone Tauri, CLI onboarding and other hosts are deferred.
+chat as an MCP App. The standalone app was removed on 2026-10-15.
+Codex, Grok Build, OpenCode and other local MCP clients now have concise setup
+in `GETTING_STARTED.md`; their documented connection paths do not establish
+additional host acceptance.
 The published `0.1.0-preview.1` is development evidence, not product readiness.
 Keep its immutable tag and historical downloads; do not promote it to 1.0.
 
@@ -18,7 +21,7 @@ The same chat opens the library, selects a saved model, inspects faces and edges
 sends a reference-qualified edit request and follows the committed revision.
 Export STEP/STL and PDF/SVG/DXF drawings from the embedded viewer. An export must
 be accessible to the user through the host; a local path printed by a tool is
-not sufficient release acceptance. No browser window or Tauri app is involved.
+not sufficient release acceptance. The viewer stays inside the host.
 
 ## Host delivery
 
@@ -51,9 +54,9 @@ with a hosted CAD service or require users to run their own tunnel.
 - `packaging/make-plugin.py` wraps a verified core bundle with `plugin.json`,
   `mcp.json`, a local marketplace catalog, setup/modeling skills and an icon. It includes native dependencies
   and their existing notices, hashes every file, and rejects desktop bundles.
-- CI creates and tests separate plugin artifacts before any optional legacy
-  Tauri work. Main/PR builds do not need Rust or GUI build dependencies.
-  The old automatic draft-release contract applies only to `v0.*` preview tags.
+- CI creates and tests native engine, plugin and Claude extension artifacts.
+  No builds need Rust or standalone GUI dependencies.
+  Automatic draft-release creation applies only to `v0.*` preview tags.
   A `v1.*` tag does not automatically publish a release.
 
 For developers, after installing a verified native bundle:

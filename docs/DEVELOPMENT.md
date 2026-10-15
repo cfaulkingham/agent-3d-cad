@@ -409,7 +409,7 @@ notarization remain owner decisions.
 | `src/storage.cpp` | Native locking, atomic revisions, durable request receipts |
 | `src/jobs.cpp` | Process budgets, admission, cancellation and recovery |
 | `src/service.cpp` | Shared CLI/MCP use cases and tool contracts |
-| `src/viewer.cpp` | Standalone offline browser viewer |
+| `src/viewer.cpp` | Self-contained offline HTML viewer |
 | `src/drawing.cpp` | Drawing recipes, measured annotations, native PDF/SVG/DXF output |
 | `src/mcp.cpp`, `src/main.cpp` | Stdio protocol and CLI adapters |
 | `tests/` | Real geometry, transactions, topology, jobs, viewer and process tests |

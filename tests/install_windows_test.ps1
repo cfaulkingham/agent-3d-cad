@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('cad-install-test-' + [Guid]::NewGuid())
-$name = 'agent-3d-cad-desktop-0.1.0-preview.1-Windows-x64'
+$name = 'agent-3d-cad-0.1.0-preview.1-Windows-x64'
 $downloads = Join-Path $root 'downloads'
 $prefix = Join-Path $root 'installed versions'
 try {

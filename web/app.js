@@ -728,7 +728,6 @@
   }
   $('refresh-library').onclick = refreshLibrary;
   $('project-search').oninput = () => { for (const button of $('documents').querySelectorAll('button')) button.hidden = !button.dataset.document.toLowerCase().includes($('project-search').value.toLowerCase()); };
-  $('open-workspace').onclick = () => bridge.desktop?.openWorkspace().catch(error => status(error.message));
   $('export-model').onclick = async () => {
     const value=state.value,payload=value.payload;
     if (value.status !== 'ready' || !payload || payload.draft || value.read_only === true || payload.read_only === true || exporting) return;
@@ -739,35 +738,29 @@
     const current=()=>!disposed&&state.epoch===generation&&state.value.view_id===view_id&&state.value.status==='ready'&&state.value.read_only!==true&&state.value.payload?.read_only!==true&&state.value.payload?.document_id===document_id&&state.value.payload?.revision===revision&&state.value.payload?.evaluation_id===evaluation_id;
     exporting = true; update(state.value); status(`Preparing ${format.toUpperCase()} for revision ${revision}…`);
     try {
-      if (bridge.desktop) {
-        const result = await bridge.desktop.export({ document_id, revision, format });
+      const drawing = ['pdf', 'svg', 'dxf'].includes(format);
+      const args = { document_id, revision, ...(drawing ? { drawing: { formats: [format] } } : { format }) };
+      let job = await bridge.tool('cad_job', { action: 'submit', request_id: `export_${crypto.randomUUID()}`, tool: drawing ? 'cad_drawing' : 'cad_export', arguments: args, budget: { timeout_ms: 300000, memory_mb: 2048 } });
+      const deadline = Date.now() + 310000;
+      while (['queued', 'running', 'cancelling'].includes(job.state) && current() && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 500));
         if(!current())return;
-        status(result.cancelled ? 'Save cancelled. The export remains in your workspace.' : `Saved: ${result.paths.join(', ')}`);
-      } else {
-        const drawing = ['pdf', 'svg', 'dxf'].includes(format);
-        const args = { document_id, revision, ...(drawing ? { drawing: { formats: [format] } } : { format }) };
-        let job = await bridge.tool('cad_job', { action: 'submit', request_id: `export_${crypto.randomUUID()}`, tool: drawing ? 'cad_drawing' : 'cad_export', arguments: args, budget: { timeout_ms: 300000, memory_mb: 2048 } });
-        const deadline = Date.now() + 310000;
-        while (['queued', 'running', 'cancelling'].includes(job.state) && current() && Date.now() < deadline) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if(!current())return;
-          try { job = await bridge.tool('cad_job', { action: 'get', job_id: job.job_id }); }
-          catch(error) { if(error.code!=='workspace_busy')throw error; }
-        }
-        if (!current()) return;
-        if (job.state !== 'succeeded') throw Error(job.error?.message || `Export ${job.state}. Job: ${job.job_id}`);
-        const paths = drawing ? job.result.artifacts.map(item => item.path) : job.result.plates ? [...job.result.plates.map(item => item.path), job.result.layout_path].filter(Boolean) : [job.result.path];
-        $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = paths.join('\n');
-        const downloads=job.result.downloads || [], missing=job.result.download_errors?.length || 0;
-        if (bridge.capabilities?.downloadFile && downloads.length) {
-          try {
-            await bridge.download(downloads);
-            if(current())status(`Download requested from your host.${missing ? ` ${missing} file(s) remain available by workspace path.` : ''} Workspace file paths are below.`);
-          } catch(error) {
-            if(current())status(`Export saved in the CAD workspace. The host did not confirm the download: ${error.message} File paths are below.`);
-          }
-        } else status(`Export saved in the CAD workspace.${missing ? ' Some files could not be prepared for host download.' : ''} File paths are below.`);
+        try { job = await bridge.tool('cad_job', { action: 'get', job_id: job.job_id }); }
+        catch(error) { if(error.code!=='workspace_busy')throw error; }
       }
+      if (!current()) return;
+      if (job.state !== 'succeeded') throw Error(job.error?.message || `Export ${job.state}. Job: ${job.job_id}`);
+      const paths = drawing ? job.result.artifacts.map(item => item.path) : job.result.plates ? [...job.result.plates.map(item => item.path), job.result.layout_path].filter(Boolean) : [job.result.path];
+      $('copy-fallback').hidden = false; $('copy-fallback').open = true; $('copy-text').value = paths.join('\n');
+      const downloads=job.result.downloads || [], missing=job.result.download_errors?.length || 0;
+      if (bridge.capabilities?.downloadFile && downloads.length) {
+        try {
+          await bridge.download(downloads);
+          if(current())status(`Download requested from your host.${missing ? ` ${missing} file(s) remain available by workspace path.` : ''} Workspace file paths are below.`);
+        } catch(error) {
+          if(current())status(`Export saved in the CAD workspace. The host did not confirm the download: ${error.message} File paths are below.`);
+        }
+      } else status(`Export saved in the CAD workspace.${missing ? ' Some files could not be prepared for host download.' : ''} File paths are below.`);
     } catch (error) { if(current())status(error.message); }
     finally { exporting = false; if (!disposed) update(state.value); }
   };
@@ -819,17 +812,7 @@
     catch (error) { fail(error); }
   });
   bridge.initialize().then(async () => {
-    $('open-workspace').hidden = !bridge.desktop;
     $('workspace-label').textContent = bridge.hostContext.workspace || 'Saved projects';
-    if (bridge.desktop) {
-      const recent = await bridge.desktop.recentWorkspaces();
-      $('recent-workspaces').hidden = recent.length < 2;
-      for (const [index, folder] of recent.entries()) {
-        const option = document.createElement('option'); option.value = index; option.textContent = folder;
-        $('recent-workspaces').append(option);
-      }
-      $('recent-workspaces').onchange = () => { if ($('recent-workspaces').value !== '') bridge.desktop.openRecent(Number($('recent-workspaces').value)).catch(error => status(error.message)); };
-    }
     hostLayout();
     if (typeof ResizeObserver !== 'undefined') { sizeObserver = new ResizeObserver(hostLayout); sizeObserver.observe(document.body); }
     update(state.value); await refreshLibrary();

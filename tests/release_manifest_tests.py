@@ -12,29 +12,29 @@ import unittest
 
 REPO = Path(__file__).resolve().parent.parent
 VERSION = (REPO / 'VERSION').read_text().strip()
-# Spell out the published preview contract independently of the generator.
-LEGACY = {
+# Spell out the next preview contract independently of the generator.
+PLATFORM = {
     'install.sh', 'install.ps1',
     f'agent-3d-cad-{VERSION}-Darwin-arm64.tar.gz',
     f'agent-3d-cad-{VERSION}-Darwin-x64.tar.gz',
     f'agent-3d-cad-{VERSION}-Linux-arm64.tar.gz',
     f'agent-3d-cad-{VERSION}-Linux-x64.tar.gz',
     f'agent-3d-cad-{VERSION}-Windows-x64.zip',
-    f'agent-3d-cad-desktop-{VERSION}-Darwin-arm64.tar.gz',
-    f'agent-3d-cad-desktop-{VERSION}-Darwin-x64.tar.gz',
-    f'agent-3d-cad-desktop-{VERSION}-Linux-arm64.tar.gz',
-    f'agent-3d-cad-desktop-{VERSION}-Linux-x64.tar.gz',
-    f'agent-3d-cad-desktop-{VERSION}-Windows-x64.zip',
-    f'agent-3d-cad-{VERSION}-Darwin-arm64.mcpb',
-    f'agent-3d-cad-{VERSION}-Darwin-x64.mcpb',
-    f'agent-3d-cad-{VERSION}-Windows-x64.mcpb',
+    f'agent-cad-plugin-{VERSION}-Darwin-arm64.zip',
+    f'agent-cad-plugin-{VERSION}-Darwin-x64.zip',
+    f'agent-cad-plugin-{VERSION}-Linux-arm64.zip',
+    f'agent-cad-plugin-{VERSION}-Linux-x64.zip',
+    f'agent-cad-plugin-{VERSION}-Windows-x64.zip',
+    f'agent-cad-claude-{VERSION}-Darwin-arm64.mcpb',
+    f'agent-cad-claude-{VERSION}-Darwin-x64.mcpb',
+    f'agent-cad-claude-{VERSION}-Windows-x64.mcpb',
 }
 UNIVERSAL = {
     f'agent-3d-cad-{VERSION}-Darwin-universal.tar.gz',
     f'agent-cad-plugin-{VERSION}-Darwin-universal.zip',
     f'agent-cad-claude-{VERSION}-Darwin-universal.mcpb',
 }
-EXPECTED = LEGACY | UNIVERSAL
+EXPECTED = PLATFORM | UNIVERSAL
 
 
 class ReleaseManifestTests(unittest.TestCase):
@@ -58,7 +58,7 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertFalse((self.assets / 'SHA256SUMS').exists())
 
     def test_complete_matrix_has_all_exact_checksums(self):
-        self.assertEqual((len(LEGACY), len(UNIVERSAL)), (15, 3))
+        self.assertEqual((len(PLATFORM), len(UNIVERSAL)), (15, 3))
         result = self.invoke()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('18 release assets checksummed', result.stdout)
@@ -67,7 +67,7 @@ class ReleaseManifestTests(unittest.TestCase):
         self.assertEqual((self.assets / 'SHA256SUMS').read_text(), expected)
         self.assertEqual({p.name for p in self.assets.iterdir()}, EXPECTED | {'SHA256SUMS'})
 
-    def test_each_legacy_and_universal_asset_is_required(self):
+    def test_each_platform_and_universal_asset_is_required(self):
         for name in sorted(EXPECTED):
             with self.subTest(missing=name):
                 path = self.assets / name
@@ -77,7 +77,7 @@ class ReleaseManifestTests(unittest.TestCase):
                 path.write_bytes(contents)
 
     def test_unexpected_assets_and_source_manifest_are_rejected(self):
-        for name in ('source-inputs.sha256', '.DS_Store', 'agent-3d-cad-wrong-version-Darwin-universal.tar.gz'):
+        for name in (f'agent-3d-cad-desktop-{VERSION}-Darwin-arm64.tar.gz', 'source-inputs.sha256', '.DS_Store', 'agent-3d-cad-wrong-version-Darwin-universal.tar.gz'):
             with self.subTest(extra=name):
                 path = self.assets / name
                 path.write_bytes(b'Unexpected upload')

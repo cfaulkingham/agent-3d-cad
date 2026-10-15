@@ -22,5 +22,9 @@ with tempfile.TemporaryDirectory(prefix='cad-config-') as temp:
             command = json.loads(text)['mcp']['agent-3d-cad']['command']
         assert Path(command[0]).resolve() == Path(exe).resolve()
         assert command[1:] == ['serve', '--workspace', workspace]
-    assert not Path(workspace).exists()
+    removed = subprocess.run([exe, 'viewer', '--workspace', workspace], capture_output=True, text=True)
+    assert removed.returncode != 0
+    assert json.loads(removed.stderr)['error']['code'] == 'usage'
+    assert not Path(workspace).exists(), 'Removed launcher must not create a workspace or live view'
+    assert 'agent-3d-cad viewer' not in subprocess.check_output([exe, '--help'], text=True)
 print('Version and all three client configurations round-trip correctly without creating a workspace.')

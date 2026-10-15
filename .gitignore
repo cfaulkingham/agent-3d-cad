@@ -14,10 +14,7 @@
 /Testing/
 /_deps/
 
-# Generated desktop assets and temporary design sessions.
-/desktop/target/
-/desktop/ui/
-/desktop/gen/
+# Temporary design sessions.
 /.superpowers/
 /.claude/worktrees/
 
@@ -27,3 +24,6 @@
 .DS_Store
 __pycache__/
 *.pyc
+
+# Historical standalone build outputs may remain in existing checkouts.
+/desktop/

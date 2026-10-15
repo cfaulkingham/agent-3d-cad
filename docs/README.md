@@ -9,8 +9,7 @@ Start with [the product README](../README.md) for installation and everyday use,
 | Path | Contents |
 |---|---|
 | `src/`, `include/agentcad/` | Native C++ service, kernel, persistence and transport implementation and interfaces |
-| `web/` | Viewer sources shared by the embedded MCP App and standalone shell |
-| `desktop/` | Optional Tauri shell source, Rust manifest, lockfile and application icons |
+| `web/` | Embedded MCP App viewer sources |
 | `cmake/` | Native build, embedded assets, portable bundles and pinned dependency recipe |
 | `tests/` | Native and transport regressions, UI checks, packaging checks and intentional test fixtures |
 | `examples/` | Editable model requests, drawings and workflow examples |
@@ -21,8 +20,8 @@ Start with [the product README](../README.md) for installation and everyday use,
 | `.github/` | CI and preview-release workflow |
 | Root files | Project/build metadata, installer entry points, contribution/security guidance and licenses |
 
-`web/` is the authoritative viewer source. `desktop/ui/` and `desktop/gen/` are
-generated. The ZIP, 3MF, GLB and STL files in `tests/artifact_fixtures/` are
+`web/` is the authoritative viewer source. Plugin artwork lives in
+`plugins/agent-cad/assets/`. The ZIP, 3MF, GLB and STL files in `tests/artifact_fixtures/` are
 intentional regression inputs and belong in source control.
 
 ## Local output layout

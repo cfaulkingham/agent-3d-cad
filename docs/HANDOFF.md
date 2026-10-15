@@ -1,11 +1,66 @@
 # Implementation handoff
 
-Updated: 2026-10-14. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
+Updated: 2026-10-15. **M0–M3, M4 live viewing, M5 drawings, and M6 assemblies are native previews.**
 Actual Codex-host rendering and select–edit–refresh are demonstrated on macOS
 arm64. Earlier preview sources passed all five macOS/Linux/Windows CI lanes and
 independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
+
+## Standalone app removed and host setup simplified — 2026-10-15
+
+Removed the Tauri source, Rust dependencies, native `viewer` launcher, desktop
+IPC bridge, workspace/recent-folder controls, native Save-dialog branch and
+standalone packager/tests. Client configuration generation is preserved in
+`src/client_config.cpp`; the plugin icon now lives in
+`plugins/agent-cad/assets/`. The embedded MCP App, offline HTML and native PNG
+rendering remain. Existing generated standalone UI/schema files were moved to
+`build/removed-standalone-artifacts-20261015`; saved model workspaces were not
+changed.
+
+Both download installers now select the native engine by default; `--core` and
+`-Core` remain compatible aliases. CI no longer installs Rust or standalone GUI
+build dependencies. Future preview releases collect five engine archives, five
+plugin ZIPs, three Claude extensions, three macOS universal packages and two
+installers. The release inventory rejects obsolete standalone archives. Historical
+published tags/downloads and their notes remain unchanged.
+
+README now points to one host setup guide covering Codex / ChatGPT desktop,
+Claude Desktop, Grok Build, OpenCode and generic stdio clients. Official host
+instructions were checked on 2026-10-15, including the separate OpenCode V2
+configuration shape. The guide distinguishes current default-folder packages
+from preview.1's explicit-workspace setup. Current protocol, viewer, distribution,
+skill and release-plan guidance no longer directs users to the standalone app.
+The package link check caught the new setup guide missing from the curated
+bundle; `GETTING_STARTED.md` now ships in the product and skill documentation.
+
+Validation on macOS arm64 / OCCT 8.0.1, working tree based on `bf42de0`:
+
+- Full Release build passed without compiler warnings. Eleven focused CTest
+  suites passed in **40.32 seconds**: installer, embedded assets, protocol, CLI,
+  help, offline viewer, download, live service, app protocol, live MCP flow and
+  WebGL renderer. Six additional notices/UI suites passed in **0.27 seconds**;
+  the final export UI rerun passed all **70 checks**.
+- Client-config round trips pass for all three existing formats. The removed
+  `viewer` command returns a usage error without creating a workspace.
+- Offline POSIX installer fixtures passed **20 architecture/baseline selections**
+  plus checksum rejection, no-overwrite and cleanup checks. Both remaining
+  packagers passed provenance/static-linkage rejection tests. Release inventory
+  passed **7 tests**; universal CI contract **11**, architecture **43** and strict
+  universal validation **41** checks passed using inert fixtures.
+- Final relocated `bundle-check` and packaged plugin smoke passed with empty
+  PATH, including MCP/viewer discovery, create/edit/reopen/history, STEP/STL/3MF,
+  drawings and external review. All **451 packaged documentation links** resolve.
+  Plugin/Claude replacement, removal and reinstall passed **422 lifecycle checks**
+  with isolated workspaces; this checks same-build replacement, not migration.
+
+Build, native-test, relocation and package logs plus package paths are retained
+in `.local/evidence/remove-standalone-20261015/`. No installed host configuration
+or plugin was replaced and no release was published. PowerShell is unavailable
+on this host, so Windows installer execution and the five-platform workflow
+remain CI work. Grok Build/OpenCode instructions are documentation-based; actual
+host installation/rendering and signing remain separate acceptance gates.
+Next: run platform CI and host acceptance before publishing the next preview.
 
 ## Main merge and local installation — 2026-10-14
 

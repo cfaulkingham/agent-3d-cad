@@ -6,7 +6,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $architecture = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
 if ($architecture -ne 'AMD64') { throw 'Windows x64 is the supported Windows architecture.' }
-$package = if ($Core) { 'agent-3d-cad' } else { 'agent-3d-cad-desktop' }
+# -Core remains accepted for compatibility; all installs use the native engine.
+$package = 'agent-3d-cad'
 $name = "$package-$Version-Windows-x64"
 $archive = "$name.zip"
 $base = "https://github.com/cfaulkingham/agent-3d-cad/releases/download/v$Version"
@@ -45,7 +46,7 @@ try {
   Write-Output "Installed: $exe"
   Write-Output 'Keep your CAD workspace outside this application directory.'
   Write-Output "Generate settings: & '$($exe.Replace("'", "''"))' config --client codex --workspace `"`$HOME\Documents\Agent CAD`""
-  if (-not $Core) { Write-Output "Open viewer: & '$($exe.Replace("'", "''"))' viewer --workspace `"`$HOME\Documents\Agent CAD`"" }
+  Write-Output 'Setup: https://github.com/cfaulkingham/agent-3d-cad/blob/main/docs/GETTING_STARTED.md'
 } finally {
   if ($lock) { $lock.Dispose() }
   if ($stagingInstall -and (Test-Path -LiteralPath $stagingInstall)) { Remove-Item -LiteralPath $stagingInstall -Recurse -Force }

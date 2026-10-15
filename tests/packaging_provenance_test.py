@@ -27,21 +27,19 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
 
     def run(helper, output):
         args = [sys.executable, str(repo / 'packaging' / helper), str(bundle), str(output)]
-        if helper == 'package-desktop.py':
-            args.append(str(binary))
         return subprocess.run(args, capture_output=True, text=True, encoding='utf-8')
 
     for case, files in [('empty', []), ('duplicate', [entry, entry]),
                         ('missing', [entry, {'path': 'missing', 'sha256': '0' * 64}])]:
         save(files)
-        for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
+        for helper in ['make-mcpb.py', 'make-plugin.py']:
             output = root / (case + helper)
             result = run(helper, output)
             assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
             assert not output.exists()
     save([entry])
     (bundle / 'unlisted').write_text('unlisted bytes')
-    for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
+    for helper in ['make-mcpb.py', 'make-plugin.py']:
         output = root / ('extra-' + helper)
         result = run(helper, output)
         assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
@@ -51,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     # replacement by construction, so every packager must refuse it.
     manifest.write_text(json.dumps({'project_version': version, 'system': 'Darwin', 'architecture': 'arm64',
                                     'occt_linkage': 'STATIC_LIBRARY', 'files': [entry]}))
-    for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
+    for helper in ['make-mcpb.py', 'make-plugin.py']:
         output = root / ('static-occt-' + helper)
         result = run(helper, output)
         assert result.returncode != 0 and 'shared Open CASCADE libraries' in result.stderr, result.stderr
@@ -108,4 +106,4 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
             files = {file.relative_to(plugin).as_posix(): hashlib.sha256(file.read_bytes()).hexdigest() for file in plugin.rglob('*') if file.is_file() and file.name != 'provenance.json'}
             assert inventory == files
 
-print('All three packagers reject invalid inventories; complete Claude extension and native-only plugin accepted.')
+print('Both packagers reject invalid inventories; complete Claude extension and native-only plugin accepted.')

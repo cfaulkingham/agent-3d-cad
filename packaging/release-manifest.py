@@ -13,10 +13,10 @@ directory = Path(sys.argv[1])
 expected = {'install.sh', 'install.ps1'}
 for system, arch in [('Darwin', 'arm64'), ('Darwin', 'x64'), ('Linux', 'arm64'), ('Linux', 'x64'), ('Windows', 'x64')]:
     extension = 'zip' if system == 'Windows' else 'tar.gz'
-    for package in ['agent-3d-cad', 'agent-3d-cad-desktop']:
-        expected.add(f'{package}-{version}-{system}-{arch}.{extension}')
+    expected.add(f'agent-3d-cad-{version}-{system}-{arch}.{extension}')
+    expected.add(f'agent-cad-plugin-{version}-{system}-{arch}.zip')
     if system != 'Linux':
-        expected.add(f'agent-3d-cad-{version}-{system}-{arch}.mcpb')
+        expected.add(f'agent-cad-claude-{version}-{system}-{arch}.mcpb')
 expected.update({
     f'agent-3d-cad-{version}-Darwin-universal.tar.gz',
     f'agent-cad-plugin-{version}-Darwin-universal.zip',

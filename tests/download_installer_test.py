@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='cad-download-installer-') as temp:
     mock.mkdir()
     fixture = root / 'downloads'
     fixture.mkdir()
-    name = 'agent-3d-cad-desktop-0.1.0-preview.1-Linux-x64'
+    name = 'agent-3d-cad-0.1.0-preview.1-Linux-x64'
     bundle = root / name
     (bundle / 'bin').mkdir(parents=True)
     (bundle / 'bin/agent-3d-cad').write_text('#!/bin/sh\nexit 0\n')
@@ -72,7 +72,7 @@ shutil.copyfile(Path({str(fixture)!r}) / url.rsplit('/',1)[1], args[args.index('
         ('Darwin', 'x86_64', '1', 'arm64'), ('Darwin', 'x86_64', 'error', 'x64')]:
         env.update(FIXTURE_SYSTEM=system, FIXTURE_CPU=cpu, FIXTURE_TRANSLATED=translated)
         for core in (False, True):
-            selected = f'agent-3d-cad{"" if core else "-desktop"}-0.1.0-preview.1-{system}-{expected}'
+            selected = f'agent-3d-cad-0.1.0-preview.1-{system}-{expected}'
             selected_archive = fixture / (selected + '.tar.gz')
             with tarfile.open(selected_archive, 'w:gz') as tar:
                 tar.add(bundle, arcname=selected)

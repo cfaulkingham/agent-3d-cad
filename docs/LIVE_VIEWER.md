@@ -1,6 +1,6 @@
 # Live CAD viewer preview
 
-The viewer runs as an embedded MCP App or a standalone Tauri desktop window
+The viewer runs as an embedded MCP App
 for the core create–view–select–edit loop. The WebGL canvas fills the whole viewer and
 the controls float over it: a project pill (models menu, revision, connection), a
 Scene card (features, parameters, parts), a dock of inspection tools, an Export
@@ -16,10 +16,8 @@ selective fillet to revision 2 in the same viewer, retaining the camera and
 clearing the old pick. An earlier UI also demonstrated handing a request to
 the host's composer. That embedded composer has since been removed; current
 shared-context interaction and host acceptance evidence are in HANDOFF.
-The Tauri window has separately demonstrated face/edge picking, CLI context
-read-back, a selective fillet refresh and a native STEP Save dialog on macOS
-arm64. Tauri Windows/Linux and remaining architecture runs remain unverified. The offline
-`cad_view` artifact is still available.
+The offline HTML viewer remains available through `cad_view`; it is a snapshot,
+not a live connection. The standalone app was removed on 2026-10-15.
 
 ## Connect the native service
 
@@ -50,40 +48,19 @@ skill using your host's normal local-skill mechanism, or point the agent to it.
 It explains document authoring, current selection handling and viewer reuse.
 The existing connected text-to-cad plugin is independent and is not modified.
 
-## Standalone window and connected chats
+## Selection and exports
 
-Install the desktop archive, then run:
-
-```sh
-agent-3d-cad viewer --workspace "/absolute/path/to/cad-workspace" --view main
-```
-
-The Tauri window starts its own stdio connection to the native service. It has no
-HTTP listener and opens no browser tab. The agent’s MCP connection or CLI calls
-must use the **same workspace and view ID**. Workspace paths are shown in the
-Models menu (the top-left menu button). Use **Open workspace**, **Recent workspaces** and project search to
-reopen earlier projects; their editable documents stay outside the app install.
-Opening a workspace lists its saved models; choose one to display it.
-
-Select a face or edge, then tell the connected agent, for example:
-
-> Read `cad_context` for view `main` and round the selected edge to 1 mm.
-
-Picks are saved automatically with the document, revision, evaluation, feature
-and entity identity. A separate agent connection can read and resolve them; it
-does not need to inspect a screenshot or guess an edge number. Select the
-geometry, return to your main chat and enter the request there. Agents read the
-current selection using this view ID; the viewer has no separate composer.
-Separate chats should use distinct view IDs and pass that ID to `cad_context`
-and `cad_show`; `main` is the default. Old picks explicitly become stale after
-geometry changes, and the refreshed view clears them.
+Select a face or edge, then enter your request in the main host chat. The agent
+reads `cad_context` for the open view and resolves its revision-qualified pick.
+Separate chats should use distinct view IDs. Geometry changes clear old picks;
+the same viewer follows committed revisions.
 
 **Export** uses the displayed committed revision and an asynchronous native job.
-STEP/STL save through the OS file dialog; PDF/SVG create a default A4 drawing
-with standard views. DXF writes the four 1:1 view files into a new folder under
-the chosen directory. The agent can customize dimensions, sections and layouts
-through `cad_drawing`. Cancelling a Save dialog leaves the generated export in
-the workspace. Exports include the complete model even when parts are hidden.
+STEP/STL and PDF/SVG/DXF files are saved in the project workspace. Hosts advertising
+file downloads receive the exported resources; otherwise the viewer shows their
+paths. Drawings default to standard A4 views. Ask the agent to customize dimensions,
+sections or layout with `cad_drawing`. Exports include hidden parts.
+See [export downloads](EXPORT_DOWNLOADS.md) for host support and acceptance.
 
 ## Use the live loop
 
