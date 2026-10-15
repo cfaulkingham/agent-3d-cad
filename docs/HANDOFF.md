@@ -7,6 +7,66 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Windows CPack fixture sequencing repair — 2026-10-15
+
+Windows job `116552586678` in PR run `38772766924` at `abc1de3` passed all **91
+native CTests** and the complete schema/SDK stage. The auto SDK session now
+passes in **97.311 seconds** (75.266 seconds Python CPU), with **1,628 total SDK
+checks** including restart. The run then exposed another fixture failure in
+`source_identity_tests.py`: CPack correctly rejected changed production source,
+but the assertion expected the later successful-build-stamp diagnostic.
+
+Reproduced the exact Windows assertion locally with Ninja. Makefile generators
+run CPack's `preinstall` target, which can reconfigure the source manifest;
+Visual Studio and Ninja do not. The fixture now explicitly tests direct install
+rejection before reconfiguration, checks that the prior manifest/stamp remain
+unchanged, then reconfigures and checks CPack rejects the obsolete successful
+stamp. Restoring the original source also explicitly restores the configured
+manifest before the binary-substitution check. Both exact error assertions and
+the no-archive requirement remain; production verification is unchanged.
+
+Moved the seven existing offline packaging/source-identity scripts ahead of
+native service configuration/build in every CI lane. All previous checks remain
+present exactly once, so these failures surface before the long native suites.
+
+Local macOS arm64 validation: **64 source/build identity checks** passed with
+each of **Unix Makefiles, Ninja and Ninja Multi-Config** (CMake 4.3.2; Ninja
+1.13.2 in a temporary environment). All six other offline packaging scripts
+passed, including 43 architecture checks, 7 release-manifest tests, 42 universal
+validation checks, 51 real-tool universal composer checks, both packagers and
+143 Linux staging checks. Workflow YAML parsing, unchanged CI script inventory,
+early-check ordering and `git diff --check` passed. Evidence is in
+`.local/evidence/windows-cpack-sequencing-20261015/` in the isolated repair
+checkout. Native Windows verification and later bundle/plugin stages remain
+pending for this updated commit; no host acceptance is claimed.
+
+## Windows and Intel macOS SDK deadline repair — 2026-10-15
+
+Run `38765048843` at `33571fa` passed both complete Ubuntu jobs and macOS arm64.
+Windows job `116526969387` passed all **91 native CTests** and **1,001 independent
+schema checks**, then hit the SDK auto session's cumulative 90-second deadline:
+**1,324 completed checks**, **90.158 seconds wall / 68.500 seconds Python CPU**.
+Intel macOS job `116526969427` passed all **92 native CTests**, then hit the same
+deadline at **923 checks**, **90.057 seconds wall / 79.384 seconds Python CPU**.
+These are full-suite harness deadlines, not individual RPC or geometry failures.
+
+The expanded auto session now has a **300-second** budget, while the smaller
+reopened legacy session retains **90 seconds**. The aggregate cap is **420
+seconds**, including cleanup headroom. All request/response schema validation,
+SDK behavior, per-call limits, native worker budgets and CI gates are unchanged.
+Deadline regressions cover explicit budget cancellation/cleanup, the selected
+budget in diagnostics, independent restart budgets, and inner timeout attribution.
+
+Local validation on macOS arm64 against the existing native Release executable:
+**5 deadline tests**, **9 schema-validator tests**, and the complete official MCP
+SDK 2.3.0 smoke with native slicer fixture passed: **1,764 checks**, auto session
+**44.841 / 32.496 seconds wall / Python CPU**, reopened session **4.893 / 4.259
+seconds**. Poll-dependent check counts vary by host. `git diff --check` passed.
+Native C++ source is unchanged; this does not claim a fresh native rebuild or
+Windows runtime acceptance. The repaired branch still needs remote CI, including
+the previously blocked Windows packaging stages. Evidence is in
+`.local/evidence/windows-sdk-deadline-20261015/` in the isolated repair checkout.
+
 ## Windows CI manifest-byte repair — 2026-10-15
 
 Windows job `116504694986` in run `38758925813` passed all **91 available native

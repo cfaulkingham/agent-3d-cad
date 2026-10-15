@@ -281,12 +281,14 @@ The optional developer interoperability check uses the pinned official MCP Pytho
 SDK in `tests/mcp_sdk_requirements.txt`. Install those requirements in a virtual
 environment, then run `python tests/mcp_sdk_smoke.py /absolute/path/to/agent-3d-cad`.
 It exercises discovery, schema validation, edits, exports, structured errors,
-responsive jobs and restart through an independent client. Each independent SDK
-lifecycle (auto negotiation and reopened legacy session) has a 90-second deadline,
-including process launch and teardown; the two together have a 180-second aggregate
-deadline. Tool calls retain their 15-second limit and the native worker budget is
-unchanged. Stage diagnostics distinguish elapsed time, Python CPU, schema checking
-and completed assertions. Run `python tests/mcp_sdk_deadline_tests.py` to check
+responsive jobs and restart through an independent client. The auto lifecycle has
+a 300-second deadline for the full modeling/viewer/export suite and its independent
+Python schema validation; the smaller reopened legacy session retains a 90-second
+deadline. Both include process launch and teardown. A 420-second aggregate deadline
+covers both sessions with cleanup headroom. Tool calls retain their 15-second limit
+and the native worker budget is unchanged. Stage diagnostics distinguish elapsed
+time, Python CPU, schema checking and completed assertions. Run
+`python tests/mcp_sdk_deadline_tests.py` to check
 lifecycle cancellation and error attribution. Python is not part of the native
 distribution.
 

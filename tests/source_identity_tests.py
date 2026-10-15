@@ -165,8 +165,21 @@ include(CPack)
     assert not package('manifest-crlf','Source manifest differs from configured identity').exists(); checks+=1
     manifest.write_bytes(original)
     input_file=source/'src/input.txt'; before=input_file.read_bytes(); input_file.write_bytes(before+b'drift\n')
+    # Direct installation never regenerates the build tree: reject source drift
+    # against the configured manifest. CPack's Makefile preinstall target may
+    # reconfigure first, while Visual Studio and Ninja do not. Explicitly
+    # configure before the CPack check so every generator tests the same later
+    # guard: refreshed source identity cannot bless the old successful stamp.
+    saved_stamp=stamp.read_bytes()
+    run(['--install',str(build),'--prefix',str(root/'source-drift-install')],
+        'Production source changed after configure/build')
+    assert manifest.read_bytes()==original and stamp.read_bytes()==saved_stamp; checks+=1
+    run(['-S',str(source),'-B',str(build)])
+    assert manifest.read_bytes()!=original and stamp.read_bytes()==saved_stamp; checks+=1
     assert not package('source-drift','differs from its successful build/source stamp').exists(); checks+=1
     input_file.write_bytes(before)
+    run(['-S',str(source),'-B',str(build)])
+    assert manifest.read_bytes()==original and stamp.read_bytes()==saved_stamp; checks+=1
     before=exe.read_bytes(); exe.write_bytes(b'Substituted fixture payload\n')
     assert not package('binary-drift','differs from its successful build/source stamp').exists(); checks+=1
     exe.write_bytes(before)
