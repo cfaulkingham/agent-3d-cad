@@ -86,3 +86,12 @@ build and budget. `action: "replay"` runs captured geometry in a temporary
 workspace and returns `reproduced`, `different_failure` or `succeeded`.
 Use `cad_job` for longer replays. The diagnostic outcome does not commit the
 failed edit or prove that the user's design has been fixed.
+
+
+For a feature-qualified modeling error, `action: "minimize"` can save a smaller
+reproducer without changing the design. It accepts the same package identity,
+optional `max_attempts` (default 128), and an aggregate `budget`. Use `cad_job`
+for longer searches. Inspect `outcome`, `stop_reason` and `minimized_package`;
+replay the returned package to verify it. Resource/process failures and
+artifact-specific worker requests are not minimizable. A reduced reproducer is
+debugging evidence, not a corrected design or a claim of global minimality.

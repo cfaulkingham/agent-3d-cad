@@ -273,3 +273,12 @@ Further work includes general mate constraint solving,
 full drafting/GD&T, multi-sheet drawings, manufacturing
 checks, distributed execution, remote collaborative editing, and additional
 authoring frontends. Python/build123d API parity remains outside the product.
+
+
+## Edit reliability — authorized 2026-10-14
+
+A developer action matrix exercises ordinary geometry edits and subsequent
+parameter changes against a committed coverage/pass baseline. Native failure
+minimization extends isolated replay with bounded feature-graph reductions and
+portable derived packages. Source documents remain unchanged. Contracts are in
+FAILURE_REPLAY.md and ACTION_MATRIX.md; HANDOFF records executed acceptance.

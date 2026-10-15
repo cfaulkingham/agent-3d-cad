@@ -1,0 +1,7 @@
+{
+  "box": {"volume":6000,"features":[{"id":"seed","type":"box","size":[20,30,10]}]},
+  "bored_plate": {"volume":5874.336293856408,"features":[{"id":"stock","type":"box","size":[20,30,10]},{"id":"seed","type":"hole","input":"stock","origin":[10,15,-1],"axis":[0,0,1],"radius":2,"depth":12}]},
+  "bracket": {"volume":1840,"features":[{"id":"profile","type":"sketch","workplane":{"origin":[0,0,0],"normal":[0,0,1],"x_direction":[1,0,0]},"profile":{"type":"polygon","points":[[0,0],[20,0],[20,4],[4,4],[4,30],[0,30]]}},{"id":"seed","type":"extrude","input":"profile","distance":10}]},
+  "rounded_box": {"volume":5965.663706143592,"features":[{"id":"stock","type":"box","size":[20,30,10]},{"id":"seed","type":"fillet","input":"stock","radius":2,"edges":{"type":"geometric","feature_id":"stock","curve_kind":"line","expected_count":4,"direction":{"vector":[0,0,1],"tolerance":0.000001}}}]},
+  "loft": {"volume":2345.722514680379,"features":[{"id":"bottom","type":"sketch","workplane":{"origin":[0,0,0],"normal":[0,0,1],"x_direction":[1,0,0]},"profile":{"type":"circle","radius":8}},{"id":"top","type":"sketch","workplane":{"origin":[0,0,20],"normal":[0,0,1],"x_direction":[1,0,0]},"profile":{"type":"circle","radius":4}},{"id":"seed","type":"loft","sections":["bottom","top"],"ruled":true}]}
+}

@@ -124,7 +124,10 @@ with tempfile.TemporaryDirectory(prefix='cad-skill-mcp-') as directory:
         failure_id = error['details']['failure_package']['failure_id']
         require(call('cad_failure', {'action': 'get', 'failure_id': failure_id})['report']['context']['tool'] == 'cad_apply', 'Skill can inspect the native failure package')
         require(call('cad_failure', {'action': 'replay', 'failure_id': failure_id})['outcome'] == 'reproduced', 'Skill replays the captured failure without repeating the edit')
-        require(call('cad_read', {'document_id': 'skill_plate'}) == snapshot, 'Failed edit and diagnostic replay preserve HEAD')
+        reduced = call('cad_failure', {'action': 'minimize', 'failure_id': failure_id, 'max_attempts': 64})
+        require(reduced['outcome'] == 'reduced', 'Skill reduces unrelated downstream features from the failed model')
+        require(call('cad_failure', {'action': 'replay', 'failure_id': reduced['minimized_package']['failure_id']})['outcome'] == 'reproduced', 'Reduced skill failure still reproduces')
+        require(call('cad_read', {'document_id': 'skill_plate'}) == snapshot, 'Failed edit, replay and minimization preserve HEAD')
 
         step = call('cad_export', {'document_id': 'skill_plate', 'revision': revision, 'format': 'step'})
         imported = call('cad_import', {'document_id': 'skill_roundtrip', 'path': step['path']})

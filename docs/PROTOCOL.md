@@ -380,7 +380,7 @@ replay behavior.
 | Tool | Arguments beyond document_id | Result |
 |---|---|---|
 | `cad_help` | No document ID; optional `query`/`limit` to search or `topic`/`offset` to read | Ranked native tool/feature/operation/guide matches, or compiled guidance and exact standalone schemas; see [native help](NATIVE_HELP.md) |
-| `cad_failure` | `action: list` with optional `limit`; `get` or `replay` with `failure_id`, or absolute report `path` and `expected_sha256`; replay-only optional `budget` | Bounded local failure discovery, verified reports and isolated captured-geometry replay; see [failure packages](FAILURE_REPLAY.md) |
+| `cad_failure` | `action: list` with optional `limit`; `get`, `replay` or `minimize` with `failure_id`, or absolute report `path` and `expected_sha256`; replay/minimize optional `budget`, minimize-only `max_attempts` (1–512, default 128) | Bounded local failure discovery, verified reports, isolated captured-geometry replay and a separately saved reduced reproducer; see [failure packages](FAILURE_REPLAY.md) |
 | `cad_create` | `model`, optional `request_id` | Compact committed revision/hash/summary receipt, revision 1 |
 | `cad_read` | optional `revision` (defaults HEAD) | Committed editable record; no geometry build |
 | `cad_capture_sketch` | No document ID; `format`, absolute `path`, `feature_id`, `workplane`, format-specific dimensions and optional source hash | Worker-validated portable text/SVG/DXF sketch, captured bytes/hash and contour/segment counts |
@@ -1011,7 +1011,7 @@ hosts and native platforms retain their own acceptance gates.
 
 Use `{"action":"get","job_id":"plate_edit_2"}`, `cancel` with the same job_id,
 or `{"action":"list"}`. Submit supports
-failure replay/inspect_step/artifact/create/apply/restore/import/query/measure/export/
+failure replay/minimization/inspect_step/artifact/create/apply/restore/import/query/measure/export/
 manufacture/fabrication_review/gcode_review/printer_handoff/slice/robot_export/
 preview/view/drawing/bom. `cad_artifact` review/verify jobs require no native
 `document_id` at the top level or inside `arguments`; their typed success result

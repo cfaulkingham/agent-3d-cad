@@ -7,6 +7,62 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Action matrix and native failure minimization — 2026-10-14
+
+The developer action matrix runs through real stdio MCP and durable native jobs.
+Five analytic fixtures generate **243 cases**: per-edge fillets/chamfers,
+planar-face shells/holes/projections, and body transforms/mirrors/patterns.
+Successful actions reuse saved geometric selectors through scale 1.1/0.9/1.0,
+checking independent volume/area/placement scaling, solid count, immutable
+history and rejected-edit rollback. Complete case inventories and action hashes
+are checked even during sampling; baseline updates require an explicit full run
+and reason. Reports retain requests, measurements, failures and portable captured
+packages. Ordinary CTest runs a deterministic 69-case sample; native CI has an
+optional full-matrix input and uploads the evidence. Python is developer-only.
+See [ACTION_MATRIX.md](ACTION_MATRIX.md).
+
+The reviewed full baseline has **217 successful actions and dimension walks**,
+**20 unsuitable-edge refusals**, and **six rejected inward shells**. All 243
+cases repeated with the same outcomes, without timeouts, missing selectors,
+invariant failures or infrastructure failures. The 26 refusals are recorded
+limitations, not successful geometry. This corpus uses uniform scaling; it does
+not establish arbitrary independent-dimension or topology-change coverage.
+
+Native `cad_failure(action: "minimize")` first reproduces the captured failure,
+then removes feature groups, bypasses intermediates and removes unused parameters
+or provenance. Only fresh worker trials matching the error code, exact message
+and failing feature ID are accepted. Search has an aggregate time/memory budget,
+an attempt cap, cancellation and durable job retry. A reduced result saves a
+separate checksummed replay package linked to its parent; it never edits the
+source document. Parent protection uses filesystem identity, including case
+aliases and normalized paths. A regression reproduced parent deletion before
+that fix and passed afterward. Numeric reduction, resource/process failures and
+artifact-specific reductions are outside this initial scope; no global minimum
+is claimed. See [FAILURE_REPLAY.md](FAILURE_REPLAY.md).
+
+Validation on macOS arm64 / OCCT 8.0.1 used an isolated snapshot of this patch
+over `249a213`, excluding concurrent licensing/packaging edits in the shared
+checkout. The final Release build completed. The final parallel CTest run passed
+**93/94 suites in 209.31 seconds**; the existing screenshot suite returned
+`workspace_busy` and passed its isolated rerun in **2.53 seconds**, with no test
+weakening. The final binary's matrix sample passed **67/69 actions and dimension
+walks**, matching its two recorded refusals, while checking all 243 case identities.
+The full 243-case measurements preceded only the final parent-retention guard;
+the final native minimizer tests exercise that guard, active/queued cancellation,
+partial limits, relocation, retry, replay and source preservation. A six-feature
+failure reduces to two; the final binary also reduced a retained matrix failure
+from four features to three and independently replayed it across build identities.
+
+Independent schema validation passed **971 checks across 35 tools**; official
+MCP SDK 2.3.0 passed **2,073 interoperability checks**. Relocated bundle smoke
+tests and **166 executable skill/schema checks** passed with an empty `PATH`.
+Logs, complete matrix reports/packages, the matrix-to-minimizer example and exact
+source/executable identities are in `.local/evidence/action-matrix-minimizer/`.
+The branch is `codex/action-matrix-minimizer`. No installed plugin was replaced,
+and no new desktop-host, Linux/Windows or release-readiness claim is made.
+Next: run platform CI, expand independent parameter/topology variations and use
+the retained refusals as focused geometry-regression inputs.
+
 ## Receipt changes, executable skills and failure replay — 2026-10-14
 
 Mutation receipts now include sorted created/modified/removed feature,

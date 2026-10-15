@@ -320,7 +320,7 @@ Json tool_definitions() {
   for(const auto& definition:tools) {
     const auto name=definition.at("name").get<std::string>();if(!job_tools.contains(name))continue;
     auto input=definition.at("inputSchema");input.erase("$defs");
-    if(name=="cad_failure")input["properties"]["action"]["const"]="replay";
+    if(name=="cad_failure")input["properties"]["action"]["enum"]={"replay","minimize"};
     auto output=definition.at("outputSchema");output.erase("$defs");
     // Mutations share an identical committed-record contract. An anyOf only
     // needs each distinct result once; retain every tool's input discriminator.
