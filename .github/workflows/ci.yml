@@ -95,6 +95,26 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
+      # These fixtures need no CAD binary or native SDK. Fail before compiling
+      # the service if host-specific CMake/packaging behavior breaks a contract.
+      - name: Offline packaging and source identity contracts
+        run: |
+          python tests/package_architecture_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/release_manifest_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/source_identity_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/universal_validation_tests.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ($IsMacOS) {
+            python tests/universal_composer_tests.py
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          python tests/packaging_provenance_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python tests/linux_staging_test.py
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Configure service
         run: |
           $prefix = Join-Path $PWD '.deps/native'
@@ -180,22 +200,6 @@ jobs:
             if ($LASTEXITCODE) { exit $LASTEXITCODE }
           }
           python tests/client_config_test.py $exe
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/package_architecture_tests.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/release_manifest_tests.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/source_identity_tests.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/universal_validation_tests.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          if ($IsMacOS) {
-            python tests/universal_composer_tests.py
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          }
-          python tests/packaging_provenance_test.py
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          python tests/linux_staging_test.py
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Relocated bundle without SDK environment
         run: |
