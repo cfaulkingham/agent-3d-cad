@@ -1,7 +1,20 @@
 # Third-party components in native preview bundles
 
+Licence scope: the MIT License in `LICENSE` covers only AgentCAD's original
+code. A native bundle is a combined work — that code linked against the
+separately licensed components below — and is **not MIT-licensed as a whole**.
+Package manifests declare the pinned components with the SPDX expression
+`MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib`; this file
+and the installed notice tree are the authoritative, exhaustive record,
+including platform-specific toolchain runtimes. Nothing in the MIT License
+restricts the rights the components' licences grant you, including the LGPL
+rights to replace the shared OCCT libraries with a modified compatible build
+(relinking) and to reverse-engineer the combined work to debug such library
+modifications.
+
 Open CASCADE Technology 8.0.1 is distributed under its upstream LGPL 2.1
-license and Open CASCADE exception. Exact license texts are in `occt/`.
+license and Open CASCADE exception (SPDX:
+`LGPL-2.1-only WITH OCCT-exception-1.0`). Exact license texts are in `occt/`.
 Upstream source: https://github.com/Open-Cascade-SAS/OCCT/tree/V8_0_1
 The pinned build includes the `agentcad-hlr-midpoint-v2` modification to five
 files of OCCT's `TKHLR` hidden-line toolkit. Its reproducible patch, scope and
@@ -30,11 +43,24 @@ the resulting shared libraries in the bundle's native-library directory
 `bin/` next to the executable on Windows). Verify the build against
 the recorded SDK and notice manifest before redistributing it.
 
+Written offer: for at least three years after the distribution of a bundle
+carrying this notice, the distributor will give any third party, on request
+through the repository at https://github.com/cfaulkingham/agent-3d-cad, the
+complete corresponding source for the modified OCCT libraries in that bundle
+(the pinned upstream archive identity above, `occt/PatchOcctHlr.cmake` and
+the five files under `occt/modified/`), for no more than the cost of
+distribution. This written offer backs the copies already included in every
+bundle; it does not replace them.
+
 nlohmann JSON 3.12.0 is distributed under its upstream MIT license, retained
 in `nlohmann-json/`. Source: https://github.com/nlohmann/json/tree/v3.12.0
 
-FreeType 2.14.3 is included by the pinned build recipe. Its copyright notices,
-FreeType License, and alternative GPLv2 terms are retained in `freetype/`.
+FreeType 2.14.3 is included by the pinned build recipe. Portions of this
+software are copyright © 2026 The FreeType Project (https://freetype.org).
+All rights reserved. Upstream offers FreeType under either the FreeType
+License or GPLv2; AgentCAD elects the **FreeType License (SPDX: `FTL`)** for
+its copy, and no GPLv2 election is made. Its copyright notices, FreeType
+License, and alternative GPLv2 terms are retained in `freetype/`.
 The exact upstream notice-bearing files for its embedded BDF/PCF, hash, zlib,
 and HarfBuzz-derived components are retained under `freetype/embedded/`.
 Source: https://sourceforge.net/projects/freetype/files/freetype2/2.14.3/

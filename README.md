@@ -7,6 +7,20 @@ reopen saved designs, and export STEP, STL and PDF/SVG/DXF drawings.
 The native CAD engine runs on your computer; the interactive viewer runs inside
 an MCP Apps host. No Python, Node, Rust or compiler is needed to use a package.
 
+## Built on Open CASCADE Technology
+
+Agent CAD's geometry kernel is **Open CASCADE Technology (OCCT) 8.0.1**,
+distributed under the GNU Lesser General Public License, version 2.1
+(LGPL 2.1), with the Open CASCADE exception. Agent CAD links OCCT as shared
+libraries that you may replace with a modified compatible build, and ships a
+documented local modification to five OCCT hidden-line files with its patch,
+complete modified sources and relinking instructions. The original Agent CAD
+code is MIT-licensed, but a distributed binary bundle is a combined work whose
+components keep their own licences; it is not MIT-licensed as a whole. See
+[NOTICE](NOTICE) and the [third-party notices](packaging/THIRD_PARTY.md) —
+installed in every bundle under `share/agent-3d-cad/notices` — for the exact
+licence texts, your LGPL rights, and how to obtain the corresponding source.
+
 ## Install in Claude Desktop
 
 Claude uses a self-contained `.mcpb` extension containing the CAD engine and
@@ -115,5 +129,12 @@ in [advanced client setup](docs/GETTING_STARTED.md) and
 - [Build, test, and contribute](docs/DEVELOPMENT.md)
 - [Release process and packaging](docs/DISTRIBUTION.md)
 
-The original code is [MIT-licensed](LICENSE). Third-party components keep their
-own licenses; see [NOTICE](NOTICE) and [third-party notices](packaging/THIRD_PARTY.md).
+## Licence
+
+The original Agent CAD code is [MIT-licensed](LICENSE). Distributed binaries
+also contain Open CASCADE Technology (LGPL 2.1 with the Open CASCADE
+exception), FreeType, TinyXML2 and toolchain runtime libraries, which keep
+their own licences; the combined bundle is therefore not MIT-licensed as a
+whole. See [NOTICE](NOTICE) and the
+[third-party notices](packaging/THIRD_PARTY.md), including the written offer
+of corresponding source for the modified OCCT libraries.

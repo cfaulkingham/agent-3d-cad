@@ -63,6 +63,53 @@ and no new desktop-host, Linux/Windows or release-readiness claim is made.
 Next: run platform CI, expand independent parameter/topology variations and use
 the retained refusals as focused geometry-regression inputs.
 
+## Licence compatibility with Open CASCADE corrected — 2026-10-14
+
+Audit conclusion: MIT for the original code is not itself incompatible with
+OCCT 8.0.1 (LGPL 2.1 with the Open CASCADE exception 1.0, SPDX
+`LGPL-2.1-only WITH OCCT-exception-1.0`) as a work that uses the library, but
+four distribution defects made current labelling non-compliant: README never
+named Open CASCADE (the exception requires prominent notice in supporting
+documentation, as does LGPL section 6); the Agent Plugins and Claude `.mcpb`
+manifests labelled the combined binary bundle simply `MIT`; nothing prevented
+a portable bundle from being configured against a static OCCT SDK, which
+would defeat LGPL library replacement; and no FreeType licence election was
+stated, leaving its GPLv2 alternative — which would conflict with MIT
+combined distribution — unexcluded. The owner confirmed keeping MIT for the
+original code (the 2026-10-07 decision) and fixing compliance instead of
+relicensing.
+
+Fixes: a prominent “Built on Open CASCADE Technology” README section and a
+rewritten `NOTICE` stating the bundle is a combined work, not MIT-licensed
+as a whole, with LGPL replacement/reverse-engineering rights and the
+corresponding-source route; `packaging/THIRD_PARTY.md` now records the SPDX
+expression, a three-year written offer for the modified TKHLR source, the
+FreeType `FTL` election with its required credit, and that no GPLv2 election
+is made; `plugin.json` and the `.mcpb` manifest declare
+`MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib`;
+`cmake/Bundle.cmake` refuses portable-bundle configuration unless `TKernel`
+and `TKHLR` are `SHARED_LIBRARY` (developer builds keep
+`AGENTCAD_PORTABLE_BUNDLE=OFF`); and `bundle_validation.py`,
+`package-desktop.py` (which bypassed the shared validator) and
+`compose-macos-universal.py` reject recorded non-shared OCCT linkage.
+`docs/DEPENDENCIES.md`, `docs/DISTRIBUTION.md`, `AGENTS.md` and
+`CONTRIBUTING.md` state the same scope. `LICENSE` is unchanged.
+
+Evidence (macOS arm64): the extended `notices` CTest and
+`tests/packaging_provenance_test.py` failed on the pre-fix tree (missing
+README notice; static-linkage bundles accepted by all three packagers) and
+pass after the fix — `notice consistency checks passed: 27`;
+`ctest -R '^notices$'` 1/1 passed; a full reconfigure of `build/` against
+the pinned shared SDK succeeds with the new guard; universal composer (51
+checks), package architecture (43) and universal validation (41) suites
+pass. Limits: the CMake guard's negative path was not exercised against a
+real static OCCT SDK (none is available locally; the packager negative path
+is exercised end-to-end); host acceptance of an SPDX expression in
+plugin/extension licence metadata remains part of the open host-validation
+gate; published `v0.1.0-preview.1` artifacts keep their original labelling
+until the next release is built from this tree; and this is an engineering
+compliance fix, not a completed legal review.
+
 ## Receipt changes, executable skills and failure replay — 2026-10-14
 
 Mutation receipts now include sorted created/modified/removed feature,

@@ -6,7 +6,7 @@
   "author": { "name": "Colin Faulkingham" },
   "homepage": "https://github.com/cfaulkingham/agent-3d-cad",
   "repository": "https://github.com/cfaulkingham/agent-3d-cad",
-  "license": "MIT",
+  "license": "MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib",
   "keywords": ["cad", "3d", "engineering", "3d-printing"],
   "extensions": {
     "com.openai": {

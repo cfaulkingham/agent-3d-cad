@@ -88,6 +88,16 @@ install(FILES third_party/tinyxml2/tinyxml2.cpp third_party/tinyxml2/tinyxml2.h
   third_party/tinyxml2/LICENSE.txt third_party/tinyxml2/readme.md third_party/tinyxml2/PROVENANCE.json
   DESTINATION share/agent-3d-cad/notices/tinyxml2)
 get_target_property(AGENTCAD_OCCT_LINKAGE TKernel TYPE)
+# LGPL 2.1 library replacement/relinking holds by construction only when OCCT
+# stays in replaceable shared libraries. A static or unknown-linkage SDK may
+# still serve developer builds with AGENTCAD_PORTABLE_BUNDLE=OFF, but it must
+# never produce a distributable bundle under this project's MIT labelling.
+foreach(toolkit IN ITEMS TKernel TKHLR)
+  get_target_property(toolkit_linkage ${toolkit} TYPE)
+  if(NOT toolkit_linkage STREQUAL "SHARED_LIBRARY")
+    message(FATAL_ERROR "Portable bundles require shared Open CASCADE libraries; ${toolkit} is '${toolkit_linkage}'. Rebuild OCCT with the pinned cmake/dependencies recipe (BUILD_LIBRARY_TYPE=Shared), or configure with AGENTCAD_PORTABLE_BUNDLE=OFF for a developer-only build.")
+  endif()
+endforeach()
 file(SHA256 "${CMAKE_CURRENT_BINARY_DIR}/generated/viewer.html" AGENTCAD_APP_SHA256)
 install(DIRECTORY "${OpenCASCADE_RESOURCE_DIR}/" DESTINATION share/agent-3d-cad/occt)
 install(DIRECTORY examples/ DESTINATION share/agent-3d-cad/examples

@@ -16,7 +16,11 @@ if system not in ('Darwin', 'Windows'):
 manifest = {
     'manifest_version': '0.3', 'name': 'agent-3d-cad', 'display_name': 'Agent CAD',
     'version': provenance['project_version'], 'description': 'Create, edit, view and export saved CAD projects.',
-    'author': {'name': 'Colin Faulkingham'}, 'license': 'MIT', 'tools_generated': True,
+    # SPDX expression for the combined bundle: MIT original code plus the
+    # pinned LGPL/FreeType/TinyXML2 components. THIRD_PARTY.md in the bundle
+    # notices is the exhaustive record; this field must not claim MIT alone.
+    'author': {'name': 'Colin Faulkingham'},
+    'license': 'MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib', 'tools_generated': True,
     'homepage': 'https://github.com/cfaulkingham/agent-3d-cad',
     'server': {'type': 'binary', 'entry_point': binary, 'mcp_config': {
         'command': '${__dirname}/' + binary, 'args': ['serve', '--default-workspace', '--workspace-setting', '${user_config.workspace}']}},

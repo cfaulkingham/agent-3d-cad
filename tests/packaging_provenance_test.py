@@ -47,6 +47,16 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
         assert result.returncode != 0 and 'cover every file exactly once' in result.stderr, result.stderr
         assert not output.exists()
     (bundle / 'unlisted').unlink()
+    # A bundle recording static OCCT linkage cannot satisfy LGPL library
+    # replacement by construction, so every packager must refuse it.
+    manifest.write_text(json.dumps({'project_version': version, 'system': 'Darwin', 'architecture': 'arm64',
+                                    'occt_linkage': 'STATIC_LIBRARY', 'files': [entry]}))
+    for helper in ['make-mcpb.py', 'package-desktop.py', 'make-plugin.py']:
+        output = root / ('static-occt-' + helper)
+        result = run(helper, output)
+        assert result.returncode != 0 and 'shared Open CASCADE libraries' in result.stderr, result.stderr
+        assert not output.exists()
+    save([entry])
     # Exercise real entrypoints and their transitive resources through both
     # packagers. The synthetic Mach-O bytes are inspected, never executed.
     skill_root = bundle / 'share/agent-3d-cad/skills'
@@ -63,6 +73,9 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
         for item in skill_entries:
             assert archive.read(item['path']) == (bundle / item['path']).read_bytes()
         extension = json.loads(archive.read('manifest.json'))
+        # The combined bundle must not be labelled MIT-only: it contains
+        # LGPL OCCT shared libraries and other separately licensed parts.
+        assert extension['license'] == 'MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib'
         assert extension['_meta']['org.agentcad.native'] == {'system':'Darwin','architecture':'arm64','architecture_selection':'distribution_required'}
         assert extension['compatibility'] == {'platforms':['darwin']}
         assert extension['user_config']['workspace']['required'] is False
@@ -78,6 +91,8 @@ with tempfile.TemporaryDirectory(prefix='cad-packaging-provenance-') as temp:
     assert result.returncode == 0, result.stderr
     for plugin in output.iterdir():
         if plugin.is_dir():
+            assert json.loads((plugin / 'plugin.json').read_text())['license'] == \
+                'MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib'
             settings = json.loads((plugin / 'mcp.json').read_text())['mcpServers']['agent-3d-cad']
             assert settings == {'type': 'stdio', 'command': './bin/agent-3d-cad', 'args': ['serve', '--default-workspace']}
             assert (plugin / 'skills/setup/SKILL.md').is_file()

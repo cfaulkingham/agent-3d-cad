@@ -93,15 +93,29 @@ the cache automatically. Packaging and service-test changes do not change the SD
 ## Licensing and release status
 
 The original project code is released under the MIT License (`LICENSE`).
-Third-party components keep their own licenses, listed below.
+Third-party components keep their own licenses, listed below, so a distributed
+binary bundle is a combined work and is not MIT-licensed as a whole; package
+manifests declare the pinned components as
+`MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib`, with
+`packaging/THIRD_PARTY.md` as the exhaustive record.
 TinyXML2 is the pinned source-vendored exception described below; other native dependencies come from verified archives. The reproducible OCCT patch
 contains upstream source context with its attribution; complete dependency source
 downloads stay under ignored build/cache directories.
 
-OCCT carries its upstream LGPL 2.1 terms with the Open CASCADE exception;
+OCCT carries its upstream LGPL 2.1 terms with the Open CASCADE exception
+(SPDX `LGPL-2.1-only WITH OCCT-exception-1.0`); MIT-licensed original code
+that uses it is compatible with those terms only while the LGPL distribution
+duties are met: prominent Open CASCADE notice (README, `NOTICE`), exact
+licence texts and corresponding source (or the written offer in
+`packaging/THIRD_PARTY.md`) for the modified TKHLR, and OCCT kept in
+replaceable shared libraries so recipients can relink and reverse-engineer
+for library debugging. Portable-bundle configuration therefore rejects
+non-shared OCCT linkage (`cmake/Bundle.cmake`), as do the plugin, Claude
+extension, desktop and universal packagers when provenance records it.
 nlohmann JSON carries its upstream MIT terms. Consult the exact release license
-files and retain notices when distributing them. FreeType and its transitive
-libraries have their own terms. Packaging must include the applicable notices
+files and retain notices when distributing them. FreeType is used under the
+FreeType License (`FTL`) — its GPLv2 alternative is not elected — and its
+transitive libraries have their own terms. Packaging must include the applicable notices
 and satisfy obligations for the actual linkage/distribution choice. Portable
 preview installs include the exact OCCT, JSON and FreeType license texts and
 hash their files in `provenance.json`. Linux compiler runtime notices are

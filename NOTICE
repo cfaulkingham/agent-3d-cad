@@ -6,16 +6,44 @@ The original code in this repository is licensed under the MIT License; see
 LICENSE. The copyright holder is Colin Faulkingham. Third-party components keep
 their own licenses, listed below, and are not relicensed by this project.
 
-Third-party components
-----------------------
-Native preview bundles redistribute Open CASCADE Technology 8.0.1 (LGPL 2.1
-with the Open CASCADE exception, with an AgentCAD modification to five TKHLR
-files), nlohmann JSON 3.12.0 (MIT) and FreeType 2.14.3 (FreeType License /
-GPLv2), plus toolchain runtime libraries. Their license texts, the modified
-OCCT sources, the reproducible patch, source/relinking instructions and
-per-file provenance are in packaging/THIRD_PARTY.md and in the notices
-directory of every bundle (share/agent-3d-cad/notices). Those licenses apply to
-those components; the MIT License of the project's own code does not change them.
+A distributed native bundle is a combined work: the MIT-licensed executable
+linked against separately licensed shared libraries. The bundle is therefore
+not MIT-licensed as a whole, and no statement in LICENSE, in a package
+manifest, or in host/plugin metadata grants MIT terms for the third-party
+components or removes any right their licenses give you.
+
+Open CASCADE Technology (prominent notice)
+------------------------------------------
+This software makes use of Open CASCADE Technology (OCCT) 8.0.1,
+Copyright (c) 1999-2014 OPEN CASCADE SAS and contributors, distributed under
+the GNU Lesser General Public License version 2.1 with the Open CASCADE
+exception version 1.0 (SPDX: LGPL-2.1-only WITH OCCT-exception-1.0). The
+complete LGPL 2.1 and exception texts ship in every bundle at
+share/agent-3d-cad/notices/occt/.
+
+OCCT is linked only as shared libraries. Under LGPL 2.1 you may replace those
+libraries with a modified compatible build and reverse-engineer the combined
+work to debug your library modifications; nothing in this project's MIT
+License or documentation restricts those rights. AgentCAD locally modifies
+five TKHLR files (modification agentcad-hlr-midpoint-v2). The reproducible
+patch, the five complete modified sources, the pinned upstream archive
+identity and relinking instructions ship in the same notices directory and
+are described in packaging/THIRD_PARTY.md. That material is the
+corresponding source for the modified libraries; THIRD_PARTY.md also carries
+a written offer
+covering any recipient who cannot obtain it from the bundle or the pinned
+upstream archive.
+
+Other third-party components
+----------------------------
+Native preview bundles also redistribute nlohmann JSON 3.12.0 (MIT),
+FreeType 2.14.3 (used under the FreeType License, not its GPLv2 alternative),
+TinyXML2 11.0.0 (zlib license, statically compiled from unmodified sources),
+plus toolchain runtime libraries. Their license texts, source/relinking
+instructions and per-file provenance are in packaging/THIRD_PARTY.md and in
+the notices directory of every bundle (share/agent-3d-cad/notices). Those
+licenses apply to those components; the MIT License of the project's own
+code does not change them.
 
 Bundles and CI artifacts are development previews with no assertion of public
 release authorization, signing, notarization or completed legal review.

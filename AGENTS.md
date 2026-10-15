@@ -52,5 +52,9 @@ prerelease with native/desktop archives, Claude extensions and installers.
 Signing/notarization and remaining client/GUI validation are tracked in HANDOFF.
 The original project code is
 MIT-licensed (see `LICENSE` and `NOTICE`); third-party components keep their own
-licenses (`packaging/THIRD_PARTY.md`). Do not infer licenses from neighboring
+licenses (`packaging/THIRD_PARTY.md`). A distributed bundle is a combined work,
+not MIT-licensed as a whole: OCCT is LGPL 2.1 with the Open CASCADE exception
+and must stay in replaceable shared libraries in any distributable bundle
+(portable packaging rejects other linkage), and FreeType is used under the
+FreeType License, not its GPLv2 alternative. Do not infer licenses from neighboring
 repositories, and keep third-party notices intact when reusing code.

@@ -452,6 +452,13 @@ def validate_bundle(root, version):
             raise ValueError(f"Bundle integrity failure: {entry['path']}")
     if provenance['project_version'] != version:
         raise ValueError('Native bundle must match VERSION')
+    # Real bundles record their OCCT linkage in provenance. LGPL library
+    # replacement holds by construction only for shared libraries, so any
+    # recorded non-shared linkage is undistributable in a packaged bundle.
+    linkage = provenance.get('occt_linkage')
+    if linkage is not None and linkage != 'SHARED_LIBRARY':
+        raise ValueError('Native bundle must use shared Open CASCADE libraries (LGPL relinking); '
+                         f'provenance records occt_linkage={linkage!r}')
     system = provenance['system']
     arch = {'aarch64': 'arm64', 'arm64': 'arm64', 'x86_64': 'x64', 'amd64': 'x64', 'x64': 'x64', 'universal': 'universal'}.get(str(provenance['architecture']).lower())
     if (system, arch) not in {('Darwin', 'arm64'), ('Darwin', 'x64'), ('Darwin', 'universal'), ('Linux', 'arm64'), ('Linux', 'x64'), ('Windows', 'x64')}:

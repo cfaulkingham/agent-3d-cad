@@ -232,7 +232,15 @@ are still present. Public release still requires actual platform-run evidence,
 applicable source/relinking obligations, and release signing/notarization
 where appropriate. No archive is uploaded or published by local packaging.
 The original code is MIT-licensed; `LICENSE` and `NOTICE` ship in each bundle's
-notices directory.
+notices directory. The bundle itself is a combined work, not MIT-licensed as
+a whole: package manifests (Agent Plugins `plugin.json`, Claude `.mcpb`
+`manifest.json`) declare
+`MIT AND (LGPL-2.1-only WITH OCCT-exception-1.0) AND FTL AND Zlib`, and
+portable-bundle configuration plus every packager reject a bundle whose OCCT
+linkage is not shared libraries, preserving LGPL replacement/relinking. Host
+acceptance of the SPDX licence expression in plugin/extension metadata is
+part of the still-open host-validation gate; it does not change the installed
+notice tree, which remains authoritative.
 CI uploads preview archives and test evidence as workflow artifacts with a
 14-day retention. Version tags additionally prepare the draft release described
 above. The first public prerelease is

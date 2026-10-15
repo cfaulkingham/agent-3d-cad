@@ -28,6 +28,7 @@ PINNED = {
     'freetype_version': '2.14.3',
     'freetype_recipe_archive_sha256': '36bc4f1cc413335368ee656c42afca65c5a3987e8768cc28cf11ba775e785a5f',
     'occt_modifications': ['agentcad-hlr-midpoint-v2'],
+    'occt_linkage': 'SHARED_LIBRARY',
     'original_code_license': 'MIT',
 }
 PER_SLICE = {'architecture', 'compiler', 'build_identity', 'occt_hlr_sdk_sha256', 'minimum_macos', 'files'}

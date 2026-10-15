@@ -25,6 +25,13 @@ if not paths or len(paths) != len(set(paths)) or actual != set(paths) | {manifes
     raise SystemExit('Native provenance must cover every file exactly once')
 if manifest['project_version'] != version or manifest['system'] != system:
     raise SystemExit('Native bundle version/platform mismatch')
+# Same LGPL gate as bundle_validation.validate_bundle: recorded non-shared
+# OCCT linkage cannot be redistributed, because library replacement would
+# not be possible by construction.
+linkage = manifest.get('occt_linkage')
+if linkage is not None and linkage != 'SHARED_LIBRARY':
+    raise SystemExit('Native bundle must use shared Open CASCADE libraries (LGPL relinking); '
+                     f'provenance records occt_linkage={linkage!r}')
 def sha(file):
     with file.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
