@@ -215,7 +215,8 @@ local and the viewer embedded in chat. See `RELEASE_1_0.md` for the complete
 install/create/select/edit/reopen/export/upgrade journey. Native plugin packaging,
 default persistent workspace and an onboarding skill are implemented foundations;
 actual two-host installation/rendering, accessible exports, architecture selection,
-publisher signing and public distribution are unfinished acceptance gates.
+publisher signing and local package installation/updates are unfinished acceptance
+gates. Public marketplace submission or approval is outside the release scope.
 The standalone app is removed. Additional local MCP hosts have setup guidance;
 end-to-end acceptance remains separate. Passing CI does not authorize a 1.0 tag.
 

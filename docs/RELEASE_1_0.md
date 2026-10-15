@@ -5,15 +5,17 @@ The CAD engine stays on the user's computer. The viewer runs inside the connecte
 chat as an MCP App. The standalone app was removed on 2026-10-15.
 Codex, Grok Build, OpenCode and other local MCP clients now have concise setup
 in `GETTING_STARTED.md`; their documented connection paths do not establish
-additional host acceptance.
+additional host acceptance. Distribution uses downloaded local packages;
+public marketplace submission or approval is outside the release scope.
 The published `0.1.0-preview.1` is development evidence, not product readiness.
 Keep its immutable tag and historical downloads; do not promote it to 1.0.
 
 ## The experience to ship
 
-Install Agent CAD in the host, then ask for a model. No terminal, config editing,
-executable paths, language runtime or separate viewer application. New projects
-use Documents/Agent CAD automatically. Existing projects can be reopened without
+Install Agent CAD from a local package, then ask for a model. Codex / ChatGPT
+uses the local plugin-folder registration in [the setup guide](GETTING_STARTED.md);
+Claude uses its extension installer. No language runtime, compiler or separate
+viewer application is needed. New projects use Documents/Agent CAD automatically. Existing projects can be reopened without
 copying them into the plugin cache. Updating or removing the plugin preserves
 the editable project folder, saved revisions and independent exports.
 
@@ -28,17 +30,17 @@ not sufficient release acceptance. The viewer stays inside the host.
 | Host | Package / connection | Current boundary |
 |---|---|---|
 | Claude Desktop | Native binary `.mcpb`, with an optional project-folder setting | Actual local update, create, selected-edge edit, live viewer refresh, saved-document listing and STEP/STL/PDF generation verified on macOS arm64; file retrieval and complete restart/reopen/install journey remain required |
-| ChatGPT desktop | Local Agent Plugins package containing the native MCP server, modeling skill and setup skill | Package built; host loading and rendering still required; local marketplace is a test/distribution path, not public-directory approval |
+| Codex / ChatGPT desktop | Extracted local Agent Plugins package containing the native MCP server and skills | Register the folder and enable it in the host; complete local install/update/reopen acceptance remains required |
 
 Claude documents binary desktop extensions and host-managed installation in
 [its extension guide](https://support.claude.com/en/articles/10949351-getting-started-with-local-mcp-servers-on-claude-desktop).
 The ChatGPT package uses the
 [Agent Plugins 1.0 format](https://agent-plugins.org/specification).
-OpenAI's [public plugin guidance](https://developers.openai.com/plugins/build/plugins)
-currently calls for a public HTTPS MCP endpoint or contacting OpenAI for local
-MCP support. Preserve local CAD; resolve that distribution gate before promising
-installation from the public directory. Do not silently replace this product
-with a hosted CAD service or require users to run their own tunnel.
+OpenAI documents [local plugin catalogs](https://developers.openai.com/plugins/build/plugins#how-local-marketplaces-work)
+for installation and private distribution. Register the extracted package with
+`codex plugin marketplace add` and enable Agent CAD in the host. The CAD service
+stays on the user's computer. This local route requires no public-directory
+submission, remote HTTPS endpoint or tunnel.
 
 ## Implemented foundation
 
@@ -68,11 +70,10 @@ python3 packaging/make-mcpb.py bundle build/plugins/Agent-CAD-Claude.mcpb
 ```
 
 These are build/test commands. They are not the end-user install flow.
-Private ChatGPT testing follows the host's local marketplace import process;
-the generated ZIP is a package artifact, not a claimed one-click installer.
-After extraction, `.agents/plugins/marketplace.json` names the package's own
-root as its local plugin source. Keep the extracted folder intact. This catalog
-is for host testing; no directory approval is implied.
+Local Codex / ChatGPT installation follows the setup guide's folder registration
+and host enablement steps. After extraction, `.agents/plugins/marketplace.json`
+names the package's own root as its local plugin source. Keep the extracted
+folder intact for installation and updates.
 
 ## Required evidence before 1.0
 
@@ -88,8 +89,9 @@ not yet established. Implementation tests alone do not close this gate.
 
 Run the complete journey in a fresh host profile on each supported host/platform:
 
-1. Install through the host with no terminal or config edits; accept the default
-   project folder. Record actual host version, package hash, OS and architecture.
+1. Install the downloaded local package using the setup guide, including Codex's
+   folder-registration command where applicable; accept the default project
+   folder. Record actual host version, package hash, OS and architecture.
 2. Create an editable mounting plate and open the viewer inside that chat.
 3. Pick a face and an edge; read their exact context in the connected chat.
    Apply a selective edge edit and verify the same viewer refreshes and clears
@@ -99,7 +101,7 @@ Run the complete journey in a fresh host profile on each supported host/platform
    host action and verify source/revision preservation.
 6. Upgrade the extension and repeat reopen/edit/export. Remove the extension
    and verify saved projects remain. Reinstall and reopen them.
-7. Verify publisher signing/notarization as applicable and the actual directory
+7. Verify publisher signing/notarization as applicable and the local package
    install/update route. Resolve CPU selection so users do not need architecture
    knowledge. The native macOS universal composer is implemented; the same
    composed archives require real ARM/Intel runtime and host installation

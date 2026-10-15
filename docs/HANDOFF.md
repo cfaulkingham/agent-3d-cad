@@ -7,6 +7,25 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Local-only Codex installation guidance — 2026-10-15
+
+At the user's request, Codex / ChatGPT setup now explicitly uses an extracted
+local plugin folder, registered with `codex plugin marketplace add` and enabled
+in the host. The guide explains that `marketplace` names a local plugin catalog;
+public marketplace submission or approval is not required. The local native MCP
+alternative remains documented.
+
+README, release acceptance, roadmap and repository instructions now agree that
+public marketplace approval is outside the release scope. Local registration is
+an accepted installation step; host install/update/reopen/export verification and
+publisher signing remain separate gates. OpenAI's official local-plugin catalog
+documentation was checked on 2026-10-15 and linked in the guides.
+
+Documentation-only change. The existing Markdown-link checker resolved **49
+relative links across five changed guides/instructions**; `git diff --check`
+passed. Runtime code, package metadata and installed host settings are unchanged;
+no native rebuild or new host-acceptance claim is needed for this wording change.
+
 ## Standalone app removed and host setup simplified — 2026-10-15
 
 Removed the Tauri source, Rust dependencies, native `viewer` launcher, desktop

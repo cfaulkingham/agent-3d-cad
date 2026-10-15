@@ -27,7 +27,10 @@ for checksum-verifying installers and package validation.
 
 ## Codex / ChatGPT desktop
 
-For a local plugin ZIP, extract it, then register its folder:
+Install from a folder on your computer. No public marketplace submission or
+approval is required.
+
+Extract the local plugin ZIP to a permanent folder, then register that folder:
 
 ```sh
 codex plugin marketplace add "/absolute/path/to/extracted/agent-cad-plugin-VERSION-OS-CPU"
@@ -36,8 +39,9 @@ codex plugin marketplace add "/absolute/path/to/extracted/agent-cad-plugin-VERSI
 Refresh or restart the desktop host, open its plugin browser, find **Agent CAD**
 under **Agent CAD local testing**, and install/enable it. Start a new chat and ask
 it to open your CAD library. Keep the extracted folder for future plugin updates.
-This is local marketplace installation, not a public-directory listing.
-[Official local plugin setup](https://developers.openai.com/plugins/build/plugins).
+The word `marketplace` in the command refers to the package's local plugin
+catalog. This is the complete local installation route.
+[Official local plugin setup](https://developers.openai.com/plugins/build/plugins#how-local-marketplaces-work).
 
 Alternatively, with a native archive, register the MCP server:
 

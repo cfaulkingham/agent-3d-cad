@@ -7,8 +7,9 @@ Developer builds may use CMake, a C++ compiler, and native dependencies.
 Release 1.0 targets local plugins in ChatGPT desktop and Claude Desktop, with the
 viewer embedded in chat. The standalone app is removed; Codex, Grok Build,
 OpenCode and other local MCP clients have setup instructions in
-`docs/GETTING_STARTED.md`, with host acceptance tracked separately. Read
-`docs/RELEASE_1_0.md` for acceptance gates;
+`docs/GETTING_STARTED.md`, with host acceptance tracked separately. Codex / ChatGPT
+installation uses local packages; public marketplace approval is not a release
+requirement. Read `docs/RELEASE_1_0.md` for acceptance gates;
 passing native tests alone does not establish host installation readiness.
 
 ## Start here

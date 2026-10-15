@@ -27,7 +27,7 @@ Choose your host in the [setup guide](docs/GETTING_STARTED.md):
 
 | Host | Setup |
 |---|---|
-| [Codex / ChatGPT desktop](docs/GETTING_STARTED.md#codex--chatgpt-desktop) | Add the local plugin, or connect the native engine through MCP |
+| [Codex / ChatGPT desktop](docs/GETTING_STARTED.md#codex--chatgpt-desktop) | Install from an extracted local plugin folder, or register the native MCP server |
 | [Claude Desktop](docs/GETTING_STARTED.md#claude-desktop) | Install the `.mcpb` extension |
 | [Grok Build](docs/GETTING_STARTED.md#grok-build) | Register the native engine with `grok mcp add` |
 | [OpenCode](docs/GETTING_STARTED.md#opencode) | Add one local MCP entry to your config |
@@ -40,8 +40,9 @@ or PNG previews. The standalone app has been removed from current source.
 
 Current source/CI packages include the local plugin and default project folder.
 The older `0.1.0-preview.1` downloads require an explicit project folder; see the
-setup guide. Public plugin-directory listing, signing and complete host acceptance
-remain [release gates](docs/RELEASE_1_0.md).
+setup guide. Codex / ChatGPT installation is local; public marketplace approval
+is not required. Signing and complete host acceptance remain
+[release gates](docs/RELEASE_1_0.md).
 
 ## Create your first project
 
