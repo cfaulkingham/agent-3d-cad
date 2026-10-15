@@ -37,6 +37,15 @@ function(agentcad_source_manifest source_root output)
   set(${output} "${manifest}" PARENT_SCOPE)
 endfunction()
 
+# The manifest hash names its exact bytes on every host. file(WRITE) uses
+# native text newlines on Windows, which differ from the in-memory LF string.
+function(agentcad_write_source_manifest output content)
+  # Substitute once so @...@ and ${...} in input filenames stay literal.
+  # CONFIGURE terminates its template line; avoid adding a second final LF.
+  string(REGEX REPLACE "\n$" "" content "${content}")
+  file(CONFIGURE OUTPUT "${output}" CONTENT [[@content@]] @ONLY NEWLINE_STYLE LF)
+endfunction()
+
 # Shared install-time verification; deliberately independent of Git state.
 function(agentcad_verify_source_stamp source_root input_manifest expected_source stamp_file executable output)
   agentcad_source_manifest("${source_root}" current_source)
@@ -44,7 +53,7 @@ function(agentcad_verify_source_stamp source_root input_manifest expected_source
   if(NOT current_source STREQUAL configured_source)
     message(FATAL_ERROR "Production source changed after configure/build; rebuild before packaging")
   endif()
-  string(SHA256 source_hash "${configured_source}")
+  file(SHA256 "${input_manifest}" source_hash)
   if(NOT source_hash STREQUAL expected_source)
     message(FATAL_ERROR "Source manifest differs from configured identity")
   endif()
@@ -64,5 +73,5 @@ if(CMAKE_SCRIPT_MODE_FILE AND DEFINED OUTPUT_MANIFEST)
     message(FATAL_ERROR "SOURCE_ROOT must name the production checkout")
   endif()
   agentcad_source_manifest("${SOURCE_ROOT}" source_manifest)
-  file(WRITE "${OUTPUT_MANIFEST}" "${source_manifest}")
+  agentcad_write_source_manifest("${OUTPUT_MANIFEST}" "${source_manifest}")
 endif()

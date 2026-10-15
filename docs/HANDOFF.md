@@ -7,6 +7,36 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Windows CI manifest-byte repair — 2026-10-15
+
+Windows job `116504694986` in run `38758925813` passed all **91 available native
+CTests**, the complete schema/SDK stage, the Windows installer and client-config
+checks, then failed in `source_identity_tests.py`: `Configured source manifest
+does not match build settings`. CMake `file(WRITE)` emitted CRLF on Windows while
+the configured source identity hashed the LF string. The independent Python
+byte hash exposed that mismatch. Reproduced the exact failure locally by writing
+the manifest with CRLF.
+
+The configure and inspection paths now share an explicit LF manifest writer;
+input file hashes still cover original, unmodified bytes. Build stamping and
+installation verify the manifest's raw file hash. Regressions cover CRLF
+corruption, unchanged prior stamps, CPack rejection, and literal variable-like
+filenames. The later universal-package fixture also writes its required LF
+manifest as bytes and rejects CRLF even with a matching raw hash.
+
+Validation on macOS arm64: **58 source/build identity checks** passed separately
+with CMake **3.24.3, 3.31.6 and 4.3.2**. All eight locally applicable remaining
+installer/configuration/packaging scripts passed, including **42 universal
+validation** and **51 universal composer** checks. The Release rebuild completed
+without warnings; installer, embedded-assets, notices and CLI CTests passed
+**4/4 in 5.07s**. The relocated bundle smoke passed with empty PATH, and independent
+raw-byte hashing matched its manifest, source identity and successful build
+stamp. Logs and summary: `.local/evidence/windows-ci-repair-20261015/`.
+
+The repaired source still needs Windows CI, including the previously blocked
+bundle/plugin packaging stages. These local results do not establish Windows
+runtime or host acceptance. Existing installed plugins are unchanged.
+
 ## Ubuntu CI source-identity fixture repair — 2026-10-15
 
 Both Ubuntu 24.04 jobs (x64 and arm64) in run `38754231924` passed all **92

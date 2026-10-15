@@ -58,6 +58,7 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
         (source/directory/'input.txt').write_bytes(('Exact '+directory+'\r\n').encode())
     (source/'CMakeLists.txt').write_text('project(fixture)\n')
     (source/'VERSION').write_text('0.1.0-preview.1\n')
+    (source/'src/@DO_NOT_EXPAND@${KEEP_LITERAL}.txt').write_bytes(b'Literal filename\r\n')
     for helper in ('SourceIdentity.cmake', 'StampSource.cmake'):
         shutil.copyfile(repo/'cmake'/helper, source/'cmake'/helper)
     generated = root/'generated'; generated.mkdir()
@@ -66,14 +67,16 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
     collect = root/'collect.cmake'
     collect.write_text(f'include({cmake_literal(source/"cmake/SourceIdentity.cmake")})\n'
                        f'agentcad_source_manifest({cmake_literal(source)} content)\n'
-                       f'file(WRITE {cmake_literal(manifest)} "${{content}}")\n')
+                       f'agentcad_write_source_manifest({cmake_literal(manifest)} "${{content}}")\n')
     run(['-P', str(collect)])
     original = manifest.read_bytes(); digest = sha(original)
+    assert b'\r' not in original and original.endswith(b'\n'); checks += 1
     inspection = generated/'inspection.sha256'
     run([f'-DSOURCE_ROOT={source}',f'-DOUTPUT_MANIFEST={inspection}','-P',str(source/'cmake/SourceIdentity.cmake')])
     assert inspection.read_bytes()==original; checks += 1
     records = original.decode().splitlines(); paths = [line[66:] for line in records]
     assert paths == sorted(paths) and len(paths) == len(set(paths)) and all(not path.startswith('/') for path in paths); checks += 1
+    assert 'src/@DO_NOT_EXPAND@${KEEP_LITERAL}.txt' in paths; checks += 1
     for line in records:
         assert sha((source/line[66:]).read_bytes()) == line[:64]; checks += 1
     settings.write_text(json.dumps(dict(format_version=1,source_sha256=digest,cache_identity='fixture-Release',compiler_id='Fixture',compiler_version='1',configuration='Release',system='Darwin',architecture='arm64',osx_architectures='arm64',deployment_target='15.0',cxx_flags='',configuration_flags='')))
@@ -85,6 +88,13 @@ with tempfile.TemporaryDirectory(prefix='cad-source-identity-') as temp:
                       f'agentcad_verify_source_stamp({cmake_literal(source)} {cmake_literal(manifest)} '
                       f'{cmake_literal(digest)} {cmake_literal(stamp)} {cmake_literal(exe)} result)\n')
     run(['-P',str(verify)])
+    # CRLF rewrites preserve parsed text but must not preserve byte identity.
+    # Exercise this Windows failure on every host and retain the previous stamp.
+    before = stamp.read_bytes(); manifest.write_bytes(original.replace(b'\n', b'\r\n'))
+    run(stamp_args, 'Configured source manifest does not match build settings')
+    assert stamp.read_bytes() == before; checks += 1
+    run(['-P',str(verify)], 'Source manifest differs from configured identity')
+    manifest.write_bytes(original)
     saved = (source/'src/input.txt').read_bytes(); (source/'src/input.txt').write_bytes(saved+b'changed')
     before = stamp.read_bytes(); run(stamp_args,'Production source changed during build'); assert stamp.read_bytes()==before; checks += 1
     run(['-P',str(verify)],'Production source changed after configure/build')
@@ -127,7 +137,7 @@ cmake_minimum_required(VERSION 3.24)
 project(SourceIdentityFixture VERSION 1.0.0 LANGUAGES NONE)
 include(cmake/SourceIdentity.cmake)
 agentcad_source_manifest("${CMAKE_CURRENT_SOURCE_DIR}" inputs TRACK_CONFIGURE)
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/source-inputs.sha256" "${inputs}")
+agentcad_write_source_manifest("${CMAKE_CURRENT_BINARY_DIR}/source-inputs.sha256" "${inputs}")
 string(SHA256 source_hash "${inputs}")
 configure_file(cmake/InstallFixture.cmake.in InstallFixture.cmake @ONLY)
 install(SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/InstallFixture.cmake")
@@ -137,6 +147,7 @@ include(CPack)
 """)
     run(['-S',str(source),'-B',str(build)])
     manifest=build/'source-inputs.sha256'; original=manifest.read_bytes()
+    assert b'\r' not in original and original.endswith(b'\n'); checks += 1
     settings=build/'settings.json'; exe=build/'not-a-native-executable.fixture'; stamp=build/'build-source.json'
     settings.write_text(json.dumps(dict(format_version=1,source_sha256=sha(original))))
     exe.write_bytes(b'Test payload only; never a native executable\n')
@@ -150,6 +161,9 @@ include(CPack)
     with tarfile.open(archive) as package_file:
         items=[m for m in package_file.getmembers() if m.name.endswith('/source-inputs.sha256')]
         assert len(items)==1 and package_file.extractfile(items[0]).read()==original; checks+=1
+    manifest.write_bytes(original.replace(b'\n', b'\r\n'))
+    assert not package('manifest-crlf','Source manifest differs from configured identity').exists(); checks+=1
+    manifest.write_bytes(original)
     input_file=source/'src/input.txt'; before=input_file.read_bytes(); input_file.write_bytes(before+b'drift\n')
     assert not package('source-drift','differs from its successful build/source stamp').exists(); checks+=1
     input_file.write_bytes(before)

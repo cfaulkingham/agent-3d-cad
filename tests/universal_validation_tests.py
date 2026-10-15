@@ -105,8 +105,12 @@ with tempfile.TemporaryDirectory(prefix='cad-universal-validation-') as director
     bundle = root / 'bundle'
     (bundle / 'bin').mkdir(parents=True); (bundle / 'lib').mkdir()
     source = bundle / 'share/agent-3d-cad/source-inputs.sha256'; source.parent.mkdir(parents=True)
-    source.write_text('0' * 64 + '  CMakeLists.txt\n' + '1' * 64 + '  VERSION\n')
+    source.write_bytes(('0' * 64 + '  CMakeLists.txt\n' + '1' * 64 + '  VERSION\n').encode('utf-8'))
     identity = {'format_version': 1, 'algorithm': 'sha256-file-list-v1', 'manifest': source.relative_to(bundle).as_posix(), 'sha256': v.sha(source)}
+    source_bytes = source.read_bytes()
+    source.write_bytes(source_bytes.replace(b'\n', b'\r\n'))
+    reject(lambda: v._source_identity(bundle, {'source_identity': {**identity, 'sha256': v.sha(source)}}), 'CRLF source manifest rejected even with a matching raw hash')
+    source.write_bytes(source_bytes)
     native = {'bin/agent-3d-cad': (image('arm64')[0], image('x64')[0]), 'lib/runtime.dylib': (image('arm64', True)[0], image('x64', True)[0])}
     originals, composition, hlrs = {}, {'format_version': 1, 'method': 'lipo', 'inputs': [], 'native_files': []}, {}
     hlr_path = 'share/agent-3d-cad/notices/occt/agentcad-hlr-midpoint-v2.json'
