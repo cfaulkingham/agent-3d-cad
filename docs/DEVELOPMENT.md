@@ -84,6 +84,17 @@ mapping. User projects still use their independently configured Documents folder
 
 ## Try a complete workflow
 
+The `skill_workflows` CTest suite executes JSON examples directly from the
+shipped native skill over real MCP. It checks analytic plate volume and hole
+positions across a parameter-range walk, workplane axes, shared nested assembly
+edits, rollback and replay, STEP round trips and a rendered four-view sheet.
+For independent validation of every request/result schema, run
+`python tests/skill_workflows_test.py build/agent-3d-cad --schema` in the MCP SDK
+test environment. The developer Python driver is not a product dependency.
+The `failure` suite verifies native capture, isolated replay, relocation,
+integrity, retention and job behavior; `jobs` additionally checks killed and
+timed-out workers. See [failure packages](FAILURE_REPLAY.md).
+
 With the MCP server connected to an MCP Apps host, create a model and call
 `cad_open` with its `document_id` and a workspace-unique `view_id`. Keep that view
 open while using `cad_apply`; it updates automatically. `cad_context` reads the
@@ -222,7 +233,8 @@ Configure a local stdio server with absolute executable and workspace paths:
 ```
 
 Baseline MCP `2025-11-25`: initialize/initialized, ping, tools/list and tools/call.
-The native catalog contains 34 tools, including searchable `cad_help`, and exposes create/read/apply/restore/import,
+The native catalog contains 35 tools, including searchable `cad_help` and isolated
+`cad_failure` replay, and exposes create/read/apply/restore/import,
 query/measurement/export/BOM/drawing/manufacturing/process review, G-code review,
 slicing/printer plans, robot handoff, external artifact review, view/preview/
 selection resolution, comparison, jobs, model discovery and live view context.

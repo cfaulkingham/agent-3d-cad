@@ -21,6 +21,11 @@ Use `cad_read` with the returned `document_id` and `revision` for complete
 editable source before inspecting or reusing it. See
 [commit receipts](COMMIT_RECEIPTS.md).
 
+Receipts also report declaration changes and conservative dependency impact.
+Read [measured authoring workflows](references/verified-workflows.md) for
+executable plate, workplane and nested-assembly examples, parameter-range
+verification and isolated failure replay.
+
 Users select geometry in the viewer and enter requests in the main chat. When
 a request refers to the selected face/edge or “this edge,” read `cad_context`
 with the retained `view_id` before choosing an edit target. Use its current

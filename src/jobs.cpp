@@ -15,6 +15,7 @@
 #include "agentcad/gif.hpp"
 #include "agentcad/artifact_review.hpp"
 #include "agentcad/cache.hpp"
+#include "agentcad/failure.hpp"
 #include <set>
 #include "agentcad/model.hpp"
 #include "agentcad/runtime.hpp"
@@ -452,7 +453,7 @@ std::unique_ptr<WorkspaceLock> wait_lock(const fs::path& path) {
 std::optional<Json> committed_result(const fs::path& workspace, const Json& state) {
   if (!mutation(state.at("tool").get<std::string>()) || !state.contains("document_id")) return {};
   auto result=Store(workspace).request_replay(state.at("document_id").get<std::string>(),
-    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());if(result)return committed_record_receipt(std::move(*result));return result;
+    state.at("request_id").get<std::string>(), state.at("fingerprint").get<std::string>());if(result)return committed_record_receipt(Store(workspace),std::move(*result));return result;
 }
 // Recovery and reporting treat an unreadable receipt as no committed result.
 std::optional<Json> committed_result_or_none(const fs::path& workspace, const Json& state) {
@@ -496,11 +497,7 @@ Json job_view(const fs::path& workspace, const fs::path& path, const JobRecord& 
       // Older durable jobs may contain the former full-record reply. Project
       // it without rewriting immutable result bytes. Legacy sketch receipts
       // obtain the missing identity from their exact historical source.
-      if(result.contains("model"))result=committed_record_receipt(std::move(result));
-      else if(!result.contains("model_sha256")) {
-        const auto historical=Store(workspace).read(text_field(result,"document_id"),revision_number(result.at("revision")));
-        result["model_sha256"]=sha256(historical.at("model").dump());
-      }
+      result=committed_record_receipt(Store(workspace),std::move(result));
     }
     view["result"]=std::move(result);
   }
@@ -604,6 +601,8 @@ void check_job_cancelled() {
   if (job_deadline && now_ms() >= job_deadline) throw Error("job_timeout", "Job exceeded its wall-time budget before publication");
 }
 Json job_request_context() { return request_context; }
+Json validate_job_budget(const Json& value) { return budget(value); }
+Json current_job_budget() { return current_budget; }
 
 // SHA-256 binds a caller's request identity to canonical JSON, independently of
 // implementation-defined std::hash values and without a runtime crypto library.
@@ -736,7 +735,7 @@ ParallelProjection project_in_parallel(const fs::path& workspace, const Json& mo
   return result;
 }
 
-Json evaluate_model(const fs::path& workspace, const Json& model, const Json& request, Json* cache_diagnostics) {
+static Json evaluate_model_impl(const fs::path& workspace, const Json& model, const Json& request, Json* cache_diagnostics) {
   check_job_cancelled();
   const auto started = std::chrono::steady_clock::now();
   directory(workspace / ".workers");
@@ -821,6 +820,16 @@ Json evaluate_model(const fs::path& workspace, const Json& model, const Json& re
     }
     return response.at("result");
   } catch (...) { child.stop(); throw; }
+}
+
+Json evaluate_model(const fs::path& workspace,const Json& model,const Json& request,Json* cache_diagnostics) {
+  try {return evaluate_model_impl(workspace,model,request,cache_diagnostics);}
+  catch(...) {throw capture_geometry_failure(workspace,model,request,current_budget,service_error(std::current_exception()));}
+}
+Json evaluate_failure_replay(const fs::path& workspace,const Json& model,const Json& request,const Json& limits) {
+  const auto previous=current_budget;current_budget=budget(limits);
+  try {auto result=evaluate_model(workspace,model,request);current_budget=previous;return result;}
+  catch(...) {current_budget=previous;throw;}
 }
 
 Json run_native_process(const fs::path& workspace,const Json& request) {
@@ -1121,9 +1130,10 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
     return view;
   }
   const auto tool = text_field(arguments, "tool");
-  if (!mutation(tool) && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_render" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
+  if (!mutation(tool) && tool != "cad_failure" && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_render" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
+  if(tool=="cad_failure" && input.value("action",Json())!="replay")throw Error("invalid_argument","Only failure replay can be submitted as a job");
   if (input.contains("request_id") && input.at("request_id") != id)
     throw Error("invalid_argument", "Nested request_id must match the job request_id");
   if (mutation(tool)) input["request_id"] = id;

@@ -154,7 +154,7 @@ void legacy_mutation_receipts() {
   // old result itself, so a replay fallback cannot mask broken projection.
   const Json create={{"document_id","part"},{"model",box()}};
   const auto created=service.call("cad_create",create);const auto source=service.call("cad_read",{{"document_id","part"},{"revision",1}}).at("model");
-  auto full=created;full.erase("model_sha256");full["model"]=source;
+  auto full=created;full.erase("model_sha256");full.erase("changes");full["model"]=source;
   const auto full_bytes=save_legacy("legacyFull","cad_create",create,full,true);
   service.call("cad_apply",{{"document_id","part"},{"expected_revision",1},{"operations",Json::array({{{"op","set_parameter"},{"name","size"},{"value",17}}})}});
   const auto part_head=read_text(temp.path/"documents/part/HEAD.json");
@@ -173,7 +173,7 @@ void legacy_mutation_receipts() {
   const auto path=temp.path/"legacy.svg";const std::string svg="<svg><rect width='2' height='3'/></svg>";atomic_text(path,svg);
   const Json capture={{"document_id","sketch"},{"expected_revision",1},{"format","svg"},{"path",path_to_utf8(path)},{"feature_id","outline"},
     {"workplane",{{"origin",{0,0,0}},{"normal",{0,0,1}},{"x_direction",{1,0,0}}}},{"request_id","legacySketch"}};
-  const auto captured=service.call("cad_import_sketch",capture);auto legacy_sketch=captured;legacy_sketch.erase("model_sha256");
+  const auto captured=service.call("cad_import_sketch",capture);auto legacy_sketch=captured;legacy_sketch.erase("model_sha256");legacy_sketch.erase("changes");
   const auto sketch_bytes=save_legacy("legacySketch","cad_import_sketch",capture,legacy_sketch,false);
   const auto historical_path=temp.path/"documents/sketch/revisions/2.json",held_path=temp.path/"held-revision.json";const auto historical_bytes=read_text(historical_path);
   fs::remove(path);
@@ -271,12 +271,16 @@ int run_tests(int argc, const char* const* argv) {
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"cancel preserves HEAD");
     require(cache_entries(temp.path)==initial_cache,"Cancelled worker publishes no cache");
     submit_heavy(temp.path,"killJob"); kill_worker(building_pid(temp.path));
-    require(finished(temp.path,"killJob").at("state")=="failed","killed worker produces durable failure");
+    const auto killed=finished(temp.path,"killJob");
+    require(killed.at("state")=="failed","killed worker produces durable failure");
+    const auto crash_report=service.call("cad_failure",{{"action","get"},{"failure_id",killed.at("error").at("details").at("failure_package").at("failure_id")}}).at("report");
+    require(crash_report.at("context").at("job").at("request_id")=="killJob"&&crash_report.at("context").at("arguments").at("operations")==heavy_operations(),"Killed worker retains a checked replay package with triggering job and operations");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"worker crash preserves HEAD");
     require(cache_entries(temp.path)==initial_cache,"Killed worker publishes no cache");
     submit_heavy(temp.path,"timeoutJob",200);
     const auto timed=finished(temp.path,"timeoutJob");
     require(timed.at("state")=="failed" && timed.at("error").at("code")=="job_timeout","wall deadline enforced");
+    require(timed.at("error").at("details").contains("failure_package"),"Timed-out native work captures diagnostic inputs after containment");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"timeout preserves HEAD");
     require(cache_entries(temp.path)==initial_cache,"Timed-out worker publishes no cache");
     submit_heavy(temp.path,"memoryJob",30000,128);  // generous deadline: the memory limit must fire first even on a slow runner
