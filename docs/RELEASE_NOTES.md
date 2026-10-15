@@ -1,4 +1,4 @@
-# Agent CAD 0.1.0-preview.2 — unreleased
+# Agent CAD 0.1.0-preview.2 — published 2026-10-15
 
 Agent CAD now ships as a native engine, local Codex / ChatGPT plugin and Claude
 Desktop extension. The standalone Tauri app, its launcher and desktop archives
@@ -10,9 +10,15 @@ Grok Build, OpenCode and other local MCP clients. Current packages default to
 Documents/Agent CAD; use an explicit workspace to reopen existing projects.
 Published preview.1 packages and their requirements remain unchanged.
 
-These are source changes for the next preview, not a newly published release.
-Validation and limitations are recorded in [HANDOFF](HANDOFF.md). Publisher
-signing/notarization and full host acceptance remain release gates.
+[Preview.2 is published](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.2)
+with 18 assets plus SHA256SUMS from successful CI source `b03fe25`. All five
+native platforms and the same universal macOS packages on both actual CPUs
+passed. All uploaded asset hashes were independently verified.
+
+Subsequent successful `main` pushes automatically publish versioned development
+previews after the same gates; see [the release process](DISTRIBUTION.md#version-and-release-process).
+Publisher signing/notarization and full host acceptance remain unfinished.
+Validation and limitations are recorded in [HANDOFF](HANDOFF.md).
 
 ---
 

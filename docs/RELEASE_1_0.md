@@ -58,8 +58,10 @@ submission, remote HTTPS endpoint or tunnel.
   and their existing notices, hashes every file, and rejects desktop bundles.
 - CI creates and tests native engine, plugin and Claude extension artifacts.
   No builds need Rust or standalone GUI dependencies.
-  Automatic draft-release creation applies only to `v0.*` preview tags.
-  A `v1.*` tag does not automatically publish a release.
+  Successful `main` pushes automatically version, tag and publish `v0.*`
+  previews after all native and universal runtime gates. Explicit matching
+  preview tags use the same publication gates. A stable/`v1.*` release is not
+  automatically published. See [the release process](DISTRIBUTION.md#version-and-release-process).
 
 For developers, after installing a verified native bundle:
 

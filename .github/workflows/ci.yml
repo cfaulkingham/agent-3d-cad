@@ -14,7 +14,35 @@ env:
   # Repository text and the native JSON protocol are UTF-8 on every platform.
   PYTHONUTF8: "1"
 jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      parent: ${{ steps.source.outputs.parent }}
+      version: ${{ steps.source.outputs.version }}
+      publish: ${{ steps.source.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Test preview source and publication contracts
+        run: python3 tests/preview_release_tests.py
+      - name: Prepare exact versioned source
+        id: source
+        run: python3 packaging/preview_release.py prepare --bundle "$RUNNER_TEMP/ci-release-source/source.bundle"
+      - uses: actions/upload-artifact@v4
+        if: steps.source.outputs.commit != github.sha
+        with:
+          name: ci-release-source
+          path: ${{ runner.temp }}/ci-release-source/source.bundle
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
+
   native:
+    needs: source
     strategy:
       fail-fast: false
       matrix:
@@ -40,6 +68,9 @@ jobs:
         shell: pwsh
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-ci-source
+        with:
+          commit: ${{ needs.source.outputs.commit }}
       - name: Validate release identity
         env:
           REF_TYPE: ${{ github.ref_type }}
@@ -278,11 +309,14 @@ jobs:
   macos-universal-compose:
     # Compose exactly once from this run's verified, source-stamped thin cores.
     # No thin core is rebuilt or selected by an end user's host application.
-    needs: native
+    needs: [source, native]
     runs-on: macos-15
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-ci-source
+        with:
+          commit: ${{ needs.source.outputs.commit }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -323,7 +357,7 @@ jobs:
           retention-days: 14
 
   macos-universal-runtime:
-    needs: macos-universal-compose
+    needs: [source, macos-universal-compose]
     strategy:
       fail-fast: false
       matrix:
@@ -336,6 +370,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-ci-source
+        with:
+          commit: ${{ needs.source.outputs.commit }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -346,7 +383,7 @@ jobs:
           path: universal-packages
       - name: Run relocated native and both plugin packages on the actual CPU
         env:
-          TEST_SOURCE_COMMIT: ${{ github.sha }}
+          TEST_SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
           TEST_NATIVE_ARCHITECTURE: ${{ matrix.architecture }}
         run: |
           python tests/universal_package_runtime.py run --packages universal-packages \
@@ -361,11 +398,14 @@ jobs:
           retention-days: 14
 
   macos-universal-acceptance:
-    needs: macos-universal-runtime
+    needs: [source, macos-universal-runtime]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-ci-source
+        with:
+          commit: ${{ needs.source.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           pattern: macos-universal-runtime-*
@@ -373,7 +413,7 @@ jobs:
           merge-multiple: true
       - name: Require same archive bytes and actual native processes on both CPUs
         env:
-          TEST_SOURCE_COMMIT: ${{ github.sha }}
+          TEST_SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
         run: |
           python3 tests/universal_package_runtime.py compare \
             universal-evidence/universal-runtime-arm64.json universal-evidence/universal-runtime-x64.json \
@@ -385,14 +425,18 @@ jobs:
           retention-days: 14
 
   release:
-    # 1.0 publication needs actual two-host acceptance, not just a green build.
-    if: startsWith(github.ref, 'refs/tags/v0.')
-    needs: [native, macos-universal-acceptance]
+    # A main push or explicit preview tag publishes only after every gate.
+    # Stable 1.0 publication still requires its separate host acceptance.
+    if: needs.source.outputs.publish == 'true'
+    needs: [source, native, macos-universal-acceptance]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/restore-ci-source
+        with:
+          commit: ${{ needs.source.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           pattern: native-preview-*
@@ -407,7 +451,11 @@ jobs:
         with:
           name: macos-universal-packages
           path: universal-release-inputs
-      - name: Prepare checksums and release notes
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-universal-acceptance
+          path: universal-acceptance
+      - name: Prepare complete release inventory and checksums
         run: |
           version=$(cat VERSION)
           # Copy only the three packages accepted on both actual macOS CPUs.
@@ -420,9 +468,12 @@ jobs:
           done
           cp install.sh install.ps1 release/
           python3 packaging/release-manifest.py release
-      - name: Create draft release after native and universal runtime gates pass
+      - name: Publish verified preview after all native and universal gates pass
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SOURCE: ${{ needs.source.outputs.commit }}
+          RELEASE_PARENT: ${{ needs.source.outputs.parent }}
         run: |
-          gh release create "$RELEASE_TAG" release/* --verify-tag --draft --prerelease --title "Agent CAD $RELEASE_TAG" --notes-file docs/RELEASE_NOTES.md
+          python3 packaging/preview_release.py publish \
+            --commit "$RELEASE_SOURCE" --parent "$RELEASE_PARENT" \
+            --directory release --acceptance universal-acceptance/universal-acceptance.json
