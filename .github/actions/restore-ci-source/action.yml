@@ -1,0 +1,28 @@
+name: Restore exact CI source
+description: Restore the versioned commit shared by every job in this run
+inputs:
+  commit:
+    description: Exact prepared source commit
+    required: true
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      if: inputs.commit != github.sha
+      with:
+        name: ci-release-source
+        path: ${{ runner.temp }}/ci-release-source
+    - name: Check out prepared commit
+      shell: pwsh
+      env:
+        CI_SOURCE_COMMIT: ${{ inputs.commit }}
+      run: |
+        if ($env:CI_SOURCE_COMMIT -notmatch '^[0-9a-f]{40}$') { throw 'Invalid CI source commit' }
+        if ((git rev-parse HEAD) -ne $env:CI_SOURCE_COMMIT) {
+          git fetch --no-tags (Join-Path $env:RUNNER_TEMP 'ci-release-source/source.bundle') HEAD
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if ((git rev-parse FETCH_HEAD) -ne $env:CI_SOURCE_COMMIT) { throw 'Source bundle commit mismatch' }
+          git checkout --detach $env:CI_SOURCE_COMMIT
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        }
+        if ((git rev-parse HEAD) -ne $env:CI_SOURCE_COMMIT) { throw 'Source checkout mismatch' }

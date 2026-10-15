@@ -110,20 +110,39 @@ The extension layout follows the
 ## Version and release process
 
 `VERSION` is the release identity (`X.Y.Z-preview.N` for previews). CMake uses it
-for the executable, MCP server and archive names.
-Use a new tag matching `VERSION` exactly; never replace a published preview tag.
+for the executable, MCP server and archive names. Every published tag matches
+the `VERSION` in its tagged source. Never replace a published preview tag.
 
 Every push runs the five native platform lanes. Each lane tests the service,
 installer/client configuration and relocated bundle, then builds a core archive
 and local Agent Plugins package. macOS arm64/x64 and Windows x64 also produce
 Claude `.mcpb` packages. No lane builds a standalone application.
-A `v0.*` preview tag creates a **draft prerelease** only after native lanes and
-macOS universal runtime acceptance pass. The release job rejects missing or extra
-assets before creating `SHA256SUMS`: five native archives, five plugin ZIPs,
-three Claude extensions, three macOS universal packages and two installers.
-Review the draft, platform evidence and signing before publishing. Stable release
-publication is not automated by the preview workflow. No tag or release is
-created merely by editing these files or running local builds.
+
+A successful push/merge to `main` now **automatically tags and publishes a
+prerelease** while the source version is a `0.*-preview.N`. CI derives the preview
+number from its workflow run number; branch/PR runs consume numbers too, so gaps
+are expected. For example, run 123 builds `0.1.0-preview.123`. The source job
+creates a reproducible child commit that changes only `VERSION`, and every build
+and acceptance job restores that exact commit from one Git bundle. The release
+tag points to that tested commit; `main` itself is not advanced by a bot version
+commit. Rerunning the same CI run produces the same version and source identity.
+
+Publication waits for all five native lanes and same-artifact macOS universal
+runtime acceptance on both actual CPUs. The release job checks the accepted
+universal hashes and rejects missing or extra assets before `SHA256SUMS`: five
+native archives, five plugin ZIPs, three Claude extensions, three macOS universal
+packages and two installers. It uploads into a temporary draft, verifies all
+19 GitHub asset digests, then publishes automatically as a prerelease.
+Interrupted uploads can resume; existing tags and uploaded bytes cannot be
+replaced. A completed matching release makes a rerun a verification-only step.
+
+Explicit matching `v0.*-preview.N` tag pushes also publish after the same gates.
+PRs, other branches and manual workflow runs test/package without publishing.
+Stable/1.0 releases are never automatically published by this preview workflow.
+Automatic tags use the workflow's `GITHUB_TOKEN`, whose pushes
+[do not recursively trigger another workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow).
+Unsigned previews remain development releases with the host/signing limitations
+described in their release notes.
 
 ## Install, use and uninstall
 
@@ -219,7 +238,7 @@ acceptance of the SPDX licence expression in plugin/extension metadata is
 part of the still-open host-validation gate; it does not change the installed
 notice tree, which remains authoritative.
 CI uploads preview archives and test evidence as workflow artifacts with a
-14-day retention. Version tags additionally prepare the draft release described
+14-day retention. Main pushes and version tags publish the preview release described
 above. The first public prerelease is
 [`v0.1.0-preview.1`](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.1);
 it remains unsigned/unnotarized, with actual host-validation limits recorded in

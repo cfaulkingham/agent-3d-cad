@@ -7,6 +7,40 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Automatic main preview releases and preview.2 publication — 2026-10-15
+
+Published [v0.1.0-preview.2](https://github.com/cfaulkingham/agent-3d-cad/releases/tag/v0.1.0-preview.2)
+from successful CI source `b03fe25ed5916b2dbf38e1231a2f1a2a3be16ac6`.
+Its 16 packages are unchanged artifacts from run `38780974213`, with both
+installers from the same source and SHA256SUMS. All **19 public release asset
+digests** match the independently verified local files; package preparation also
+checked **6,919 packaged-file hashes**, CPU identities, source identities and
+the same universal bytes accepted on actual ARM/Intel runners. The draft is
+published and its version tag points to that tested commit. The redundant old
+tag-triggered rebuild was cancelled; the original successful evidence remains.
+
+Successful pushes/merges to `main` now prepare a unique `0.*-preview.N` using
+the workflow run number (gaps are expected). A reproducible child commit changes
+only VERSION, and all five native lanes plus universal composition/runtime/
+acceptance use that exact commit from a shared Git bundle. Only after those
+gates pass does the release job push its immutable tag, upload all 18 assets
+plus checksums into a draft, verify GitHub's asset hashes and publish automatically.
+Main is not advanced by a bot version commit. Matching explicit preview tags
+use the same gates; PRs, other branches, manual runs and stable versions do not
+automatically publish. Existing source tags/assets cannot be replaced; interrupted
+draft uploads resume, and an already published exact match is only verified.
+
+Local validation: **16 new offline release tests** exercise real isolated Git
+repositories, shallow producer/consumer checkouts, deterministic reruns, distinct
+run versions, publication scope, missing/changed assets, partial-upload recovery,
+wrong existing tags and published-release immutability. Existing release inventory
+tests passed **7/7**, universal evidence contract tests **13/13**, and actionlint
+**1.7.12** plus `git diff --check` passed. The actual authenticated release
+lookup and asset validator independently rechecked all 19 public preview.2 files.
+No native geometry code changed or native rebuild was claimed. The new automated
+main pipeline still needs its first complete remote run; signing/notarization and
+full host acceptance remain separate unfinished gates.
+
 ## Windows CPack fixture sequencing repair — 2026-10-15
 
 Windows job `116552586678` in PR run `38772766924` at `abc1de3` passed all **91

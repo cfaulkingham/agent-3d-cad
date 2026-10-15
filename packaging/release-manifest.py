@@ -1,6 +1,6 @@
 """Require the complete preview and verified universal asset set before checksums.
 
-This prepares files for a future draft release; it does not publish anything or
+This prepares the exact preview release inventory; it does not publish anything or
 establish native runtime, publisher signing, or host acceptance.
 """
 import hashlib
