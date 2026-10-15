@@ -92,7 +92,9 @@ For independent validation of every request/result schema, run
 `python tests/skill_workflows_test.py build/agent-3d-cad --schema` in the MCP SDK
 test environment. The developer Python driver is not a product dependency.
 The `failure` suite verifies native capture, isolated replay, relocation,
-integrity, retention and job behavior; `jobs` additionally checks killed and
+integrity, retention and job behavior. `failure_minimize` checks real graph reduction,
+exact failure matching, cold replay, bounds, cancellation, durable retry and parent
+preservation. `jobs` additionally checks killed and
 timed-out workers. See [failure packages](FAILURE_REPLAY.md).
 
 With the MCP server connected to an MCP Apps host, create a model and call
@@ -423,3 +425,21 @@ native CLI from an isolated temporary workspace. Independent ZIP/XML, triangle
 adjacency, signed-volume, bed-margin and spacing checks cover 3MF, layout replay,
 subset import and periodic-face rendering/STL export. Python is a development
 test driver only; the installed exporter and inspector are C++.
+
+
+## Systematic edit matrix
+
+`ctest --test-dir build -R '^action_matrix_' --output-on-failure` runs the
+baseline-comparison harness and a deterministic sample through the real native
+Service/MCP. Run the complete corpus with:
+
+```sh
+python3 tests/action_matrix.py build/agent-3d-cad --full --results build/action-matrix-full.json
+```
+
+The matrix covers per-edge fillets/chamfers, planar-face shells/holes/projections,
+and body transforms/mirrors/patterns. Every successful action gets a dimension
+walk, independent scaling checks and historical/rollback checks. See the
+repository's `docs/ACTION_MATRIX.md` for coverage, known refusals, retained
+reproducers and the explicit full-run baseline-update procedure. Developer
+Python is not shipped or required by the native product.

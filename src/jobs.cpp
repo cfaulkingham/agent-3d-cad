@@ -1133,7 +1133,7 @@ Json dispatch_job(const fs::path& workspace, const Json& arguments) {
   if (!mutation(tool) && tool != "cad_failure" && tool != "cad_capture_sketch" && tool != "cad_inspect_step" && tool != "cad_artifact" && tool != "cad_query" && tool != "cad_measure" && tool != "cad_export" && tool != "cad_manufacture" && tool != "cad_fabrication_review" && tool != "cad_gcode_review" && tool != "cad_printer_handoff" && tool != "cad_slice" && tool != "cad_robot_export" && tool != "cad_drawing" && tool != "cad_render" && tool != "cad_bom" && tool != "cad_preview" && tool != "cad_view")
     throw Error("invalid_argument", "This tool cannot be submitted as a geometry job");
   auto input = arguments.at("arguments"); if (!input.is_object()) throw Error("invalid_argument", "Job arguments must be an object");
-  if(tool=="cad_failure" && input.value("action",Json())!="replay")throw Error("invalid_argument","Only failure replay can be submitted as a job");
+  if(tool=="cad_failure" && input.value("action",Json())!="replay" && input.value("action",Json())!="minimize")throw Error("invalid_argument","Only failure replay or minimization can be submitted as a job");
   if (input.contains("request_id") && input.at("request_id") != id)
     throw Error("invalid_argument", "Nested request_id must match the job request_id");
   if (mutation(tool)) input["request_id"] = id;

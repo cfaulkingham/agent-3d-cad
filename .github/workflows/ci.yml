@@ -1,5 +1,13 @@
 name: Native CAD contracts and bundles
-on: [push, pull_request, workflow_dispatch]
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_action_matrix:
+        description: Run the complete geometry edit matrix in addition to the CTest sample
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -151,6 +159,16 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/robot_export_test.py $exe
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Complete action matrix (manual opt-in)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_action_matrix
+        run: |
+          $exe = Join-Path $PWD 'build/agent-3d-cad'
+          if ($IsWindows) {
+            $exe = Join-Path $PWD 'build/Release/agent-3d-cad.exe'
+            $env:PATH = "$(Join-Path $PWD '.deps/native/bin');$env:PATH"
+          }
+          python tests/action_matrix.py $exe --full --results build/action-matrix-full.json
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Installer and client configuration checks
         run: |
           $exe = Join-Path $PWD 'build/agent-3d-cad'
@@ -273,6 +291,8 @@ jobs:
           path: |
             build/Testing/Temporary/LastTest.log
             build/geometry-evidence/**
+            build/action-matrix-*.json
+            build/action-matrix-*-failures/**
             build-deps/**/CMakeConfigureLog.yaml
 
   macos-universal-compose:

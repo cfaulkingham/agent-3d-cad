@@ -64,6 +64,8 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     without_changes.pop("changes")
     assert not Draft202012Validator(tools["cad_create"]["outputSchema"]).is_valid(without_changes)
     failed_model = json.loads(json.dumps(model))
+    failed_model["features"].insert(0, {"id": "irrelevant", "type": "box", "size": [1, 2, 3]})
+    failed_model["parameters"]["unused"] = 5
     failed_model["features"].append({"id": "bad_round", "type": "fillet", "input": "base", "edges": "all", "radius": 100})
     failed_model["output"] = "bad_round"
     failure_args = {"document_id": "schema_failure", "model": failed_model}
@@ -80,6 +82,20 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     call("cad_failure", dict(portable, action="get"))
     replay = call("cad_failure", dict(portable, action="replay", budget={"timeout_ms": 5000}))
     assert replay["outcome"] == "reproduced"
+    reduced = call("cad_failure", dict(portable, action="minimize", max_attempts=64, budget={"timeout_ms": 10000}))
+    assert reduced["outcome"] == "reduced" and reduced["after"]["features"] == 2
+    assert call("cad_failure", {"action": "replay", "failure_id": reduced["minimized_package"]["failure_id"]})["outcome"] == "reproduced"
+    minimal = call("cad_failure", {"action": "minimize", "failure_id": reduced["minimized_package"]["failure_id"]})
+    assert minimal["outcome"] == "unchanged"
+    reduction_args = {"action": "minimize", "failure_id": failure_id, "max_attempts": 1}
+    reduction_job = call("cad_job", {"action": "submit", "request_id": "schema_minimize", "tool": "cad_failure", "arguments": reduction_args})
+    for _ in range(500):
+        reduction_job = call("cad_job", {"action": "get", "job_id": reduction_job["job_id"]})
+        if reduction_job["state"] not in {"queued", "running", "cancelling"}:
+            break
+        time.sleep(.01)
+    assert reduction_job["state"] == "succeeded" and reduction_job["result"]["stop_reason"] == "attempt_limit"
+    checks += 5
     replay_args = {"action": "replay", "failure_id": failure_id}
     replay_job = call("cad_job", {"action": "submit", "request_id": "schema_replay", "tool": "cad_failure", "arguments": replay_args})
     for _ in range(500):
@@ -91,7 +107,11 @@ with tempfile.TemporaryDirectory(prefix="cad-schemas-") as workspace:
     for bad in [{"action": "replay"}, {"action": "get", "failure_id": failure_id, "budget": {}},
                 {"action": "replay", "failure_id": failure_id, **portable},
                 {"action": "replay", "failure_id": "../escape"},
-                {"action": "list", "limit": 0}]:
+                {"action": "list", "limit": 0},
+                {"action": "minimize", "failure_id": failure_id, "max_attempts": 0},
+                {"action": "minimize", "failure_id": failure_id, "max_attempts": 513},
+                {"action": "minimize", "failure_id": failure_id, "max_attempts": 1.5},
+                {"action": "replay", "failure_id": failure_id, "max_attempts": 1}]:
         assert not Draft202012Validator(tools["cad_failure"]["inputSchema"]).is_valid(bad)
         checks += 1
     assert not Draft202012Validator(tools["cad_job"]["inputSchema"]).is_valid(
