@@ -7,6 +7,41 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Main merge and local installation — 2026-10-14
+
+The action-matrix/minimizer implementation was committed as `c712629`, merged
+into `main` as `97dfe49`, and pushed. A subsequent independent licensing commit
+`2eb149a7793bfc9dc57eabfe2105ca6bce4afe53` was also present on `origin/main`;
+the installed package was rebuilt from an isolated, exact archive of that newer
+commit, so it includes both changes.
+
+The Release build and all six focused CTest suites passed in **12.73 seconds**:
+notices, failure minimization, failure replay, help, action-matrix harness and
+executable skills. Packaging-provenance rejection tests, relocated `bundle-check`,
+the packaged-plugin smoke test and **436 packaged documentation links** passed.
+The installed binary passed **166 executable skill/schema checks** with an empty
+`PATH`. A fresh isolated app runtime accepted the plugin metadata, loaded all
+six skills and **35 tools**, and preserved every native input/output schema,
+including `cad_failure(action: "minimize")`. This is additional installation
+evidence; the complete matrix and broad test results remain recorded below.
+
+Installed source: `~/Applications/Agent3DCAD/agent-cad-action-matrix-2eb149a`.
+The plugin cache and source passed the **465-file** integrity inventory.
+The previous cache is retained at
+`~/.codex/plugins/cache-backups/agent-cad-before-action-matrix-2eb149a`.
+The existing `~/Documents/Agent3DCAD` workspace and unrelated host settings were
+preserved; all **31 saved document revisions** match the pre-install list.
+
+**Current-chat reload remains unverified and pending.** The supported running
+app-server proxy timed out during initialization, before any reload request was
+sent, and this chat's live help still lacks minimization. The fresh-runtime
+check is not evidence that this chat reconnected. Restart the app to activate
+the installed service, then verify live minimizer help. The host's Computer Use
+restriction prevented an automated UI refresh. Evidence, exact build identity,
+install receipts, runtime schema comparisons and reload diagnostics are in
+`.local/evidence/action-matrix-install/`. No new platform or release-readiness
+claim is made.
+
 ## Action matrix and native failure minimization — 2026-10-14
 
 The developer action matrix runs through real stdio MCP and durable native jobs.
