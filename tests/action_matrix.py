@@ -83,7 +83,52 @@ def entity_key(entity):
     return digest(rounded(data))[:20]
 
 
-def cases_for(topology, mesh=None):
+def planar_interior_point(face, mesh):
+    """Choose a fixed grid point inside the face, independent of triangulation.
+
+    The grid comes from exact face bounds, rounded within the topology identity
+    tolerance. Triangles only check occupancy, including holes/concave trims;
+    their vertices and diagonals never define the executed hole position.
+    """
+    normal = [round(v, 7) + 0.0 for v in face['normal']]
+    center = [round(v, 5) + 0.0 for v in face['center_mm']]
+    drop = max(range(3), key=lambda i: abs(normal[i]))
+    axes = [i for i in range(3) if i != drop]
+    low = [round(face['bounds_mm']['min'][i], 5) for i in axes]
+    high = [round(face['bounds_mm']['max'][i], 5) for i in axes]
+    triangles = [[tuple(mesh['positions'][v][i] for i in axes) for v in tri]
+                 for tri, owner in zip(mesh['triangles'], mesh['triangle_faces']) if owner == face['id']]
+
+    def cross(a, b, p):
+        return (b[0]-a[0])*(p[1]-a[1]) - (b[1]-a[1])*(p[0]-a[0])
+
+    def inside(p):
+        for a, b, c in triangles:
+            if abs(cross(a, b, c)) <= 1e-12:
+                continue
+            signs = (cross(a, b, p), cross(b, c, p), cross(c, a, p))
+            if min(signs) >= -1e-9 or max(signs) <= 1e-9:
+                return True
+        return False
+
+    # Prefer the middle, then a fixed order of alternatives. Check clearance
+    # beyond the .4mm drill radius, so tessellation noise at trims cannot choose
+    # a different point. Exact-solid subtraction and scaling are still tested.
+    grid = sorted(((i, j) for i in range(1, 10) for j in range(1, 10)),
+                  key=lambda p: ((p[0]-5)**2 + (p[1]-5)**2, p))
+    clearance = [(0, 0)] + [(.5*math.cos(i*math.pi/4), .5*math.sin(i*math.pi/4)) for i in range(8)]
+    for cell in grid:
+        p = [round(lo + (hi-lo)*n/10, 5) for lo, hi, n in zip(low, high, cell)]
+        if all(inside((p[0]+dx, p[1]+dy)) for dx, dy in clearance):
+            result = list(center)
+            for axis, value in zip(axes, p):
+                result[axis] = value
+            result[drop] = round(center[drop] - sum(normal[i]*(result[i]-center[i]) for i in axes)/normal[drop], 5)
+            return result
+    raise AssertionError('No interior drill point with clearance for face ' + entity_key(face))
+
+
+def cases_for(topology, mesh):
     cases = []
     def add(action, entity, features, invariant):
         key = action + '/' + (entity_key(entity) if entity else 'body')
@@ -113,20 +158,7 @@ def cases_for(topology, mesh=None):
             'thickness': scaled(-.3), 'faces': rule, 'join': 'intersection'}], 'removed')
         normal = face['normal']
         center = face['center_mm']
-        # A face centroid can lie in a hole or outside an L-shaped face. Use
-        # an interior tessellation triangle from this same evaluation for the
-        # drill position; the authoritative result remains an exact solid.
-        inside = center
-        if mesh:
-            triangles = [mesh['triangles'][i] for i, owner in enumerate(mesh['triangle_faces']) if owner == face['id']]
-            def area2(tri):
-                a, b, c = [mesh['positions'][i] for i in tri]
-                u, v = [x-y for x,y in zip(b,a)], [x-y for x,y in zip(c,a)]
-                cross = [u[1]*v[2]-u[2]*v[1], u[2]*v[0]-u[0]*v[2], u[0]*v[1]-u[1]*v[0]]
-                return sum(x*x for x in cross)
-            tri = min(triangles, key=lambda tri: (-round(area2(tri), 5),
-                tuple(round(sum(mesh['positions'][i][axis] for i in tri)/3, 5) for axis in range(3))))
-            inside = [sum(mesh['positions'][i][axis] for i in tri)/3 for axis in range(3)]
+        inside = planar_interior_point(face, mesh)
         origin = [p + n * .1 for p, n in zip(inside, normal)]
         add('face.hole', face, [{'id': 'action', 'type': 'hole', 'input': 'body',
             'origin': point(origin), 'axis': [-n for n in normal],
@@ -147,10 +179,10 @@ class Native:
         self.exe, self.workspace = exe, str(workspace)
         self.sequence = 0
         self.active_job = None
-        self.stderr = tempfile.TemporaryFile(mode='w+t')
+        self.stderr = tempfile.TemporaryFile(mode='w+t', encoding='utf-8')
         try:
             self.process = subprocess.Popen([exe, 'serve', '--workspace', self.workspace],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True)
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, encoding='utf-8')
         except OSError:
             self.stderr.close()
             raise
@@ -365,6 +397,9 @@ def baseline_errors(baseline, corpus_hash, inventory, results, case_hashes=None)
         errors.append('Corpus/version changed: run the complete matrix and explicitly record a new baseline')
     if case_hashes is not None and baseline.get('case_hashes') != case_hashes:
         errors.append('Action definitions changed: full baseline review required')
+        changed = sorted(k for k in set(baseline.get('case_hashes', {})) | set(case_hashes)
+                         if baseline.get('case_hashes', {}).get(k) != case_hashes.get(k))
+        errors.append('Changed definitions: ' + ', '.join(changed))
     old = baseline.get('cases', {})
     if set(old) != set(inventory):
         errors.append('Case inventory changed (including missing selectors/entities); full baseline review required')

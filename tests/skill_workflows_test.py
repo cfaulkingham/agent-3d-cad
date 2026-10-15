@@ -16,7 +16,7 @@ import tempfile
 exe = str(Path(sys.argv[1]).resolve())
 repo = Path(__file__).resolve().parents[1]
 skill_root = repo / 'skills'
-guide = (skill_root / 'native-cad/references/verified-workflows.md').read_text()
+guide = (skill_root / 'native-cad/references/verified-workflows.md').read_text(encoding='utf-8')
 examples = {name: json.loads(raw) for name, raw in re.findall(
     r'<!-- cad-example: ([a-z-]+) -->\s*```json\s*(.*?)\s*```', guide, re.S)}
 checks = 0
@@ -36,7 +36,7 @@ def near(actual, expected, label):
 require(set(examples) == {'plate', 'plate-edit', 'plane', 'assembly', 'assembly-move'}, 'All shipped workflow examples are discovered')
 with tempfile.TemporaryDirectory(prefix='cad-skill-mcp-') as directory:
     process = subprocess.Popen([exe, 'serve', '--workspace', directory], stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
     sequence = 0
 
     def rpc(method, params, notification=False):
@@ -82,7 +82,7 @@ with tempfile.TemporaryDirectory(prefix='cad-skill-mcp-') as directory:
         # not a second maintained list of tool names.
         named = set(re.findall(r'\bcad_[a-z_]+\b', initialized['instructions']))
         for path in skill_root.rglob('*.md'):
-            named.update(re.findall(r'\bcad_[a-z_]+\b', path.read_text()))
+            named.update(re.findall(r'\bcad_[a-z_]+\b', path.read_text(encoding='utf-8')))
         require(len(named) >= 25 and named <= tools.keys(), f'Skill/instructions name unknown tools: {named - tools.keys()}')
 
         created = example('plate')

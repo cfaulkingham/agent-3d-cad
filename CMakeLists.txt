@@ -143,7 +143,9 @@ if(BUILD_TESTING)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
     add_test(NAME action_matrix_sample COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/action_matrix.py" "$<TARGET_FILE:agent-3d-cad>" --results "${CMAKE_CURRENT_BINARY_DIR}/action-matrix-sample.json")
-    set_tests_properties(action_matrix_sample PROPERTIES TIMEOUT 240)
+    # 69 isolated actions each replay three dimension edits; Intel macOS CI
+    # needs about 6 minutes. Individual geometry jobs retain their 10s limit.
+    set_tests_properties(action_matrix_sample PROPERTIES TIMEOUT 600)
     add_test(NAME action_matrix_harness COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/action_matrix_tests.py")
     set_tests_properties(action_matrix_harness PROPERTIES TIMEOUT 30)
     add_test(NAME skill_workflows COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/skill_workflows_test.py" "$<TARGET_FILE:agent-3d-cad>")

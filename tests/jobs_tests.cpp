@@ -277,7 +277,10 @@ int run_tests(int argc, const char* const* argv) {
     require(crash_report.at("context").at("job").at("request_id")=="killJob"&&crash_report.at("context").at("arguments").at("operations")==heavy_operations(),"Killed worker retains a checked replay package with triggering job and operations");
     require(service.call("cad_read",{{"document_id","part"}}).at("revision")==1,"worker crash preserves HEAD");
     require(cache_entries(temp.path)==initial_cache,"Killed worker publishes no cache");
-    submit_heavy(temp.path,"timeoutJob",200);
+    // The wall budget includes coordinator startup. Allow it to enter the
+    // geometry worker even on slower CI hosts before testing failure capture.
+    submit_heavy(temp.path,"timeoutJob",5000);
+    building_pid(temp.path);
     const auto timed=finished(temp.path,"timeoutJob");
     require(timed.at("state")=="failed" && timed.at("error").at("code")=="job_timeout","wall deadline enforced");
     require(timed.at("error").at("details").contains("failure_package"),"Timed-out native work captures diagnostic inputs after containment");

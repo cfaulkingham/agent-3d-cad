@@ -45,6 +45,12 @@ def check(condition, message):
     checks += 1
 
 
+def check_discovery_budget(catalog):
+    # Keep the native 15 KiB/tool limit, including the tools/list wrapper.
+    size = len(json.dumps(catalog, separators=(',', ':'), ensure_ascii=False).encode('utf-8'))
+    check(size < len(catalog['tools']) * 15 * 1024, 'Discovery exceeds 15 KiB per tool')
+
+
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
@@ -296,7 +302,7 @@ def exercise(root, kind, base, architecture, provenance, archive):
              'features': [{'id': 'base', 'type': 'box', 'size': [20, 30, {'parameter': 'height'}]}], 'output': 'base'}
     with Session(root, kind, workspace, architecture, evidence['services']) as session:
         catalog = session.request('tools/list', {})
-        check(len(json.dumps(catalog, separators=(',', ':')).encode()) <= 476160, 'Discovery budget')
+        check_discovery_budget(catalog)
         resource = session.request('resources/read', {'uri': 'ui://agent-3d-cad/viewer.html'})['contents'][0]
         check(hashlib.sha256(resource['text'].encode()).hexdigest() == provenance['viewer_app_sha256'], 'Viewer bytes differ from provenance')
         created = session.call('cad_create', {'document_id': 'part', 'model': model})

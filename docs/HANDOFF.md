@@ -7,6 +7,64 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Cross-platform CI repair — 2026-10-15
+
+Investigated all five failed native jobs in run `38667435713` and confirmed the
+same missing-script failure in the subsequent standalone-removal run
+`38746885369`. These failures predate the standalone removal:
+
+- The workflow invoked `schema_output_encoding_tests.py`, but neither that file
+  nor its related production optimization was merged. Removed the orphan hook
+  from `d40b188`; the existing schema conformance, official SDK, model-family and
+  artifact checks remain. The unfinished experiment is recorded below under
+  "Main integration verification — 2026-10-11".
+- Windows decoded the skill Markdown as CP1252. Skill examples and their MCP
+  stream now explicitly use UTF-8; CI sets `PYTHONUTF8=1` for all Python tools.
+  Python 3.13 setup precedes CMake and passes its executable explicitly, so CTest
+  and the later SDK steps use the same interpreter instead of the runner default.
+- The job-timeout test's 200ms budget could expire before geometry started, when
+  no geometry failure package is expected. It now allows 5 seconds and observes
+  the native build phase before checking timeout, diagnostic capture, unchanged
+  HEAD and absent cache publication.
+- The screenshot expiry test could miss its 40ms request on Windows. It now
+  observes admission, expires the persisted request under the document/view
+  locks, and verifies sync cleanup plus the waiter's typed timeout. The separate
+  real 40ms timeout remains covered. Successful capture scenarios allow 10
+  seconds for durable I/O.
+- The action matrix picked hole origins from triangle centroids. Different
+  valid tessellations on x64 changed three Linux/four Windows request hashes.
+  Origins now come from a fixed grid in exact planar-face bounds; triangles
+  check occupancy/clearance only. New harness cases cover retriangulation,
+  winding, numerical noise, concave faces, holes and missing coverage. Full
+  geometry and dimension-walk checks remain. The enclosing CTest allows 600
+  seconds for slower Intel macOS hosts; individual geometry jobs keep their
+  10-second limit.
+- Running the previously blocked schema stage exposed stale curve-receipt
+  assertions: the test now requires and verifies the documented `changes` field
+  for creation and edits. Its discovery limit and the universal-package harness
+  still used the old 31-tool total. Both now enforce the existing native **15
+  KiB/tool** rule for the current 35-tool catalog, including wrapper/UTF-8 bytes.
+  Boundary and multibyte fixtures verify that oversized catalogs still fail.
+
+Local validation: warning-free Release rebuild; **91/91 CTests in 424.52s** and
+the separately run **action-matrix sample in 87.05s** (all 92 suites passed).
+The full **243-case matrix** retained exactly the same outcomes: **217 successful
+actions and dimension walks**, **26 known refusals**, no regressions or lost
+coverage. Reviewed and updated only the 28 hole definition hashes plus the
+baseline note; `baseline-review.json` records the unchanged outcomes and checks
+the full report against the new baseline. The 15 harness tests, 3 SDK-deadline
+tests, 9 schema-validator tests and **13 universal-runtime contract tests** passed.
+Workflow YAML, five lanes, interpreter setup order and all 37 referenced CI
+scripts (including Git tracking) were verified. All **14 integration scripts**
+passed, including **923 core schema checks across 35 tools**, **1,784 official
+MCP SDK checks**, all nine modeling-family suites (**155 curve-completion
+checks** after repair), **466 artifact SDK checks**, **221 artifact schema
+checks** and **2,105 robot-export checks**. The real native discovery catalog is
+**529,815 UTF-8 bytes**, below its unchanged **537,600-byte / 35-tool** allowance.
+Logs, downloaded CI artifacts and the failure summary are in
+`.local/evidence/ci-repair-20261015/`. Current-source remote CI still requires a
+new run; local results do not establish Windows/Linux/Intel macOS success.
+
 ## Local-only Codex installation guidance — 2026-10-15
 
 At the user's request, Codex / ChatGPT setup now explicitly uses an extracted

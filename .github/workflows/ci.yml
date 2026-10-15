@@ -10,6 +10,9 @@ on:
         default: false
 permissions:
   contents: read
+env:
+  # Repository text and the native JSON protocol are UTF-8 on every platform.
+  PYTHONUTF8: "1"
 jobs:
   native:
     strategy:
@@ -89,10 +92,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - name: Configure service
         run: |
           $prefix = Join-Path $PWD '.deps/native'
-          $options = @('-DCMAKE_BUILD_TYPE=Release', "-DOpenCASCADE_DIR=$prefix/lib/cmake/opencascade", "-DCMAKE_PREFIX_PATH=$prefix")
+          $python = (Get-Command python).Source
+          $options = @('-DCMAKE_BUILD_TYPE=Release', "-DOpenCASCADE_DIR=$prefix/lib/cmake/opencascade", "-DCMAKE_PREFIX_PATH=$prefix", "-DPython3_EXECUTABLE=$python")
           if ($IsLinux) {
             $notices = Join-Path $PWD '.deps/runtime-notices'
             $options += "-DAGENTCAD_EXTRA_NOTICE_FILES=$notices/GCC-runtime-copyright;$notices/GPL-3;$notices/Fontconfig-copyright;$notices/Expat-copyright;$notices/Linux-runtime-packages.txt"
@@ -107,9 +114,6 @@ jobs:
           $env:AGENTCAD_GEOMETRY_EVIDENCE_DIR = Join-Path $PWD 'build/geometry-evidence'
           ctest --test-dir build -C Release --output-on-failure
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
       - name: Validate schemas and official MCP SDK interoperability (developer tests only)
         run: |
           python -m pip install -r tests/mcp_sdk_requirements.txt
@@ -127,8 +131,6 @@ jobs:
           }
           $fixture = Join-Path (Split-Path $exe) 'cad_slicer_fixture'
           if ($IsWindows) { $fixture += '.exe' }
-          python tests/schema_output_encoding_tests.py $exe
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/schema_conformance.py $exe $fixture
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/mcp_sdk_smoke.py $exe $fixture

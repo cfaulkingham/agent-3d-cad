@@ -30,11 +30,13 @@ and edge edits must have the expected material effect. Rejected actions and
 parameter edits must preserve HEAD. Historical source and an explicit rejected
 negative-scale transaction are checked after successful actions.
 
-Drill positions come from interior triangles of the selected planar face in the
-same qualified mesh/topology evaluation; a face centroid may lie in a hole or
-outside an L-shaped boundary. Geometry creation and measurements remain native
-exact B-rep operations. This initial matrix does not cover arbitrary independent
-dimension changes, all feature types, all topology changes or manufacturability.
+Drill positions come from a fixed grid in the selected planar face's exact bounds.
+The same qualified mesh/topology evaluation checks interior occupancy and drill
+clearance, including holes and L-shaped boundaries. Changing triangle diagonals
+or vertex order cannot change the grid coordinates. Geometry creation and
+measurements remain native exact B-rep operations. This initial matrix does not
+cover arbitrary independent dimension changes, all feature types, all topology
+changes or manufacturability.
 
 ## Run and review
 

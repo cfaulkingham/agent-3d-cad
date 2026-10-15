@@ -4,6 +4,39 @@ import unittest
 import action_matrix as matrix
 
 
+class InteriorPointTests(unittest.TestCase):
+    def setUp(self):
+        self.face = {'id': 'face-1', 'normal': [0, 0, 1], 'center_mm': [5, 5, 0],
+                     'bounds_mm': {'min': [0, 0, 0], 'max': [10, 10, 0]}}
+
+    def point(self, positions, triangles):
+        return matrix.planar_interior_point(self.face, {'positions': positions, 'triangles': triangles,
+                                                      'triangle_faces': ['face-1'] * len(triangles)})
+
+    def test_retriangulation_winding_and_roundoff_do_not_move_hole(self):
+        positions = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]]
+        self.assertEqual(self.point(positions, [[0, 1, 2], [0, 2, 3]]), [5, 5, 0])
+        self.assertEqual(self.point(positions, [[3, 2, 1], [3, 1, 0]]), [5, 5, 0])
+        positions = [[x+1e-10, y-1e-10, z] for x, y, z in positions] + [[5, 5, 0]]
+        self.assertEqual(self.point(positions, [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]]), [5, 5, 0])
+
+    def test_concave_face_avoids_centroid_outside_trim(self):
+        positions = [[0, 0, 0], [10, 0, 0], [10, 2, 0], [2, 2, 0], [2, 10, 0], [0, 10, 0]]
+        p = self.point(positions, [[0, 1, 3], [1, 2, 3], [0, 3, 5], [3, 4, 5]])
+        self.assertTrue(.5 < p[0] < 1.5 or .5 < p[1] < 1.5, p)
+
+    def test_hole_is_not_treated_as_filled_face(self):
+        positions = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],
+                     [3, 3, 0], [7, 3, 0], [7, 7, 0], [3, 7, 0]]
+        p = self.point(positions, [[0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
+                                  [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]])
+        self.assertTrue(p[0] < 2.5 or p[0] > 7.5 or p[1] < 2.5 or p[1] > 7.5, p)
+
+    def test_missing_face_coverage_fails_closed(self):
+        with self.assertRaisesRegex(AssertionError, 'No interior drill point'):
+            self.point([], [])
+
+
 class RatchetTests(unittest.TestCase):
     def setUp(self):
         self.baseline = {'version': matrix.VERSION, 'corpus_sha256': 'corpus', 'cases': {

@@ -15,6 +15,25 @@ import zipfile
 import universal_package_runtime as runtime
 
 
+class DiscoveryBudgetTests(unittest.TestCase):
+    def catalog(self, count, size):
+        value = {'tools': [{'name': f'tool_{i}', 'description': ''} for i in range(count)]}
+        overhead = len(json.dumps(value, separators=(',', ':')).encode('utf-8'))
+        value['tools'][0]['description'] = 'x' * (size-overhead)
+        return value
+
+    def test_budget_follows_tool_count_and_rejects_boundary(self):
+        for count in (31, 35):
+            with self.subTest(count=count):
+                runtime.check_discovery_budget(self.catalog(count, count*15*1024-1))
+                with self.assertRaisesRegex(AssertionError, '15 KiB per tool'):
+                    runtime.check_discovery_budget(self.catalog(count, count*15*1024))
+
+    def test_budget_counts_utf8_bytes_instead_of_characters(self):
+        with self.assertRaisesRegex(AssertionError, '15 KiB per tool'):
+            runtime.check_discovery_budget({'tools': [{'name': 'tool', 'description': '雪'*8000}]})
+
+
 class EvidenceGateTests(unittest.TestCase):
     def reports(self):
         result = []

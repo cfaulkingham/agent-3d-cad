@@ -48,7 +48,11 @@ fixtures=dict(line=line_model,arc=arc_model,hull=hull_model,invert=round_model)
 with tempfile.TemporaryDirectory(prefix="cad-curve-completion-schema-") as temp:
     for name,document in fixtures.items():
         receipt=run("cad_create",dict(document_id=name,model=document),temp)
-        assert set(receipt)=={"schema_version","document_id","revision","kernel_version","model_sha256","summary"};checks+=1
+        assert set(receipt)=={"schema_version","document_id","revision","kernel_version","model_sha256","summary","changes"};checks+=1
+        created_ids=sorted(feature["id"] for feature in document["features"])
+        assert receipt["changes"]["base_revision"] is None;checks+=1
+        assert receipt["changes"]["features"]==dict(created=created_ids,modified=[],removed=[]);checks+=1
+        assert receipt["changes"]["affected_features"]==created_ids;checks+=1
         saved=run("cad_read",dict(document_id=name,revision=receipt["revision"]),temp)
         assert saved["model"]==document;checks+=1
         report=run("cad_query",dict(document_id=name,revision=1,kind="curve" if name in ("line","arc") else "topology"),temp)
@@ -60,6 +64,8 @@ with tempfile.TemporaryDirectory(prefix="cad-curve-completion-schema-") as temp:
     assert run("cad_read",dict(document_id="line"),temp)==before;checks+=1
     lower=copy.deepcopy(line_model["features"][-1]);lower["solution"]["point"][1]*=-1
     edit=run("cad_apply",dict(document_id="line",expected_revision=1,operations=[dict(op="replace_feature",id="part",feature=lower)]),temp)
+    assert edit["changes"]["base_revision"]==1;checks+=1
+    assert edit["changes"]["features"]==dict(created=[],modified=["part"],removed=[]);checks+=1
     lower_source=run("cad_read",dict(document_id="line",revision=edit["revision"]),temp)
     assert lower_source["model"]["features"][-1]==lower;checks+=1
     near(run("cad_query",dict(document_id="line",revision=2,kind="curve",curve=dict(stations=[0])),temp)["curve"]["samples"][0]["point_mm"][1],-math.sqrt(3)/2)
@@ -81,5 +87,6 @@ for kind,field,value in [("line","unknown",1),("line","constraints",[]),("line",
     document["features"][index][field]=value
     assert not Draft202012Validator(tools["cad_create"]["inputSchema"]).is_valid(dict(document_id="invalid",model=document)),(kind,field);checks+=1
 size=len(json.dumps(dict(tools=catalog),separators=(',',':'),ensure_ascii=False).encode())
-assert size<=476160;checks+=1
+# Match the native discovery contract as the catalog grows beyond 31 tools.
+assert size<len(catalog)*15*1024;checks+=1
 print(f"{checks} independent curve completion schema checks; compact tools wrapper {size} bytes")
