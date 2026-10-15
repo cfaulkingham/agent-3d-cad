@@ -7,6 +7,26 @@ independent Arch Linux x86_64 validation. Each increment below records its own
 validation scope. The first public prerelease is `v0.1.0-preview.1`; publisher
 signing/notarization and remaining host validation are still open.
 
+## Ubuntu CI source-identity fixture repair — 2026-10-15
+
+Both Ubuntu 24.04 jobs (x64 and arm64) in run `38754231924` passed all **92
+native CTests** and the complete schema/SDK stage, then failed in
+`tests/source_identity_tests.py`. The intentionally invalid Windows-path CMake
+script had no policy version: CMake 3.x warned and returned success, whereas
+CMake 4.x rejected the escape. The path fixtures now declare the project's
+`cmake_minimum_required(VERSION 3.24)`, preserving the strict failure assertion
+and testing valid bracket-quoted paths under the same policies.
+
+Reproduced the exact CI assertion with isolated CMake 3.31.6 on macOS arm64.
+After repair, **49 source/build identity checks** passed separately with CMake
+**3.24.3, 3.31.6 and 4.3.2**, including CPack rejection of source/binary drift.
+All eight Linux-applicable installer/configuration/packaging scripts passed
+locally using CMake 3.31.6; the native `installer` and `notices` CTests passed
+**2/2 in 0.21s**. Evidence is in
+`.local/evidence/ubuntu-ci-repair-20261015/`. Production code and workflow gates
+are unchanged. New Ubuntu runs are required to establish the later bundle,
+runtime-container and plugin stages on the repaired source.
+
 ## Cross-platform CI repair — 2026-10-15
 
 Investigated all five failed native jobs in run `38667435713` and confirmed the

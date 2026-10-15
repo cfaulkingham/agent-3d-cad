@@ -33,17 +33,20 @@ def run(args, expected=None, tool='cmake'):
 
 # Exercise Windows path syntax on every developer platform. No Windows file or
 # toolchain is required: CMake parses then writes the literal back as bytes.
+# Standalone scripts do not inherit the project's policy version. Match its
+# minimum so CMake 3.x rejects invalid escapes just as CMake 4.x does.
+path_policy = 'cmake_minimum_required(VERSION 3.24)\n'
 with tempfile.TemporaryDirectory(prefix='cad-cmake-path-literals-') as temp:
     root = Path(temp)
     broken = root/'broken.cmake'
-    broken.write_text('set(captured "' + str(PureWindowsPath(r'C:\Users\runner\source')) + '")\n')
+    broken.write_text(path_policy + 'set(captured "' + str(PureWindowsPath(r'C:\Users\runner\source')) + '")\n')
     run(['-P', str(broken)], 'Invalid character escape')
     for index, path in enumerate((
             PureWindowsPath(r'C:\Users\runner\source with spaces\${DO_NOT_EXPAND}\input.txt'),
             PureWindowsPath(r'\\server\share\folder with spaces\bracket]]and]=].txt'),
             PureWindowsPath(r'C:\temp\new\read\trace.txt'))):
         script = root/f'roundtrip-{index}.cmake'; output = root/f'roundtrip-{index}.txt'
-        script.write_text(f'set(captured {cmake_literal(path)})\n'
+        script.write_text(path_policy + f'set(captured {cmake_literal(path)})\n'
                           f'file(WRITE {cmake_literal(output)} "${{captured}}")\n')
         run(['-P', str(script)])
         assert output.read_bytes() == path.as_posix().encode(); checks += 1
